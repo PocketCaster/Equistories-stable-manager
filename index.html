@@ -1,0 +1,785 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>EquiStories — Art Tracker</title>
+</head>
+<body>
+<div id="app"></div>
+<style>
+  html, body { background:#1b1410; margin:0; padding:0; }
+  #app {
+    --bg:#1b1410; --panel:#241a14; --panel2:#2c2118;
+    --accent:#c98a3a; --accent2:#7a9b6e;
+    --text:#f1e6d8; --dim:#b5a392; --danger:#b1473f; --warn:#c9a23a; --good:#7a9b6e;
+    font-family:'Georgia','Garamond',serif; color:var(--text);
+    background:var(--bg); padding:18px; max-width:960px; margin:0 auto;
+  }
+  #app h1,#app h2,#app h3 { font-family:'Palatino Linotype',Georgia,serif; margin:.2em 0; }
+  #app h1 { color:var(--accent); border-bottom:2px solid var(--accent); padding-bottom:6px; font-size:1.5em; }
+  #app h3 { color:var(--accent); font-size:1.1em; margin-bottom:8px; }
+  #app .card { background:var(--panel); border:1px solid #4a392a; border-radius:8px; padding:16px; margin-bottom:14px; }
+  #app .tabs { display:flex; gap:6px; margin:12px 0 16px; flex-wrap:wrap; }
+  #app .tab { padding:7px 16px; background:var(--panel2); border:1px solid #4a392a; border-radius:6px 6px 0 0; cursor:pointer; color:var(--dim); font-size:.92em; }
+  #app .tab.active { background:var(--accent); color:#241a14; font-weight:bold; border-color:var(--accent); }
+  #app .row { display:flex; gap:10px; flex-wrap:wrap; }
+  #app .row > div { flex:1; min-width:140px; }
+  #app label { font-size:.78em; color:var(--dim); display:block; margin-bottom:3px; text-transform:uppercase; letter-spacing:.5px; }
+  #app input, #app select, #app textarea {
+    width:100%; padding:7px 9px; background:#15100c; border:1px solid #4a392a;
+    color:var(--text); border-radius:5px; font-family:inherit; font-size:.95em; box-sizing:border-box;
+  }
+  #app button {
+    background:var(--accent); color:#231a12; border:none; padding:9px 16px;
+    border-radius:6px; cursor:pointer; font-weight:bold; font-family:inherit; font-size:.9em; margin-top:6px;
+  }
+  #app button.secondary { background:var(--panel2); color:var(--text) !important; border:1px solid var(--accent); }
+  #app button.danger { background:var(--danger); color:#fff !important; }
+  #app button:hover { opacity:.88; }
+  #app .small { font-size:.8em; color:var(--dim); }
+  #app .tag { display:inline-block; font-size:.72em; padding:2px 8px; border-radius:10px; margin-left:4px; background:#15100c; color:var(--dim); border:1px solid #4a392a; }
+  #app .result { padding:10px; border-radius:6px; margin-top:8px; font-weight:bold; }
+  #app .result.success { background:rgba(122,155,110,.15); border:1px solid var(--good); color:var(--good); }
+  #app .result.fail { background:rgba(177,71,63,.15); border:1px solid var(--danger); color:var(--danger); }
+  #app .pill-select { display:flex; gap:6px; flex-wrap:wrap; margin-top:6px; }
+  #app .pill { padding:5px 11px; background:#15100c; border:1px solid #4a392a; border-radius:14px; font-size:.82em; cursor:pointer; color:var(--dim); }
+  #app .pill.active { background:var(--accent); color:#241a14; border-color:var(--accent); }
+  #app .prompt-box { background:#15100c; border:1px dashed var(--accent); border-radius:6px; padding:10px; margin-top:8px; font-style:italic; color:var(--text); font-size:.9em; }
+  /* Horse cards */
+  #app .horse-card { background:var(--panel2); border:1px solid #4a392a; border-radius:8px; padding:12px; margin-bottom:10px; }
+  #app .horse-photo { width:64px; height:64px; border-radius:8px; object-fit:cover; border:2px solid var(--accent); }
+  #app .horse-photo-placeholder { width:64px; height:64px; border-radius:8px; border:2px solid #4a392a; display:flex; align-items:center; justify-content:center; font-size:1.8em; background:#15100c; }
+  /* Art log */
+  #app .artlog-panel { margin-top:10px; background:#15100c; border:1px solid #4a392a; border-radius:6px; padding:8px; max-height:280px; overflow-y:auto; }
+  #app .artlog-entry { padding:7px 0; border-bottom:1px dashed #2c2118; font-size:.85em; }
+  #app .artlog-entry:last-child { border-bottom:none; }
+  #app .artlog-thumb { width:48px; height:48px; border-radius:5px; object-fit:cover; border:1px solid #4a392a; margin-right:8px; vertical-align:middle; }
+  /* Stat bars */
+  #app .statgrid { display:grid; grid-template-columns:repeat(3,1fr); gap:4px; margin-top:8px; font-size:.82em; }
+  #app .statbar-wrap { display:flex; align-items:center; gap:5px; }
+  #app .statbar-bg { flex:1; height:6px; background:#15100c; border-radius:4px; overflow:hidden; }
+  #app .statbar-fill { height:100%; background:linear-gradient(90deg,var(--accent2),var(--accent)); }
+  #app .expbar-bg { height:8px; background:#15100c; border-radius:5px; overflow:hidden; margin-top:4px; }
+  #app .expbar-fill { height:100%; background:linear-gradient(90deg,#8a6fb0,#c98a3a); }
+  #app .breedslots { display:flex; gap:5px; margin-top:5px; flex-wrap:wrap; }
+  #app .slot { width:20px; height:20px; border-radius:50%; border:1px solid var(--accent); display:flex; align-items:center; justify-content:center; font-size:.65em; }
+  #app .slot.filled { background:var(--accent); color:#15100c; }
+  /* Required field indicator */
+  #app .required { color:var(--warn); font-size:.8em; margin-left:4px; }
+  #app input.missing, #app select.missing { border-color:var(--danger) !important; }
+</style>
+<script>
+(function(){
+
+// ============================================
+// CONSTANTS
+// ============================================
+
+const STATS = ["stamina","strength","scope","speed","handiness","boldness","balance","gaits","harmony"];
+const STAT_LABELS = {stamina:"Stamina",strength:"Strength",scope:"Scope",speed:"Speed",handiness:"Handiness",boldness:"Boldness",balance:"Balance",gaits:"Gaits",harmony:"Harmony"};
+
+const LEVEL_TABLE = {
+  1:{exp:0,bonus:0,slots:2}, 2:{exp:50,bonus:2,slots:1}, 3:{exp:100,bonus:2,slots:1},
+  4:{exp:150,bonus:3,slots:1}, 5:{exp:200,bonus:3,slots:1}, 6:{exp:250,bonus:3,slots:1},
+  7:{exp:300,bonus:4,slots:1}, 8:{exp:500,bonus:4,slots:1}, 9:{exp:750,bonus:4,slots:1},
+  10:{exp:1000,bonus:5,slots:2},
+};
+
+const ART_EXP = {
+  "Uncolored Headshot":1, "Colored Headshot":2,
+  "Uncolored Fullbody":3, "Colored Fullbody":4,
+};
+
+const BONUS_EXP = {
+  "Background":3, "Shading":3, "Rider/Handler shown":4, "Additional Creature (per)":2,
+};
+
+const TRAININGS = [
+  {id:"lunge",       name:"Lunging / Groundwork",     stats:{gaits:4,stamina:4,balance:4},   prompt:"Show your horse working on the lunge — rhythm, relaxation, and forward movement. Handler must be visible."},
+  {id:"desensitize", name:"Object Desensitization",   stats:{boldness:3,harmony:3},           prompt:"Show your horse calmly facing something new and a little spooky — a tarp, a strange jump, an unfamiliar corner."},
+  {id:"flatwork",    name:"Flatwork",                  stats:{gaits:3,balance:3,handiness:3}, prompt:"Show your horse working on the flat — transitions, lateral work, or a polished school movement. Rider must be shown."},
+  {id:"polework",    name:"Pole Work",                 stats:{balance:4,gaits:3,scope:2},     prompt:"Show your horse navigating ground poles or cavaletti — clean feet, focused eyes."},
+  {id:"jumping",     name:"Jump Schooling",            stats:{scope:4,boldness:3,balance:3},  prompt:"Show your horse jumping a single fence or small course in a schooling context."},
+  {id:"xc",          name:"XC School",                 stats:{boldness:4,scope:4,stamina:4},  prompt:"Show your horse tackling a cross-country style fence or water complex out in open terrain."},
+  {id:"water",       name:"Water Complex",             stats:{boldness:5,stamina:3},           prompt:"Depict your horse entering, splashing through, or exiting a water jump."},
+  {id:"ditch",       name:"Ditch & Coffin",            stats:{boldness:5,scope:3},             prompt:"Show your horse jumping a ditch, coffin combination, or sunken road."},
+  {id:"trail",       name:"Trail Ride",                stats:{boldness:2,harmony:3,stamina:2},prompt:"Depict your horse and rider out on a relaxed trail — through forest, along a beach, across open fields."},
+  {id:"liberty",     name:"Liberty Work",              stats:{harmony:5,boldness:2},           prompt:"Depict your horse working completely at liberty with no tack."},
+  {id:"bareback",    name:"Bareback Riding",           stats:{balance:4,harmony:3},            prompt:"Depict rider and horse working without a saddle — any gait or activity."},
+  {id:"slope",       name:"Working on a Slope",        stats:{strength:4,stamina:3,balance:3},prompt:"Show your horse working up or down a hill — could be hacking, schooling, or conditioning work."},
+  {id:"swim",        name:"Swimming / Water Work",     stats:{stamina:5,strength:3,boldness:2},prompt:"Show your horse swimming in open water or walking through a deep creek or river."},
+  {id:"horsemanship",name:"Natural Horsemanship",      stats:{harmony:4,boldness:3},           prompt:"Show a join-up, leading without a halter, or pressure-and-release groundwork."},
+  {id:"bonding",     name:"Bonding / Quiet Time",      stats:{harmony:4},                      prompt:"Show a quiet moment between horse and handler — grooming, grazing together, hand-grazing, or just being present."},
+  {id:"equibreak",   name:"Equibreak",                 stats:{harmony:3},                      prompt:"Depict a breaking milestone — first halter, first tack, first rider, or first solo work under saddle.", foalOnly:true},
+  {id:"show_prep",   name:"Show Prep / Grooming",      stats:{harmony:2},                      prompt:"Show your horse being bathed, braided, or otherwise prepared for a show."},
+  {id:"vet_farrier", name:"Vet / Farrier Visit",       stats:{harmony:2,boldness:2},           prompt:"Show your horse during a vet exam, farrier appointment, or dental float."},
+  {id:"pasture",     name:"Pasture / Herd Time",       stats:{harmony:3,boldness:2},           prompt:"Depict your horse loose in a field — with herd mates, playing, or grazing at peace."},
+  {id:"stretching",  name:"Stretching / Cool Down",    stats:{balance:2,harmony:2,stamina:2}, prompt:"Depict a post-workout stretch — carrot stretches or cooling down at a slow walk."},
+  {id:"jumpcourse",  name:"Stadium Jumping Course",    stats:{scope:4,handiness:4,balance:3}, prompt:"Depict your horse jumping a full stadium course — colored poles, combinations, oxers."},
+  {id:"hack_canter", name:"Forward Canter Hack",       stats:{speed:3,stamina:3,boldness:2},  prompt:"Show your horse in a big forward canter across open ground — covering ground freely."},
+];
+
+const DISCIPLINES = {
+  "Show Jumping":    {stats:["scope","balance","handiness"],      difficulties:["Intro","Beginner Novice","Novice","Training","Preliminary","Intermediate","Advanced"]},
+  "Dressage":        {stats:["gaits","harmony","balance"],         difficulties:["Intro","Training","First","Second","Third","Fourth","Prix St. Georges","Grand Prix"]},
+  "Eventing":        {stats:["scope","stamina","boldness"],        difficulties:["Intro","Beginner Novice","Novice","Training","Preliminary","Intermediate","Advanced"]},
+  "Hunter":          {stats:["gaits","scope","harmony"],           difficulties:["Short Stirrup","Beginner","Elementary","Medium","Working","Amateur","Open"]},
+  "Western Pleasure":{stats:["gaits","harmony","balance"],         difficulties:["Walk-Trot","Novice","Amateur","Open","Select"]},
+  "Reining":         {stats:["handiness","balance","harmony"],     difficulties:["Novice","Level 1","Level 2","Level 3","Level 4"]},
+  "Endurance":       {stats:["stamina","boldness","strength"],     difficulties:["LD 25mi","50mi","75mi","100mi"]},
+  "Barrel Racing":   {stats:["speed","handiness","boldness"],      difficulties:["Amateur","Open","Youth","Pro"]},
+  "Trail Class":     {stats:["harmony","handiness","boldness"],    difficulties:["Novice","Amateur","Open"]},
+};
+
+function calcLitExp(wc){
+  if(!wc || wc < 200) return 0;
+  return 2 + Math.floor((wc-200)/500)*2;
+}
+
+// ============================================
+// STATE
+// ============================================
+
+let state = { horses:[], log:[], loaded:false };
+let activeTab = "roster";
+let expandedLogs = new Set();
+
+function uid(){ return 'h_'+Math.random().toString(36).slice(2,9); }
+function rand(a,b){ return Math.floor(Math.random()*(b-a+1))+a; }
+function pick(arr){ return arr[Math.floor(Math.random()*arr.length)]; }
+function el(tag,cls,html){ const e=document.createElement(tag); if(cls)e.className=cls; if(html)e.innerHTML=html; return e; }
+function addLog(msg){ state.log.unshift({day:Date.now(),msg}); if(state.log.length>200)state.log.pop(); }
+
+// ============================================
+// SAVE / LOAD (localStorage — no backend needed for lite version)
+// ============================================
+
+function save(){
+  try{ localStorage.setItem('equi-lite', JSON.stringify({horses:state.horses, log:state.log})); }
+  catch(e){ console.error('save failed',e); }
+}
+
+function load(){
+  try{
+    const d = localStorage.getItem('equi-lite');
+    if(d){ const p=JSON.parse(d); state.horses=p.horses||[]; state.log=p.log||[]; }
+  }catch(e){}
+  state.loaded=true;
+  render();
+}
+
+// ============================================
+// HORSE
+// ============================================
+
+function newHorse(data){
+  const stats={};
+  STATS.forEach(s=>stats[s]=10);
+  const age = Number(data.age)||3;
+  return {
+    id:uid(), name:data.name, breed:data.breed||"Unspecified", age,
+    stage: age<1?"foal":age<2?"yearling":age<3?"two-year-old":"adult",
+    level:1, exp:0, stats,
+    breedingSlots:2, breedingFilled:0,
+    profileImage:null, referenceImage:null, referenceLink:null,
+    artLog:[],
+  };
+}
+
+function checkLevelUp(h){
+  while(h.level<10 && h.exp>=LEVEL_TABLE[h.level+1].exp){
+    h.level++;
+    const t=LEVEL_TABLE[h.level];
+    STATS.forEach(s=>h.stats[s]+=t.bonus);
+    h.breedingSlots+=t.slots;
+    addLog(`🎉 ${h.name} reached Level ${h.level}! +${t.bonus} to all stats.`);
+  }
+}
+
+// ============================================
+// RENDER
+// ============================================
+
+function render(){
+  const app = document.getElementById('app');
+  if(!state.loaded){ app.innerHTML='<div style="padding:30px;color:#b5a392;">Loading…</div>'; return; }
+
+  app.innerHTML=`
+    <h1>🐴 EquiStories Art Tracker</h1>
+    <div class="tabs">
+      ${["roster","train","compete","log"].map(t=>`
+        <div class="tab${activeTab===t?' active':''}" data-tab="${t}">
+          ${t==="roster"?"Stable Roster":t==="train"?"Training":t==="compete"?"Competitions":"Art Log"}
+        </div>`).join("")}
+    </div>
+    <div id="tab-content"></div>
+  `;
+
+  app.querySelectorAll('[data-tab]').forEach(b=>{
+    b.onclick=()=>{ activeTab=b.dataset.tab; render(); };
+  });
+
+  const content = app.querySelector('#tab-content');
+  if(activeTab==="roster")   content.appendChild(renderRoster());
+  else if(activeTab==="train")   content.appendChild(renderTraining());
+  else if(activeTab==="compete") content.appendChild(renderCompete());
+  else if(activeTab==="log")     content.appendChild(renderArtLog());
+}
+
+// ============================================
+// ROSTER TAB
+// ============================================
+
+function renderRoster(){
+  const wrap = el('div');
+
+  // Add horse form
+  const form = el('div','card',`
+    <h3>Add a Horse</h3>
+    <div class="row">
+      <div><label>Name</label><input id="nh_name" placeholder="e.g. Banshee" /></div>
+      <div><label>Age</label><input id="nh_age" type="number" min="0" value="3" style="max-width:80px;" /></div>
+      <div><label>Breed</label><input id="nh_breed" placeholder="e.g. Thoroughbred" /></div>
+    </div>
+    <button id="nh_add">Add to Stable</button>
+  `);
+  wrap.appendChild(form);
+  form.querySelector('#nh_add').onclick=()=>{
+    const name=form.querySelector('#nh_name').value.trim();
+    const age=form.querySelector('#nh_age').value;
+    const breed=form.querySelector('#nh_breed').value.trim()||"Unspecified";
+    if(!name){alert("Give your horse a name first!"); return;}
+    const h=newHorse({name,age,breed});
+    state.horses.push(h);
+    addLog(`🐎 ${h.name} (${breed}) joined the stable.`);
+    save(); render();
+  };
+
+  // Horse cards
+  state.horses.forEach(h=>{
+    const open = expandedLogs.has(h.id);
+    const pct = h.level>=10?100:Math.min(100,((h.exp-LEVEL_TABLE[h.level].exp)/(LEVEL_TABLE[h.level+1].exp-LEVEL_TABLE[h.level].exp))*100);
+    const photoHtml = h.profileImage
+      ? `<img src="${h.profileImage}" class="horse-photo" />`
+      : `<div class="horse-photo-placeholder">🐴</div>`;
+    const statBars = STATS.map(s=>`
+      <div class="statbar-wrap">
+        <span style="width:72px;font-size:.78em;">${STAT_LABELS[s]}</span>
+        <div class="statbar-bg"><div class="statbar-fill" style="width:${Math.min(100,h.stats[s])}%"></div></div>
+        <span style="font-size:.75em;width:24px;text-align:right;">${h.stats[s]}</span>
+      </div>`).join("");
+    let slots="";
+    for(let i=0;i<h.breedingSlots;i++) slots+=`<div class="slot${i<h.breedingFilled?" filled":""}">${i+1}</div>`;
+
+    const artLogHtml = open ? `
+      <div class="artlog-panel">
+        ${h.artLog.length ? h.artLog.map(e=>`
+          <div class="artlog-entry">
+            ${e.image?`<img src="${e.image}" class="artlog-thumb" />`:""}
+            <b>${e.label}</b> ${e.type==="competition"&&e.placement?`<span class="tag">${["1st","2nd","3rd","4th","5th","6th"][e.placement-1]||e.placement+"th"}</span>`:""}
+            <span class="tag">+${e.exp} EXP</span>
+            ${e.link?`<a href="${e.link}" target="_blank" class="artlog-link" style="font-size:.8em;margin-left:6px;">🔗 View</a>`:""}
+            <div class="small" style="margin-top:2px;">${e.art||""}${e.lit?` · ${e.lit}`:""}</div>
+          </div>`).join("") : '<div class="small">No entries yet.</div>'}
+      </div>` : "";
+
+    const refHtml = h.referenceImage
+      ? `<div style="margin-top:8px;">
+          <div class="small" style="margin-bottom:3px;">📋 Reference Sheet ${h.referenceLink?`<a href="${h.referenceLink}" target="_blank" class="artlog-link">🔗 View</a>`:""}</div>
+          <img src="${h.referenceImage}" style="max-width:100%;max-height:200px;border-radius:6px;border:1px solid #4a392a;object-fit:contain;" />
+        </div>`
+      : `<div class="small" style="margin-top:6px;color:#5a4a3a;">📋 No reference sheet uploaded.</div>`;
+
+    const card = el('div','horse-card');
+    card.innerHTML=`
+      <div style="display:flex;gap:12px;align-items:flex-start;">
+        <div style="display:flex;flex-direction:column;align-items:center;gap:4px;flex:none;">
+          ${photoHtml}
+          <input type="file" accept="image/*" data-photo-input="${h.id}" style="display:none;" />
+          <button class="secondary" data-act="upload-photo" data-id="${h.id}" style="font-size:.72em;padding:3px 7px;margin-top:0;">📷</button>
+        </div>
+        <div style="flex:1;">
+          <div style="display:flex;align-items:baseline;flex-wrap:wrap;gap:6px;">
+            <span style="font-size:1.1em;color:var(--accent);font-weight:bold;">${h.name}</span>
+            <span class="tag">Lvl ${h.level}</span>
+          </div>
+          <div class="small">${h.breed} · Age ${h.age} (${h.stage})</div>
+          <div class="small">EXP: ${h.exp} / ${h.level<10?LEVEL_TABLE[h.level+1].exp:"MAX"}</div>
+          <div class="expbar-bg"><div class="expbar-fill" style="width:${pct}%"></div></div>
+        </div>
+      </div>
+      <div class="statgrid" style="margin-top:10px;">${statBars}</div>
+      <div class="small" style="margin-top:8px;">Breeding Slots:</div>
+      <div class="breedslots">${slots||'<span class="small">none yet</span>'}</div>
+      <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">
+        <button class="secondary" data-act="toggle-log" data-id="${h.id}" style="font-size:.8em;padding:4px 10px;margin-top:0;">📖 ${open?"Hide":"Show"} Art Log (${h.artLog.length})</button>
+        <button class="secondary" data-act="upload-ref" data-id="${h.id}" style="font-size:.8em;padding:4px 10px;margin-top:0;">📋 ${h.referenceImage?"Change":"Upload"} Ref</button>
+        <input type="file" accept="image/*" data-ref-input="${h.id}" style="display:none;" />
+        <button class="danger" data-act="del" data-id="${h.id}" style="font-size:.8em;padding:4px 10px;margin-top:0;">Remove</button>
+      </div>
+      ${refHtml}
+      ${artLogHtml}
+    `;
+    wrap.appendChild(card);
+  });
+
+  if(!state.horses.length) wrap.appendChild(el('div','small','<div style="padding:12px;color:#5a4a3a;">No horses yet — add one above!</div>'));
+
+  // Event handlers
+  wrap.querySelectorAll('[data-act="toggle-log"]').forEach(b=>b.onclick=()=>{
+    if(expandedLogs.has(b.dataset.id)) expandedLogs.delete(b.dataset.id);
+    else expandedLogs.add(b.dataset.id);
+    render();
+  });
+  wrap.querySelectorAll('[data-act="del"]').forEach(b=>b.onclick=()=>{
+    if(!confirm('Remove this horse? This cannot be undone.')) return;
+    state.horses=state.horses.filter(x=>x.id!==b.dataset.id);
+    save(); render();
+  });
+  wrap.querySelectorAll('[data-act="upload-photo"]').forEach(b=>b.onclick=()=>
+    wrap.querySelector(`[data-photo-input="${b.dataset.id}"]`).click());
+  wrap.querySelectorAll('[data-photo-input]').forEach(inp=>inp.onchange=e=>{
+    const f=e.target.files[0]; if(!f) return;
+    const r=new FileReader(); r.onload=()=>{
+      const h=state.horses.find(x=>x.id===inp.dataset.photoInput);
+      if(h){h.profileImage=r.result; save(); render();}
+    }; r.readAsDataURL(f);
+  });
+  wrap.querySelectorAll('[data-act="upload-ref"]').forEach(b=>b.onclick=()=>
+    wrap.querySelector(`[data-ref-input="${b.dataset.id}"]`).click());
+  wrap.querySelectorAll('[data-ref-input]').forEach(inp=>inp.onchange=e=>{
+    const f=e.target.files[0]; if(!f) return;
+    const r=new FileReader(); r.onload=()=>{
+      const h=state.horses.find(x=>x.id===inp.dataset.refInput);
+      if(h){h.referenceImage=r.result; save(); render();}
+    }; r.readAsDataURL(f);
+  });
+
+  return wrap;
+}
+
+// ============================================
+// TRAINING TAB
+// ============================================
+
+function renderTraining(){
+  const wrap=el('div');
+  if(!state.horses.length){ wrap.innerHTML='<div class="card small">Add a horse on the Stable Roster tab first.</div>'; return wrap; }
+
+  const trainingOpts = TRAININGS.map(t=>`<option value="${t.id}">${t.name}</option>`).join("");
+  let combinedMode=false;
+  let selectedBonuses=new Set();
+  let uploadedImage=null;
+
+  const card=el('div','card');
+  card.innerHTML=`
+    <h3>Log Training</h3>
+    <div class="row">
+      <div>
+        <label>Horse</label>
+        <select id="tr_horse">${state.horses.map(h=>`<option value="${h.id}">${h.name}</option>`).join("")}</select>
+      </div>
+      <div style="flex:none;">
+        <label>Mode</label>
+        <div class="pill-select" style="margin-top:4px;">
+          <div class="pill active" id="tr_mode_single">Single</div>
+          <div class="pill" id="tr_mode_combined">⚡ Combined</div>
+        </div>
+      </div>
+    </div>
+    <div class="row" style="margin-top:8px;">
+      <div><label id="tr_lbl1">Training Type</label><select id="tr_type">${trainingOpts}</select></div>
+      <div id="tr_type2_wrap" style="display:none;"><label>Second Training</label><select id="tr_type2">${trainingOpts}</select></div>
+    </div>
+    <div id="tr_prompt"></div>
+
+    <div style="margin-top:12px;">
+      <label>Art Image <span class="required">* Required</span></label>
+      <p class="small" style="margin:2px 0 6px;">Upload the artwork for this training entry. Image is required to log.</p>
+      <input type="file" id="tr_image_file" accept="image/*" style="margin-bottom:6px;" />
+      <div id="tr_image_preview" style="margin-top:6px;"></div>
+    </div>
+
+    <div class="row" style="margin-top:10px;">
+      <div>
+        <label>Art Type <span class="required">* Required</span></label>
+        <select id="tr_art">
+          <option value="">— select art type —</option>
+          ${Object.keys(ART_EXP).map(k=>`<option value="${k}">${k} (+${ART_EXP[k]} EXP)</option>`).join("")}
+        </select>
+      </div>
+      <div>
+        <label>Literature Word Count <span class="small">(optional)</span></label>
+        <input type="number" id="tr_lit" min="0" placeholder="e.g. 350 — min 200 for EXP" />
+        <div class="small" id="tr_lit_preview" style="margin-top:2px;"></div>
+      </div>
+    </div>
+    <div style="margin-top:8px;">
+      <label>Bonus Elements <span class="small">(optional)</span></label>
+      <div class="pill-select" id="tr_bonuses">
+        ${Object.keys(BONUS_EXP).map(k=>`<div class="pill" data-bonus="${k}">${k} (+${BONUS_EXP[k]})</div>`).join("")}
+      </div>
+    </div>
+    <div style="margin-top:8px;">
+      <label>Link to Art <span class="small">(optional — DeviantArt, Toyhouse, etc.)</span></label>
+      <input id="tr_link" placeholder="https://…" />
+    </div>
+    <button id="tr_go" style="margin-top:12px;">✅ Log Training</button>
+    <div id="tr_result"></div>
+  `;
+  wrap.appendChild(card);
+
+  function refreshPrompt(){
+    const t=TRAININGS.find(x=>x.id===card.querySelector('#tr_type').value);
+    const t2=combinedMode?TRAININGS.find(x=>x.id===card.querySelector('#tr_type2').value):null;
+    const allStats={...t.stats};
+    if(t2) Object.entries(t2.stats).forEach(([s,v])=>allStats[s]=(allStats[s]||0)+v);
+    const statsStr=Object.entries(allStats).map(([s,v])=>`+${v} ${STAT_LABELS[s]}`).join(", ");
+    card.querySelector('#tr_prompt').innerHTML=`<div class="prompt-box">
+      ${t2?`⚡ <b>${t.name}</b> + <b>${t2.name}</b>`:` 📝 <b>${t.name}</b>`}<br>
+      <span style="font-size:.85em;">${t.prompt}${t2?`<br><span style="opacity:.8;">${t2.prompt}</span>`:""}</span><br>
+      <span class="small">Stats: ${statsStr}</span>
+    </div>`;
+  }
+  refreshPrompt();
+  card.querySelector('#tr_type').onchange=refreshPrompt;
+  card.querySelector('#tr_type2').onchange=refreshPrompt;
+
+  card.querySelector('#tr_mode_single').onclick=()=>{
+    combinedMode=false;
+    card.querySelector('#tr_mode_single').classList.add('active');
+    card.querySelector('#tr_mode_combined').classList.remove('active');
+    card.querySelector('#tr_type2_wrap').style.display='none';
+    card.querySelector('#tr_lbl1').textContent='Training Type';
+    refreshPrompt();
+  };
+  card.querySelector('#tr_mode_combined').onclick=()=>{
+    combinedMode=true;
+    card.querySelector('#tr_mode_combined').classList.add('active');
+    card.querySelector('#tr_mode_single').classList.remove('active');
+    card.querySelector('#tr_type2_wrap').style.display='';
+    card.querySelector('#tr_lbl1').textContent='First Training';
+    refreshPrompt();
+  };
+
+  card.querySelectorAll('[data-bonus]').forEach(p=>p.onclick=()=>{
+    const k=p.dataset.bonus;
+    if(selectedBonuses.has(k)){selectedBonuses.delete(k);p.classList.remove('active');}
+    else{selectedBonuses.add(k);p.classList.add('active');}
+  });
+
+  card.querySelector('#tr_lit').oninput=()=>{
+    const wc=parseInt(card.querySelector('#tr_lit').value)||0;
+    const exp=calcLitExp(wc);
+    const prev=card.querySelector('#tr_lit_preview');
+    prev.textContent=wc===0?"":(wc<200?`⚠️ Min 200 words for EXP`:`✅ +${exp} EXP`);
+    prev.style.color=wc<200&&wc>0?"#c9a23a":"#7a9b6e";
+  };
+
+  // Image upload preview
+  card.querySelector('#tr_image_file').onchange=e=>{
+    const f=e.target.files[0]; if(!f) return;
+    const r=new FileReader(); r.onload=()=>{
+      uploadedImage=r.result;
+      card.querySelector('#tr_image_preview').innerHTML=`<img src="${uploadedImage}" style="max-height:120px;border-radius:6px;border:1px solid #4a392a;object-fit:contain;" />`;
+    }; r.readAsDataURL(f);
+  };
+
+  card.querySelector('#tr_go').onclick=()=>{
+    const hId=card.querySelector('#tr_horse').value;
+    const h=state.horses.find(x=>x.id===hId);
+    const tId=card.querySelector('#tr_type').value;
+    const tId2=combinedMode?card.querySelector('#tr_type2').value:null;
+    const artType=card.querySelector('#tr_art').value;
+    const litWords=parseInt(card.querySelector('#tr_lit').value)||0;
+    const link=card.querySelector('#tr_link').value.trim();
+    const res=card.querySelector('#tr_result');
+
+    // Validation
+    if(!uploadedImage){
+      res.innerHTML='<div class="result fail">🖼️ An image is required to log training. Please upload your art first.</div>';
+      card.querySelector('#tr_image_file').classList.add('missing');
+      return;
+    }
+    if(!artType){
+      res.innerHTML='<div class="result fail">Please select an art type.</div>';
+      card.querySelector('#tr_art').classList.add('missing');
+      return;
+    }
+    if(combinedMode && tId===tId2){
+      res.innerHTML='<div class="result fail">Please choose two different training types for a combined session.</div>';
+      return;
+    }
+
+    card.querySelector('#tr_image_file').classList.remove('missing');
+    card.querySelector('#tr_art').classList.remove('missing');
+
+    const t=TRAININGS.find(x=>x.id===tId);
+    const t2=tId2?TRAININGS.find(x=>x.id===tId2):null;
+    const label=t2?`${t.name} + ${t2.name}`:t.name;
+
+    // Apply stats
+    const allStats={...t.stats};
+    if(t2) Object.entries(t2.stats).forEach(([s,v])=>allStats[s]=(allStats[s]||0)+v);
+    Object.entries(allStats).forEach(([s,v])=>h.stats[s]=(h.stats[s]||0)+v);
+
+    // EXP
+    let expGain=ART_EXP[artType]||0;
+    const sources=[`${artType} (+${ART_EXP[artType]})`];
+    const litExp=calcLitExp(litWords);
+    if(litExp>0){expGain+=litExp; sources.push(`Lit ${litWords}w (+${litExp})`);}
+    selectedBonuses.forEach(k=>{if(BONUS_EXP[k]){expGain+=BONUS_EXP[k]; sources.push(`${k} (+${BONUS_EXP[k]})`);}});
+    h.exp+=expGain;
+    checkLevelUp(h);
+
+    const entry={
+      day:state.log.length+1, type:"training", label,
+      art:artType, lit:litWords?`${litWords} words`:null,
+      bonuses:[...selectedBonuses], exp:expGain,
+      link:link||null, image:uploadedImage,
+    };
+    h.artLog.unshift(entry);
+
+    const statsStr=Object.entries(allStats).map(([s,v])=>`+${v} ${STAT_LABELS[s]}`).join(", ");
+    addLog(`🎨 ${h.name} — ${label} (${statsStr}) · +${expGain} EXP`);
+    save();
+
+    res.innerHTML=`<div class="result success">✅ Training logged! ${statsStr} · +${expGain} EXP (${sources.join(", ")})</div>`;
+
+    // Reset
+    uploadedImage=null;
+    card.querySelector('#tr_image_preview').innerHTML='';
+    card.querySelector('#tr_image_file').value='';
+    card.querySelector('#tr_lit').value='';
+    card.querySelector('#tr_lit_preview').textContent='';
+    card.querySelector('#tr_link').value='';
+    selectedBonuses.clear();
+    card.querySelectorAll('[data-bonus]').forEach(p=>p.classList.remove('active'));
+  };
+
+  return wrap;
+}
+
+// ============================================
+// COMPETITIONS TAB
+// ============================================
+
+function renderCompete(){
+  const wrap=el('div');
+  if(!state.horses.length){ wrap.innerHTML='<div class="card small">Add a horse on the Stable Roster tab first.</div>'; return wrap; }
+
+  let selectedBonuses=new Set();
+  let uploadedImage=null;
+
+  const card=el('div','card');
+  const discOpts=Object.keys(DISCIPLINES).map(d=>`<option value="${d}">${d}</option>`).join("");
+
+  card.innerHTML=`
+    <h3>Log Competition</h3>
+    <div class="row">
+      <div><label>Horse</label><select id="cp_horse">${state.horses.map(h=>`<option value="${h.id}">${h.name}</option>`).join("")}</select></div>
+      <div><label>Discipline</label><select id="cp_disc">${discOpts}</select></div>
+      <div><label>Difficulty</label><select id="cp_diff"></select></div>
+    </div>
+    <div class="row" style="margin-top:8px;">
+      <div>
+        <label>Placement</label>
+        <select id="cp_place">
+          <option value="">— select placement —</option>
+          <option value="1">🥇 1st Place</option>
+          <option value="2">🥈 2nd Place</option>
+          <option value="3">🥉 3rd Place</option>
+          <option value="4">4th Place</option>
+          <option value="5">5th Place</option>
+          <option value="6">6th Place</option>
+          <option value="0">No Placement</option>
+        </select>
+      </div>
+    </div>
+
+    <div style="margin-top:12px;">
+      <label>Art Image <span class="required">* Required</span></label>
+      <p class="small" style="margin:2px 0 6px;">Upload the artwork for this competition entry. Image is required to log.</p>
+      <input type="file" id="cp_image_file" accept="image/*" style="margin-bottom:6px;" />
+      <div id="cp_image_preview" style="margin-top:6px;"></div>
+    </div>
+
+    <div class="row" style="margin-top:10px;">
+      <div>
+        <label>Art Type <span class="required">* Required</span></label>
+        <select id="cp_art">
+          <option value="">— select art type —</option>
+          ${Object.keys(ART_EXP).map(k=>`<option value="${k}">${k} (+${ART_EXP[k]} EXP)</option>`).join("")}
+        </select>
+      </div>
+      <div>
+        <label>Literature Word Count <span class="small">(optional)</span></label>
+        <input type="number" id="cp_lit" min="0" placeholder="e.g. 350 — min 200 for EXP" />
+        <div class="small" id="cp_lit_preview" style="margin-top:2px;"></div>
+      </div>
+    </div>
+    <div style="margin-top:8px;">
+      <label>Bonus Elements <span class="small">(optional)</span></label>
+      <div class="pill-select" id="cp_bonuses">
+        ${Object.keys(BONUS_EXP).map(k=>`<div class="pill" data-bonus="${k}">${k} (+${BONUS_EXP[k]})</div>`).join("")}
+      </div>
+    </div>
+    <div style="margin-top:8px;">
+      <label>Link to Art <span class="small">(optional)</span></label>
+      <input id="cp_link" placeholder="https://…" />
+    </div>
+    <button id="cp_go" style="margin-top:12px;">✅ Log Competition</button>
+    <div id="cp_result"></div>
+  `;
+  wrap.appendChild(card);
+
+  function refreshDiff(){
+    const disc=card.querySelector('#cp_disc').value;
+    const diffs=DISCIPLINES[disc]?.difficulties||[];
+    card.querySelector('#cp_diff').innerHTML=diffs.map(d=>`<option>${d}</option>`).join("");
+  }
+  refreshDiff();
+  card.querySelector('#cp_disc').onchange=refreshDiff;
+
+  card.querySelectorAll('[data-bonus]').forEach(p=>p.onclick=()=>{
+    const k=p.dataset.bonus;
+    if(selectedBonuses.has(k)){selectedBonuses.delete(k);p.classList.remove('active');}
+    else{selectedBonuses.add(k);p.classList.add('active');}
+  });
+
+  card.querySelector('#cp_lit').oninput=()=>{
+    const wc=parseInt(card.querySelector('#cp_lit').value)||0;
+    const exp=calcLitExp(wc);
+    const prev=card.querySelector('#cp_lit_preview');
+    prev.textContent=wc===0?"":(wc<200?`⚠️ Min 200 words for EXP`:`✅ +${exp} EXP`);
+    prev.style.color=wc<200&&wc>0?"#c9a23a":"#7a9b6e";
+  };
+
+  card.querySelector('#cp_image_file').onchange=e=>{
+    const f=e.target.files[0]; if(!f) return;
+    const r=new FileReader(); r.onload=()=>{
+      uploadedImage=r.result;
+      card.querySelector('#cp_image_preview').innerHTML=`<img src="${uploadedImage}" style="max-height:120px;border-radius:6px;border:1px solid #4a392a;object-fit:contain;" />`;
+    }; r.readAsDataURL(f);
+  };
+
+  card.querySelector('#cp_go').onclick=()=>{
+    const hId=card.querySelector('#cp_horse').value;
+    const h=state.horses.find(x=>x.id===hId);
+    const disc=card.querySelector('#cp_disc').value;
+    const diff=card.querySelector('#cp_diff').value;
+    const placement=card.querySelector('#cp_place').value;
+    const artType=card.querySelector('#cp_art').value;
+    const litWords=parseInt(card.querySelector('#cp_lit').value)||0;
+    const link=card.querySelector('#cp_link').value.trim();
+    const res=card.querySelector('#cp_result');
+
+    // Validation
+    if(!uploadedImage){
+      res.innerHTML='<div class="result fail">🖼️ An image is required to log a competition. Please upload your art first.</div>';
+      return;
+    }
+    if(!artType){
+      res.innerHTML='<div class="result fail">Please select an art type.</div>';
+      card.querySelector('#cp_art').classList.add('missing');
+      return;
+    }
+    card.querySelector('#cp_art').classList.remove('missing');
+
+    // EXP
+    let expGain=ART_EXP[artType]||0;
+    const sources=[`${artType} (+${ART_EXP[artType]})`];
+    const litExp=calcLitExp(litWords);
+    if(litExp>0){expGain+=litExp; sources.push(`Lit ${litWords}w (+${litExp})`);}
+    // Placement EXP bonus
+    const placeExp={1:4,2:3,3:2}[placement]||1;
+    if(placement!=="0"&&placement!==""){expGain+=placeExp; sources.push(`Placement (+${placeExp})`);}
+    selectedBonuses.forEach(k=>{if(BONUS_EXP[k]){expGain+=BONUS_EXP[k]; sources.push(`${k} (+${BONUS_EXP[k]})`);}});
+    h.exp+=expGain;
+    checkLevelUp(h);
+
+    // Apply small stat boost from discipline
+    const discStats=DISCIPLINES[disc]?.stats||[];
+    discStats.forEach(s=>h.stats[s]=(h.stats[s]||0)+1);
+
+    const placeLabel=placement==="0"||placement===""?"No placement":["1st","2nd","3rd","4th","5th","6th"][Number(placement)-1]||placement+"th";
+    const label=`${disc} — ${diff}`;
+    const entry={
+      day:state.log.length+1, type:"competition", label,
+      placement:Number(placement)||null,
+      art:artType, lit:litWords?`${litWords} words`:null,
+      bonuses:[...selectedBonuses], exp:expGain,
+      link:link||null, image:uploadedImage,
+    };
+    h.artLog.unshift(entry);
+    addLog(`🏆 ${h.name} — ${label} · ${placeLabel} · +${expGain} EXP`);
+    save();
+
+    const placeIcon=placement==="1"?"🥇":placement==="2"?"🥈":placement==="3"?"🥉":"🏆";
+    res.innerHTML=`<div class="result success">${placeIcon} ${placeLabel} logged for ${h.name}! +${expGain} EXP (${sources.join(", ")})</div>`;
+
+    // Reset
+    uploadedImage=null;
+    card.querySelector('#cp_image_preview').innerHTML='';
+    card.querySelector('#cp_image_file').value='';
+    card.querySelector('#cp_lit').value='';
+    card.querySelector('#cp_lit_preview').textContent='';
+    card.querySelector('#cp_link').value='';
+    card.querySelector('#cp_place').value='';
+    selectedBonuses.clear();
+    card.querySelectorAll('[data-bonus]').forEach(p=>p.classList.remove('active'));
+  };
+
+  return wrap;
+}
+
+// ============================================
+// ART LOG TAB — all horses
+// ============================================
+
+function renderArtLog(){
+  const wrap=el('div');
+  if(!state.horses.length){ wrap.innerHTML='<div class="card small">Add a horse first.</div>'; return wrap; }
+
+  state.horses.forEach(h=>{
+    if(!h.artLog.length) return;
+    const card=el('div','card');
+    card.innerHTML=`<h3>${h.name} <span class="tag">Lvl ${h.level}</span> <span class="tag">${h.artLog.length} entries</span></h3>
+    <div class="artlog-panel" style="max-height:400px;">
+      ${h.artLog.map(e=>{
+        const placeLabel=e.placement?["🥇","🥈","🥉","4th","5th","6th"][e.placement-1]||"":null;
+        return `<div class="artlog-entry">
+          <div style="display:flex;gap:10px;align-items:flex-start;">
+            ${e.image?`<img src="${e.image}" class="artlog-thumb" style="flex:none;" />`:""}
+            <div style="flex:1;">
+              <b>${e.label}</b>
+              ${placeLabel?`<span class="tag">${placeLabel}</span>`:""}
+              <span class="tag" style="background:rgba(122,155,110,.15);color:#7a9b6e;border-color:#7a9b6e;">+${e.exp} EXP</span>
+              ${e.link?`<a href="${e.link}" target="_blank" class="artlog-link" style="font-size:.8em;margin-left:4px;">🔗</a>`:""}
+              <div class="small" style="margin-top:2px;">${[e.art,e.lit,...(e.bonuses||[])].filter(Boolean).join(" · ")}</div>
+            </div>
+          </div>
+        </div>`;
+      }).join("")}
+    </div>`;
+    wrap.appendChild(card);
+  });
+
+  if(!state.horses.some(h=>h.artLog.length)){
+    wrap.innerHTML='<div class="card small">No art logged yet — use the Training or Competitions tabs to add entries.</div>';
+  }
+
+  return wrap;
+}
+
+// ============================================
+// BOOT
+// ============================================
+
+load();
+
+})();
+</script>
+</body>
+</html>
