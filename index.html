@@ -50,6 +50,10 @@
   #app .horse-card { background:var(--panel2); border:1px solid #4a392a; border-radius:8px; padding:12px; margin-bottom:10px; }
   #app .horse-photo { width:64px; height:64px; border-radius:8px; object-fit:cover; border:2px solid var(--accent); }
   #app .horse-photo-placeholder { width:64px; height:64px; border-radius:8px; border:2px solid #4a392a; display:flex; align-items:center; justify-content:center; font-size:1.8em; background:#15100c; }
+  /* Lightbox */
+  #lightbox-overlay { position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:99999;display:flex;align-items:center;justify-content:center;cursor:zoom-out;padding:20px; }
+  #lightbox-overlay img { max-width:100%;max-height:90vh;border-radius:8px;box-shadow:0 0 40px rgba(0,0,0,.8);object-fit:contain; }
+  #lightbox-overlay .lb-caption { position:fixed;bottom:20px;left:50%;transform:translateX(-50%);color:#f1e6d8;background:rgba(0,0,0,.7);padding:6px 16px;border-radius:20px;font-size:.85em; }
   /* Art log */
   #app .artlog-panel { margin-top:10px; background:#15100c; border:1px solid #4a392a; border-radius:6px; padding:8px; max-height:280px; overflow-y:auto; }
   #app .artlog-entry { padding:7px 0; border-bottom:1px dashed #2c2118; font-size:.85em; }
@@ -141,7 +145,7 @@ function calcLitExp(wc){
 // STATE
 // ============================================
 
-let state = { horses:[], log:[], loaded:false };
+let state = { horses:[], log:[], tackInventory:[], loaded:false };
 let activeTab = "roster";
 let expandedLogs = new Set();
 
@@ -151,19 +155,32 @@ function pick(arr){ return arr[Math.floor(Math.random()*arr.length)]; }
 function el(tag,cls,html){ const e=document.createElement(tag); if(cls)e.className=cls; if(html)e.innerHTML=html; return e; }
 function addLog(msg){ state.log.unshift({day:Date.now(),msg}); if(state.log.length>200)state.log.pop(); }
 
+function openLightbox(src, caption){
+  document.getElementById('lightbox-overlay')?.remove();
+  const lb = document.createElement('div');
+  lb.id = 'lightbox-overlay';
+  lb.innerHTML = `<div style="position:relative;text-align:center;">
+    <img src="${src}" />
+    ${caption?`<div class="lb-caption">${caption}</div>`:''}
+    <div style="position:fixed;top:16px;right:20px;font-size:1.8em;cursor:pointer;color:#f1e6d8;line-height:1;" id="lb-close">✕</div>
+  </div>`;
+  lb.onclick = ()=>lb.remove();
+  document.body.appendChild(lb);
+}
+
 // ============================================
 // SAVE / LOAD (localStorage — no backend needed for lite version)
 // ============================================
 
 function save(){
-  try{ localStorage.setItem('equi-lite', JSON.stringify({horses:state.horses, log:state.log})); }
+  try{ localStorage.setItem('equi-lite', JSON.stringify({horses:state.horses, log:state.log, tackInventory:state.tackInventory})); }
   catch(e){ console.error('save failed',e); }
 }
 
 function load(){
   try{
     const d = localStorage.getItem('equi-lite');
-    if(d){ const p=JSON.parse(d); state.horses=p.horses||[]; state.log=p.log||[]; }
+    if(d){ const p=JSON.parse(d); state.horses=p.horses||[]; state.log=p.log||[]; state.tackInventory=p.tackInventory||[]; }
   }catch(e){}
   state.loaded=true;
   render();
@@ -184,7 +201,44 @@ function newHorse(data){
     breedingSlots:2, breedingFilled:0,
     profileImage:null, referenceImage:null, referenceLink:null,
     artLog:[],
+    gender:data.gender||"", phenotype:data.phenotype||"", genotype:data.genotype||"",
+    // Pedigree — 3 generations. Each ancestor: {name, link, inRosterId}
+    // Slot keys: sire, dam, ss, sd, ds, dd, sss, ssd, sds, sdd, dss, dsd, dds, ddd
+    pedigree: data.pedigree || {},
+    // Keep legacy fields for backwards compat
+    sireId:null, sireName:"", sireOwner:"", damId:null, damName:"", damOwner:"",
+    tackOwned:[],       // [{id,name,image,stats:{stat:val},category}]
+    tackEquipped:[],    // array of tackOwned ids currently equipped
+    breedingRecords:[], // [{id, slotIndex, partnerName, partnerOwner, role:"sire"|"dam", date, foalId, foalName, note}]
+    compHistory:[],     // [{id, date, discipline, difficulty, placement, venue, note, image}]
+    // Profile page public fields
+    ownerName: data.ownerName||"",
+    ownerLink: data.ownerLink||"",
+    riderName: data.riderName||"",
+    stableName: data.stableName||"",
+    stableLink: data.stableLink||"",
+    personality: data.personality||"",
+    horseHistory: data.horseHistory||"",
+    // Net worth (Lightblood pricing)
+    genoBasePrice: data.genoBasePrice||0,
+    genoModifiers: data.genoModifiers||[],  // [{label, value}]
+    customNetWorth: data.customNetWorth||null, // override if set manually
   };
+}
+
+function uid2(){ return 't_'+Math.random().toString(36).slice(2,9); }
+
+function getEquippedStatBonus(h, stat){
+  let bonus=0;
+  (h.tackEquipped||[]).forEach(tid=>{
+    const item=(h.tackOwned||[]).find(t=>t.id===tid);
+    if(item && item.stats && item.stats[stat]) bonus += Number(item.stats[stat])||0;
+  });
+  return bonus;
+}
+
+function getEffectiveStat(h, stat){
+  return (h.stats[stat]||0) + getEquippedStatBonus(h, stat);
 }
 
 function checkLevelUp(h){
@@ -205,12 +259,20 @@ function render(){
   const app = document.getElementById('app');
   if(!state.loaded){ app.innerHTML='<div style="padding:30px;color:#b5a392;">Loading…</div>'; return; }
 
+  // Check for horse profile URL (?horse=ID)
+  const params = new URLSearchParams(window.location.search);
+  const profileId = params.get('horse');
+  if(profileId){
+    const h = state.horses.find(x=>x.id===profileId);
+    if(h){ renderHorseProfilePage(app, h); return; }
+  }
+
   app.innerHTML=`
     <h1>🐴 EquiStories Art Tracker</h1>
     <div class="tabs">
-      ${["roster","train","compete","log"].map(t=>`
+      ${["roster","train","compete","tack"].map(t=>`
         <div class="tab${activeTab===t?' active':''}" data-tab="${t}">
-          ${t==="roster"?"Stable Roster":t==="train"?"Training":t==="compete"?"Competitions":"Art Log"}
+          ${t==="roster"?"Stable Roster":t==="train"?"Training":t==="compete"?"Competitions":"🏇 Tack Inventory"}
         </div>`).join("")}
     </div>
     <div id="tab-content"></div>
@@ -224,7 +286,7 @@ function render(){
   if(activeTab==="roster")   content.appendChild(renderRoster());
   else if(activeTab==="train")   content.appendChild(renderTraining());
   else if(activeTab==="compete") content.appendChild(renderCompete());
-  else if(activeTab==="log")     content.appendChild(renderArtLog());
+  else if(activeTab==="tack")    content.appendChild(renderTackInventory());
 }
 
 // ============================================
@@ -242,15 +304,29 @@ function renderRoster(){
       <div><label>Age</label><input id="nh_age" type="number" min="0" value="3" style="max-width:80px;" /></div>
       <div><label>Breed</label><input id="nh_breed" placeholder="e.g. Thoroughbred" /></div>
     </div>
-    <button id="nh_add">Add to Stable</button>
+    <div class="row" style="margin-top:8px;">
+      <div><label>Gender <span class="small">(optional)</span></label>
+        <select id="nh_gender">
+          <option value="">— unset —</option>
+          <option>Mare</option><option>Stallion</option><option>Gelding</option>
+          <option>Filly</option><option>Colt</option><option>Rig</option>
+        </select>
+      </div>
+      <div><label>Phenotype <span class="small">(optional)</span></label><input id="nh_pheno" placeholder="e.g. Bay, Dapple Grey" /></div>
+      <div><label>Genotype <span class="small">(optional)</span></label><input id="nh_geno" placeholder="e.g. Ee Aa nCr" /></div>
+    </div>
+    <button id="nh_add" style="margin-top:10px;">Add to Stable</button>
   `);
   wrap.appendChild(form);
   form.querySelector('#nh_add').onclick=()=>{
     const name=form.querySelector('#nh_name').value.trim();
     const age=form.querySelector('#nh_age').value;
     const breed=form.querySelector('#nh_breed').value.trim()||"Unspecified";
+    const gender=form.querySelector('#nh_gender').value;
+    const phenotype=form.querySelector('#nh_pheno').value.trim();
+    const genotype=form.querySelector('#nh_geno').value.trim();
     if(!name){alert("Give your horse a name first!"); return;}
-    const h=newHorse({name,age,breed});
+    const h=newHorse({name,age,breed,gender,phenotype,genotype});
     state.horses.push(h);
     addLog(`🐎 ${h.name} (${breed}) joined the stable.`);
     save(); render();
@@ -263,20 +339,26 @@ function renderRoster(){
     const photoHtml = h.profileImage
       ? `<img src="${h.profileImage}" class="horse-photo" />`
       : `<div class="horse-photo-placeholder">🐴</div>`;
-    const statBars = STATS.map(s=>`
-      <div class="statbar-wrap">
+    const statBars = STATS.map(s=>{
+      const base=h.stats[s]||0, bonus=getEquippedStatBonus(h,s);
+      return `<div class="statbar-wrap">
         <span style="width:72px;font-size:.78em;">${STAT_LABELS[s]}</span>
-        <div class="statbar-bg"><div class="statbar-fill" style="width:${Math.min(100,h.stats[s])}%"></div></div>
-        <span style="font-size:.75em;width:24px;text-align:right;">${h.stats[s]}</span>
-      </div>`).join("");
+        <div class="statbar-bg"><div class="statbar-fill" style="width:${Math.min(100,base+bonus)}%"></div></div>
+        <span style="font-size:.75em;width:36px;text-align:right;">${base+bonus}${bonus?`<span style="color:var(--good);">+${bonus}</span>`:""}</span>
+      </div>`;
+    }).join("");
+
     let slots="";
-    for(let i=0;i<h.breedingSlots;i++) slots+=`<div class="slot${i<h.breedingFilled?" filled":""}">${i+1}</div>`;
+    for(let i=0;i<h.breedingSlots;i++){
+      const rec=(h.breedingRecords||[]).find(r=>r.slotIndex===i);
+      slots+=`<div class="slot${rec?" filled":""}" data-act="slot-click" data-id="${h.id}" data-slot="${i}" style="cursor:pointer;" title="${rec?('Used — '+rec.partnerName):'Click to mark as used'}">${i+1}</div>`;
+    }
 
     const artLogHtml = open ? `
       <div class="artlog-panel">
         ${h.artLog.length ? h.artLog.map(e=>`
           <div class="artlog-entry">
-            ${e.image?`<img src="${e.image}" class="artlog-thumb" />`:""}
+            ${e.image?`<img src="${e.image}" class="artlog-thumb" data-lightbox="${e.image}" data-caption="${e.label}" style="cursor:zoom-in;" />`:""}
             <b>${e.label}</b> ${e.type==="competition"&&e.placement?`<span class="tag">${["1st","2nd","3rd","4th","5th","6th"][e.placement-1]||e.placement+"th"}</span>`:""}
             <span class="tag">+${e.exp} EXP</span>
             ${e.link?`<a href="${e.link}" target="_blank" class="artlog-link" style="font-size:.8em;margin-left:6px;">🔗 View</a>`:""}
@@ -291,6 +373,18 @@ function renderRoster(){
         </div>`
       : `<div class="small" style="margin-top:6px;color:#5a4a3a;">📋 No reference sheet uploaded.</div>`;
 
+    // Tack equip section
+    const inv = state.tackInventory||[];
+    const equippedHtml = (h.tackEquipped||[]).length
+      ? (h.tackEquipped||[]).map(tid=>{
+          const item=inv.find(t=>t.id===tid);
+          if(!item) return "";
+          const statsStr=Object.entries(item.stats||{}).map(([s,v])=>`+${v} ${STAT_LABELS[s]}`).join(", ");
+          return `<span class="tag" style="background:#1a3a2a;color:#a0e8c0;border-color:#3a7a5a;">${item.name}${statsStr?` (${statsStr})`:""} <span data-act="unequip-tack" data-id="${h.id}" data-tack="${item.id}" style="cursor:pointer;">✕</span></span>`;
+        }).join(" ")
+      : `<span class="small">Nothing equipped.</span>`;
+    const availableTack = inv.filter(t=>!(h.tackEquipped||[]).includes(t.id));
+
     const card = el('div','horse-card');
     card.innerHTML=`
       <div style="display:flex;gap:12px;align-items:flex-start;">
@@ -301,19 +395,35 @@ function renderRoster(){
         </div>
         <div style="flex:1;">
           <div style="display:flex;align-items:baseline;flex-wrap:wrap;gap:6px;">
-            <span style="font-size:1.1em;color:var(--accent);font-weight:bold;">${h.name}</span>
+            <a href="?horse=${h.id}" style="font-size:1.1em;color:var(--accent);font-weight:bold;text-decoration:none;">${h.name}</a>
             <span class="tag">Lvl ${h.level}</span>
+            <a href="?horse=${h.id}" class="small" style="color:var(--accent);">🔗 Profile Page</a>
           </div>
-          <div class="small">${h.breed} · Age ${h.age} (${h.stage})</div>
+          <div class="small">${h.breed} · Age ${h.age} (${h.stage})${h.gender?` · ${h.gender}`:""}</div>
           <div class="small">EXP: ${h.exp} / ${h.level<10?LEVEL_TABLE[h.level+1].exp:"MAX"}</div>
           <div class="expbar-bg"><div class="expbar-fill" style="width:${pct}%"></div></div>
         </div>
       </div>
       <div class="statgrid" style="margin-top:10px;">${statBars}</div>
-      <div class="small" style="margin-top:8px;">Breeding Slots:</div>
+
+      <div style="margin-top:8px;">
+        <div class="small" style="margin-bottom:3px;">🏇 Equipped Tack:</div>
+        <div style="display:flex;flex-wrap:wrap;gap:4px;">${equippedHtml}</div>
+        ${availableTack.length ? `
+          <select data-act="equip-select" data-id="${h.id}" style="margin-top:4px;width:auto;display:inline-block;font-size:.82em;">
+            <option value="">+ Equip tack…</option>
+            ${availableTack.map(t=>`<option value="${t.id}">${t.name} (${t.category})</option>`).join("")}
+          </select>` : `<div class="small" style="margin-top:4px;">No more tack available — add some in the Tack Inventory tab.</div>`}
+      </div>
+
+      <div class="small" style="margin-top:8px;">Breeding Slots <span style="opacity:.7;">(click a slot to mark used)</span>:</div>
       <div class="breedslots">${slots||'<span class="small">none yet</span>'}</div>
+
       <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">
         <button class="secondary" data-act="toggle-log" data-id="${h.id}" style="font-size:.8em;padding:4px 10px;margin-top:0;">📖 ${open?"Hide":"Show"} Art Log (${h.artLog.length})</button>
+        <button class="secondary" data-act="edit-lineage" data-id="${h.id}" style="font-size:.8em;padding:4px 10px;margin-top:0;">🧬 Lineage</button>
+        <button class="secondary" data-act="edit-profile" data-id="${h.id}" style="font-size:.8em;padding:4px 10px;margin-top:0;">✏️ Edit Profile</button>
+        <button class="secondary" data-act="edit-worth" data-id="${h.id}" style="font-size:.8em;padding:4px 10px;margin-top:0;">💰 Net Worth</button>
         <button class="secondary" data-act="upload-ref" data-id="${h.id}" style="font-size:.8em;padding:4px 10px;margin-top:0;">📋 ${h.referenceImage?"Change":"Upload"} Ref</button>
         <input type="file" accept="image/*" data-ref-input="${h.id}" style="display:none;" />
         <button class="danger" data-act="del" data-id="${h.id}" style="font-size:.8em;padding:4px 10px;margin-top:0;">Remove</button>
@@ -355,9 +465,288 @@ function renderRoster(){
       if(h){h.referenceImage=r.result; save(); render();}
     }; r.readAsDataURL(f);
   });
+  wrap.querySelectorAll('[data-act="equip-select"]').forEach(sel=>sel.onchange=()=>{
+    const h=state.horses.find(x=>x.id===sel.dataset.id);
+    if(h && sel.value){
+      h.tackEquipped=h.tackEquipped||[];
+      h.tackEquipped.push(sel.value);
+      save(); render();
+    }
+  });
+  wrap.querySelectorAll('[data-act="unequip-tack"]').forEach(span=>span.onclick=()=>{
+    const h=state.horses.find(x=>x.id===span.dataset.id);
+    if(h){ h.tackEquipped=(h.tackEquipped||[]).filter(id=>id!==span.dataset.tack); save(); render(); }
+  });
+  wrap.querySelectorAll('[data-act="slot-click"]').forEach(slot=>slot.onclick=()=>{
+    showBreedingSlotModal(slot.dataset.id, Number(slot.dataset.slot));
+  });
+  wrap.querySelectorAll('[data-act="edit-lineage"]').forEach(b=>b.onclick=()=>showLineageModal(b.dataset.id));
+  wrap.querySelectorAll('[data-act="edit-profile"]').forEach(b=>b.onclick=()=>showProfileModal(b.dataset.id));
+  wrap.querySelectorAll('[data-act="edit-worth"]').forEach(b=>b.onclick=()=>showNetWorthModal(b.dataset.id));
 
   return wrap;
 }
+
+// ============================================
+// BREEDING SLOT MODAL
+// ============================================
+
+function showBreedingSlotModal(horseId, slotIndex){
+  const h=state.horses.find(x=>x.id===horseId);
+  if(!h) return;
+  const existing=(h.breedingRecords||[]).find(r=>r.slotIndex===slotIndex);
+
+  const overlay=document.createElement('div');
+  overlay.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;';
+  overlay.innerHTML=`<div style="background:#2c1f16;border:2px solid #c98a3a;border-radius:10px;padding:24px;max-width:480px;width:100%;color:#f1e6d8;font-family:Georgia,serif;">
+    <h3 style="margin-top:0;color:#c98a3a;">🐴 Breeding Slot ${slotIndex+1} — ${h.name}</h3>
+    ${existing ? `
+      <p style="color:#b5a392;">This slot is marked as used.</p>
+      <div style="background:#15100c;padding:10px;border-radius:6px;margin-bottom:10px;">
+        <b>${existing.role==="sire"?"Sired with":"Bred to"}:</b> ${existing.partnerName}${existing.partnerOwner?` (${existing.partnerOwner})`:""}<br>
+        <b>Date:</b> ${existing.date||"—"}<br>
+        ${existing.foalId ? `<b>Foal:</b> <a href="?horse=${existing.foalId}" style="color:#c98a3a;">${existing.foalName}</a>` : (existing.foalName?`<b>Foal:</b> ${existing.foalName} (not linked)`:'<b>Foal:</b> not yet born/added')}
+        ${existing.note?`<br><i>${existing.note}</i>`:""}
+      </div>
+      ${!existing.foalId ? `
+      <label style="font-size:.8em;color:#b5a392;text-transform:uppercase;">Link to Foal (if added to your roster)</label>
+      <select id="bs_foal_select" style="width:100%;padding:7px;background:#15100c;border:1px solid #4a392a;color:#f1e6d8;border-radius:5px;margin-top:4px;">
+        <option value="">— select foal from roster —</option>
+        ${state.horses.filter(x=>x.id!==h.id).map(x=>`<option value="${x.id}">${x.name}</option>`).join("")}
+      </select>
+      <button id="bs_link_foal" style="margin-top:8px;width:100%;background:#c98a3a;color:#241a14;border:none;padding:9px;border-radius:6px;font-weight:bold;cursor:pointer;">🔗 Link Foal</button>
+      ` : ""}
+      <button id="bs_clear" style="margin-top:10px;width:100%;background:#b1473f;color:#fff;border:none;padding:9px;border-radius:6px;font-weight:bold;cursor:pointer;">🗑️ Clear This Slot</button>
+    ` : `
+      <p style="color:#b5a392;">Mark this slot as used by recording the breeding pairing.</p>
+      <label style="font-size:.8em;color:#b5a392;text-transform:uppercase;">This horse's role</label>
+      <select id="bs_role" style="width:100%;padding:7px;background:#15100c;border:1px solid #4a392a;color:#f1e6d8;border-radius:5px;margin-top:4px;">
+        <option value="sire">Sire (this horse is the father)</option>
+        <option value="dam">Dam (this horse is the mother)</option>
+      </select>
+      <label style="font-size:.8em;color:#b5a392;text-transform:uppercase;margin-top:8px;display:block;">Partner's Name</label>
+      <input id="bs_partner_name" placeholder="e.g. Moonshadow" style="width:100%;padding:7px;background:#15100c;border:1px solid #4a392a;color:#f1e6d8;border-radius:5px;margin-top:4px;" />
+      <label style="font-size:.8em;color:#b5a392;text-transform:uppercase;margin-top:8px;display:block;">Partner's Owner <span style="opacity:.7;">(optional)</span></label>
+      <input id="bs_partner_owner" placeholder="e.g. @username" style="width:100%;padding:7px;background:#15100c;border:1px solid #4a392a;color:#f1e6d8;border-radius:5px;margin-top:4px;" />
+      <label style="font-size:.8em;color:#b5a392;text-transform:uppercase;margin-top:8px;display:block;">Date</label>
+      <input id="bs_date" placeholder="e.g. Day 45 or a real date" style="width:100%;padding:7px;background:#15100c;border:1px solid #4a392a;color:#f1e6d8;border-radius:5px;margin-top:4px;" />
+      <label style="font-size:.8em;color:#b5a392;text-transform:uppercase;margin-top:8px;display:block;">Note <span style="opacity:.7;">(optional)</span></label>
+      <input id="bs_note" placeholder="Any notes about this breeding" style="width:100%;padding:7px;background:#15100c;border:1px solid #4a392a;color:#f1e6d8;border-radius:5px;margin-top:4px;" />
+      <button id="bs_save" style="margin-top:12px;width:100%;background:#c98a3a;color:#241a14;border:none;padding:9px;border-radius:6px;font-weight:bold;cursor:pointer;">✅ Mark Slot as Used</button>
+    `}
+    <button id="bs_cancel" style="margin-top:8px;width:100%;background:#2c2118;color:#f1e6d8;border:1px solid #4a392a;padding:9px;border-radius:6px;cursor:pointer;">Cancel</button>
+  </div>`;
+  document.body.appendChild(overlay);
+
+  overlay.querySelector('#bs_cancel').onclick=()=>overlay.remove();
+
+  const saveBtn=overlay.querySelector('#bs_save');
+  if(saveBtn) saveBtn.onclick=()=>{
+    const role=overlay.querySelector('#bs_role').value;
+    const partnerName=overlay.querySelector('#bs_partner_name').value.trim();
+    const partnerOwner=overlay.querySelector('#bs_partner_owner').value.trim();
+    const date=overlay.querySelector('#bs_date').value.trim();
+    const note=overlay.querySelector('#bs_note').value.trim();
+    if(!partnerName){ alert("Please enter the partner's name."); return; }
+    if(!h.breedingRecords) h.breedingRecords=[];
+    h.breedingRecords.push({ id:uid2(), slotIndex, role, partnerName, partnerOwner, date, note, foalId:null, foalName:"" });
+    h.breedingFilled=(h.breedingFilled||0)+1;
+    addLog(`🐴 ${h.name}'s breeding slot ${slotIndex+1} marked as used (${role==="sire"?"sired":"bred"} with ${partnerName}).`);
+    save(); overlay.remove(); render();
+  };
+
+  const clearBtn=overlay.querySelector('#bs_clear');
+  if(clearBtn) clearBtn.onclick=()=>{
+    if(!confirm('Clear this breeding record? This cannot be undone.')) return;
+    h.breedingRecords=(h.breedingRecords||[]).filter(r=>r.slotIndex!==slotIndex);
+    save(); overlay.remove(); render();
+  };
+
+  const linkBtn=overlay.querySelector('#bs_link_foal');
+  if(linkBtn) linkBtn.onclick=()=>{
+    const foalId=overlay.querySelector('#bs_foal_select').value;
+    if(!foalId){ alert("Please select a foal first."); return; }
+    const foal=state.horses.find(x=>x.id===foalId);
+    const rec=(h.breedingRecords||[]).find(r=>r.slotIndex===slotIndex);
+    if(rec && foal){
+      rec.foalId=foal.id; rec.foalName=foal.name;
+      addLog(`🔗 Linked ${h.name}'s breeding record to foal ${foal.name}.`);
+      save(); overlay.remove(); render();
+    }
+  };
+}
+
+// ============================================
+// PEDIGREE HELPERS
+// ============================================
+
+// Slot definitions — key, label, column (1=horse, 2=parents, 3=grandparents, 4=great-grandparents)
+const PED_SLOTS = [
+  {key:"sire",  label:"Sire",  col:2, parent:null,   side:"top"},
+  {key:"dam",   label:"Dam",   col:2, parent:null,   side:"bot"},
+  {key:"ss",    label:"SS",    col:3, parent:"sire", side:"top"},
+  {key:"sd",    label:"SD",    col:3, parent:"sire", side:"bot"},
+  {key:"ds",    label:"DS",    col:3, parent:"dam",  side:"top"},
+  {key:"dd",    label:"DD",    col:3, parent:"dam",  side:"bot"},
+  {key:"sss",   label:"SSS",   col:4, parent:"ss",   side:"top"},
+  {key:"ssd",   label:"SSD",   col:4, parent:"ss",   side:"bot"},
+  {key:"sds",   label:"SDS",   col:4, parent:"sd",   side:"top"},
+  {key:"sdd",   label:"SDD",   col:4, parent:"sd",   side:"bot"},
+  {key:"dss",   label:"DSS",   col:4, parent:"ds",   side:"top"},
+  {key:"dsd",   label:"DSD",   col:4, parent:"ds",   side:"bot"},
+  {key:"dds",   label:"DDS",   col:4, parent:"dd",   side:"top"},
+  {key:"ddd",   label:"DDD",   col:4, parent:"dd",   side:"bot"},
+];
+
+function pedEntry(h, key){
+  return (h.pedigree || {})[key] || {name:"", link:"", inRosterId:""};
+}
+
+function pedLink(entry, label){
+  const name = entry.name || "Unknown";
+  const inRoster = entry.inRosterId ? state.horses.find(x=>x.id===entry.inRosterId) : null;
+  const href = inRoster ? `?horse=${inRoster.id}` : (entry.link || null);
+  if(href && name !== "Unknown"){
+    return `<a href="${href}" ${!inRoster?'target="_blank"':''} style="color:#c98a3a;text-decoration:none;font-weight:bold;">${name}</a>`;
+  }
+  return `<span style="color:${name==="Unknown"?"#4a392a":"#f1e6d8"};font-weight:${name!=="Unknown"?"bold":"normal"};">${name}</span>`;
+}
+
+// Render the visual pedigree chart (matches the layout in the screenshot)
+function renderPedigreeChart(h){
+  const p = h.pedigree || {};
+
+  function row(key, label, indent){
+    const e = pedEntry(h, key);
+    const indentStyle = `padding-left:${indent}px;`;
+    return `<div style="${indentStyle}font-size:.82em;padding:2px 0;display:flex;align-items:center;gap:6px;">
+      <span style="color:#4a392a;min-width:32px;font-size:.9em;">${label}:</span>
+      ${pedLink(e, label)}
+    </div>`;
+  }
+
+  return `<div style="font-family:'Courier New',monospace;background:#15100c;border:1px solid #4a392a;border-radius:8px;padding:14px;line-height:1.8;">
+    <div style="font-size:.78em;color:#b5a392;margin-bottom:8px;font-family:Georgia,serif;">Bloodline:</div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0;">
+      <!-- Column layout matching screenshot -->
+      <div>
+        <div style="font-size:.85em;padding:2px 0;"><b style="color:#c98a3a;">Sire:</b> ${pedLink(pedEntry(h,'sire'),'Sire')}</div>
+        <div style="font-size:.85em;padding:2px 0;margin-top:4px;"><b style="color:#c98a3a;">Dam:</b> ${pedLink(pedEntry(h,'dam'),'Dam')}</div>
+      </div>
+    </div>
+
+    <div style="margin-top:10px;border-left:2px solid #4a392a;padding-left:10px;">
+      <!-- Sire side -->
+      <div style="margin-bottom:2px;">${row('ss','SS',0)}</div>
+      <div style="margin-bottom:8px;padding-left:20px;">
+        ${row('sss','SSS',0)}
+        ${row('ssd','SSD',0)}
+      </div>
+      <div style="margin-bottom:2px;">${row('sd','SD',0)}</div>
+      <div style="margin-bottom:8px;padding-left:20px;">
+        ${row('sds','SDS',0)}
+        ${row('sdd','SDD',0)}
+      </div>
+    </div>
+
+    <div style="margin-top:6px;border-left:2px solid #4a392a;padding-left:10px;">
+      <!-- Dam side -->
+      <div style="margin-bottom:2px;">${row('ds','DS',0)}</div>
+      <div style="margin-bottom:8px;padding-left:20px;">
+        ${row('dss','DSS',0)}
+        ${row('dsd','DSD',0)}
+      </div>
+      <div style="margin-bottom:2px;">${row('dd','DD',0)}</div>
+      <div style="padding-left:20px;">
+        ${row('dds','DDS',0)}
+        ${row('ddd','DDD',0)}
+      </div>
+    </div>
+  </div>`;
+}
+
+// ============================================
+// LINEAGE EDIT MODAL (3-gen pedigree)
+// ============================================
+
+function showLineageModal(horseId){
+  const h=state.horses.find(x=>x.id===horseId);
+  if(!h) return;
+  if(!h.pedigree) h.pedigree={};
+
+  // Migrate legacy fields
+  if(h.sireName && !h.pedigree.sire) h.pedigree.sire={name:h.sireName, link:"", inRosterId:h.sireId||""};
+  if(h.damName && !h.pedigree.dam)   h.pedigree.dam ={name:h.damName,  link:"", inRosterId:h.damId||""};
+
+  const rosterOpts = state.horses.filter(x=>x.id!==h.id).map(x=>`<option value="${x.id}">${x.name}</option>`).join("");
+
+  function slotFields(key, label){
+    const e = pedEntry(h, key);
+    const inRosterVal = e.inRosterId || "";
+    return `
+      <div style="background:#15100c;border:1px solid #4a392a;border-radius:6px;padding:10px;margin-bottom:8px;">
+        <div style="font-weight:bold;color:#c98a3a;margin-bottom:6px;font-size:.9em;">${label}</div>
+        <label style="font-size:.72em;color:#b5a392;text-transform:uppercase;display:block;">Name</label>
+        <input data-ped="${key}" data-field="name" value="${e.name||''}" placeholder="e.g. Shadowfax" style="width:100%;padding:6px;background:#1b1410;border:1px solid #4a392a;color:#f1e6d8;border-radius:4px;margin-top:3px;box-sizing:border-box;" />
+        <label style="font-size:.72em;color:#b5a392;text-transform:uppercase;display:block;margin-top:6px;">External Link <span style="opacity:.6;">(off-site URL, optional)</span></label>
+        <input data-ped="${key}" data-field="link" value="${e.link||''}" placeholder="https://… (DeviantArt, Toyhouse, etc.)" style="width:100%;padding:6px;background:#1b1410;border:1px solid #4a392a;color:#f1e6d8;border-radius:4px;margin-top:3px;box-sizing:border-box;" />
+        <label style="font-size:.72em;color:#b5a392;text-transform:uppercase;display:block;margin-top:6px;">Link to horse in your roster <span style="opacity:.6;">(overrides external link)</span></label>
+        <select data-ped="${key}" data-field="inRosterId" style="width:100%;padding:6px;background:#1b1410;border:1px solid #4a392a;color:#f1e6d8;border-radius:4px;margin-top:3px;box-sizing:border-box;">
+          <option value="">— not in roster —</option>
+          ${rosterOpts.replace(`value="${inRosterVal}"`, `value="${inRosterVal}" selected`)}
+        </select>
+      </div>`;
+  }
+
+  const overlay=document.createElement('div');
+  overlay.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.9);z-index:9999;display:flex;align-items:flex-start;justify-content:center;padding:16px;overflow-y:auto;';
+  overlay.innerHTML=`<div style="background:#2c1f16;border:2px solid #c98a3a;border-radius:10px;padding:24px;max-width:560px;width:100%;color:#f1e6d8;font-family:Georgia,serif;margin:auto;">
+    <h3 style="margin-top:0;color:#c98a3a;">🧬 Pedigree Editor — ${h.name}</h3>
+    <p style="color:#b5a392;font-size:.85em;margin-top:0;">Fill in up to 3 generations. Names can link to on-site horse profiles or external pages. Leave blank for Unknown.</p>
+
+    <details open style="margin-bottom:8px;"><summary style="cursor:pointer;color:#c98a3a;font-weight:bold;padding:6px 0;">Generation 1 — Parents</summary>
+      ${slotFields('sire','Sire (Father)')}
+      ${slotFields('dam','Dam (Mother)')}
+    </details>
+
+    <details style="margin-bottom:8px;"><summary style="cursor:pointer;color:#c98a3a;font-weight:bold;padding:6px 0;">Generation 2 — Grandparents</summary>
+      ${slotFields('ss','SS - Sires Sire')}
+      ${slotFields('sd','SD - Sires Dam')}
+      ${slotFields('ds','DS - Dams Sire')}
+      ${slotFields('dd','DD - Dams Dam')}
+    </details>
+
+    <details style="margin-bottom:8px;"><summary style="cursor:pointer;color:#c98a3a;font-weight:bold;padding:6px 0;">Generation 3 — Great-Grandparents</summary>
+      ${slotFields('sss','SSS')}${slotFields('ssd','SSD')}
+      ${slotFields('sds','SDS')}${slotFields('sdd','SDD')}
+      ${slotFields('dss','DSS')}${slotFields('dsd','DSD')}
+      ${slotFields('dds','DDS')}${slotFields('ddd','DDD')}
+    </details>
+
+    <button id="ln_save" style="margin-top:10px;width:100%;background:#c98a3a;color:#241a14;border:none;padding:10px;border-radius:6px;font-weight:bold;cursor:pointer;font-size:.95em;">💾 Save Pedigree</button>
+    <button id="ln_cancel" style="margin-top:8px;width:100%;background:#2c2118;color:#f1e6d8;border:1px solid #4a392a;padding:10px;border-radius:6px;cursor:pointer;font-size:.95em;">Cancel</button>
+  </div>`;
+  document.body.appendChild(overlay);
+
+  overlay.querySelector('#ln_cancel').onclick=()=>overlay.remove();
+  overlay.querySelector('#ln_save').onclick=()=>{
+    if(!h.pedigree) h.pedigree={};
+    overlay.querySelectorAll('[data-ped]').forEach(inp=>{
+      const key=inp.dataset.ped, field=inp.dataset.field;
+      if(!h.pedigree[key]) h.pedigree[key]={name:"",link:"",inRosterId:""};
+      h.pedigree[key][field]=inp.value.trim();
+    });
+    // Update legacy fields for backwards compat
+    h.sireId=h.pedigree.sire?.inRosterId||null;
+    h.sireName=h.pedigree.sire?.name||"";
+    h.damId=h.pedigree.dam?.inRosterId||null;
+    h.damName=h.pedigree.dam?.name||"";
+    addLog(`🧬 Updated pedigree for ${h.name}.`);
+    save(); overlay.remove(); render();
+  };
+}
+
 
 // ============================================
 // TRAINING TAB
@@ -376,8 +765,7 @@ function renderTraining(){
   card.innerHTML=`
     <h3>Log Training</h3>
     <div class="row">
-      <div>
-        <label>Horse</label>
+      <div><label>Horse</label>
         <select id="tr_horse">${state.horses.map(h=>`<option value="${h.id}">${h.name}</option>`).join("")}</select>
       </div>
       <div style="flex:none;">
@@ -393,14 +781,12 @@ function renderTraining(){
       <div id="tr_type2_wrap" style="display:none;"><label>Second Training</label><select id="tr_type2">${trainingOpts}</select></div>
     </div>
     <div id="tr_prompt"></div>
-
     <div style="margin-top:12px;">
       <label>Art Image <span class="required">* Required</span></label>
       <p class="small" style="margin:2px 0 6px;">Upload the artwork for this training entry. Image is required to log.</p>
-      <input type="file" id="tr_image_file" accept="image/*" style="margin-bottom:6px;" />
+      <input type="file" id="tr_image_file" accept="image/*" />
       <div id="tr_image_preview" style="margin-top:6px;"></div>
     </div>
-
     <div class="row" style="margin-top:10px;">
       <div>
         <label>Art Type <span class="required">* Required</span></label>
@@ -421,10 +807,7 @@ function renderTraining(){
         ${Object.keys(BONUS_EXP).map(k=>`<div class="pill" data-bonus="${k}">${k} (+${BONUS_EXP[k]})</div>`).join("")}
       </div>
     </div>
-    <div style="margin-top:8px;">
-      <label>Link to Art <span class="small">(optional — DeviantArt, Toyhouse, etc.)</span></label>
-      <input id="tr_link" placeholder="https://…" />
-    </div>
+    <div style="margin-top:8px;"><label>Link to Art <span class="small">(optional)</span></label><input id="tr_link" placeholder="https://…" /></div>
     <button id="tr_go" style="margin-top:12px;">✅ Log Training</button>
     <div id="tr_result"></div>
   `;
@@ -433,11 +816,12 @@ function renderTraining(){
   function refreshPrompt(){
     const t=TRAININGS.find(x=>x.id===card.querySelector('#tr_type').value);
     const t2=combinedMode?TRAININGS.find(x=>x.id===card.querySelector('#tr_type2').value):null;
+    if(!t) return;
     const allStats={...t.stats};
     if(t2) Object.entries(t2.stats).forEach(([s,v])=>allStats[s]=(allStats[s]||0)+v);
     const statsStr=Object.entries(allStats).map(([s,v])=>`+${v} ${STAT_LABELS[s]}`).join(", ");
     card.querySelector('#tr_prompt').innerHTML=`<div class="prompt-box">
-      ${t2?`⚡ <b>${t.name}</b> + <b>${t2.name}</b>`:` 📝 <b>${t.name}</b>`}<br>
+      ${t2?`⚡ <b>${t.name}</b> + <b>${t2.name}</b>`:`📝 <b>${t.name}</b>`}<br>
       <span style="font-size:.85em;">${t.prompt}${t2?`<br><span style="opacity:.8;">${t2.prompt}</span>`:""}</span><br>
       <span class="small">Stats: ${statsStr}</span>
     </div>`;
@@ -473,11 +857,10 @@ function renderTraining(){
     const wc=parseInt(card.querySelector('#tr_lit').value)||0;
     const exp=calcLitExp(wc);
     const prev=card.querySelector('#tr_lit_preview');
-    prev.textContent=wc===0?"":(wc<200?`⚠️ Min 200 words for EXP`:`✅ +${exp} EXP`);
+    prev.textContent=wc===0?"":(wc<200?"⚠️ Min 200 words for EXP":`✅ +${exp} EXP`);
     prev.style.color=wc<200&&wc>0?"#c9a23a":"#7a9b6e";
   };
 
-  // Image upload preview
   card.querySelector('#tr_image_file').onchange=e=>{
     const f=e.target.files[0]; if(!f) return;
     const r=new FileReader(); r.onload=()=>{
@@ -496,35 +879,17 @@ function renderTraining(){
     const link=card.querySelector('#tr_link').value.trim();
     const res=card.querySelector('#tr_result');
 
-    // Validation
-    if(!uploadedImage){
-      res.innerHTML='<div class="result fail">🖼️ An image is required to log training. Please upload your art first.</div>';
-      card.querySelector('#tr_image_file').classList.add('missing');
-      return;
-    }
-    if(!artType){
-      res.innerHTML='<div class="result fail">Please select an art type.</div>';
-      card.querySelector('#tr_art').classList.add('missing');
-      return;
-    }
-    if(combinedMode && tId===tId2){
-      res.innerHTML='<div class="result fail">Please choose two different training types for a combined session.</div>';
-      return;
-    }
-
-    card.querySelector('#tr_image_file').classList.remove('missing');
-    card.querySelector('#tr_art').classList.remove('missing');
+    if(!uploadedImage){ res.innerHTML='<div class="result fail">🖼️ An image is required to log training.</div>'; return; }
+    if(!artType){ res.innerHTML='<div class="result fail">Please select an art type.</div>'; return; }
+    if(combinedMode && tId===tId2){ res.innerHTML='<div class="result fail">Please choose two different training types.</div>'; return; }
 
     const t=TRAININGS.find(x=>x.id===tId);
     const t2=tId2?TRAININGS.find(x=>x.id===tId2):null;
     const label=t2?`${t.name} + ${t2.name}`:t.name;
-
-    // Apply stats
     const allStats={...t.stats};
     if(t2) Object.entries(t2.stats).forEach(([s,v])=>allStats[s]=(allStats[s]||0)+v);
     Object.entries(allStats).forEach(([s,v])=>h.stats[s]=(h.stats[s]||0)+v);
 
-    // EXP
     let expGain=ART_EXP[artType]||0;
     const sources=[`${artType} (+${ART_EXP[artType]})`];
     const litExp=calcLitExp(litWords);
@@ -533,21 +898,12 @@ function renderTraining(){
     h.exp+=expGain;
     checkLevelUp(h);
 
-    const entry={
-      day:state.log.length+1, type:"training", label,
-      art:artType, lit:litWords?`${litWords} words`:null,
-      bonuses:[...selectedBonuses], exp:expGain,
-      link:link||null, image:uploadedImage,
-    };
-    h.artLog.unshift(entry);
-
+    h.artLog.unshift({day:state.log.length+1,type:"training",label,art:artType,lit:litWords?`${litWords} words`:null,bonuses:[...selectedBonuses],exp:expGain,link:link||null,image:uploadedImage});
     const statsStr=Object.entries(allStats).map(([s,v])=>`+${v} ${STAT_LABELS[s]}`).join(", ");
     addLog(`🎨 ${h.name} — ${label} (${statsStr}) · +${expGain} EXP`);
     save();
 
     res.innerHTML=`<div class="result success">✅ Training logged! ${statsStr} · +${expGain} EXP (${sources.join(", ")})</div>`;
-
-    // Reset
     uploadedImage=null;
     card.querySelector('#tr_image_preview').innerHTML='';
     card.querySelector('#tr_image_file').value='';
@@ -569,42 +925,67 @@ function renderCompete(){
   const wrap=el('div');
   if(!state.horses.length){ wrap.innerHTML='<div class="card small">Add a horse on the Stable Roster tab first.</div>'; return wrap; }
 
+  const modeCard=el('div','card');
+  modeCard.innerHTML=`
+    <h3>Competitions</h3>
+    <div class="pill-select">
+      <div class="pill active" id="comp_mode_new">🎨 Log with Art</div>
+      <div class="pill" id="comp_mode_past">📜 Log Past Show</div>
+      <div class="pill" id="comp_mode_history">🏆 Show History</div>
+    </div>
+  `;
+  wrap.appendChild(modeCard);
+
+  const contentArea=el('div');
+  wrap.appendChild(contentArea);
+
+  function showMode(mode){
+    modeCard.querySelectorAll('.pill').forEach(p=>p.classList.remove('active'));
+    modeCard.querySelector(`#comp_mode_${mode}`).classList.add('active');
+    contentArea.innerHTML='';
+    if(mode==='new')       contentArea.appendChild(buildNewCompForm());
+    else if(mode==='past') contentArea.appendChild(buildPastShowForm());
+    else                   contentArea.appendChild(buildShowHistory());
+  }
+
+  modeCard.querySelector('#comp_mode_new').onclick=()=>showMode('new');
+  modeCard.querySelector('#comp_mode_past').onclick=()=>showMode('past');
+  modeCard.querySelector('#comp_mode_history').onclick=()=>showMode('history');
+  showMode('new');
+  return wrap;
+}
+
+function buildNewCompForm(){
+  const wrap=el('div');
   let selectedBonuses=new Set();
   let uploadedImage=null;
-
   const card=el('div','card');
   const discOpts=Object.keys(DISCIPLINES).map(d=>`<option value="${d}">${d}</option>`).join("");
-
   card.innerHTML=`
-    <h3>Log Competition</h3>
+    <h3>Log Competition with Art</h3>
     <div class="row">
       <div><label>Horse</label><select id="cp_horse">${state.horses.map(h=>`<option value="${h.id}">${h.name}</option>`).join("")}</select></div>
       <div><label>Discipline</label><select id="cp_disc">${discOpts}</select></div>
       <div><label>Difficulty</label><select id="cp_diff"></select></div>
     </div>
     <div class="row" style="margin-top:8px;">
-      <div>
-        <label>Placement</label>
+      <div><label>Venue / Show Name <span class="small">(optional)</span></label><input id="cp_venue" placeholder="e.g. Spring Classic 2025" /></div>
+      <div><label>Placement</label>
         <select id="cp_place">
-          <option value="">— select placement —</option>
-          <option value="1">🥇 1st Place</option>
-          <option value="2">🥈 2nd Place</option>
-          <option value="3">🥉 3rd Place</option>
-          <option value="4">4th Place</option>
-          <option value="5">5th Place</option>
-          <option value="6">6th Place</option>
+          <option value="">— select —</option>
+          <option value="1">🥇 1st</option><option value="2">🥈 2nd</option>
+          <option value="3">🥉 3rd</option><option value="4">4th</option>
+          <option value="5">5th</option><option value="6">6th</option>
           <option value="0">No Placement</option>
         </select>
       </div>
     </div>
-
     <div style="margin-top:12px;">
       <label>Art Image <span class="required">* Required</span></label>
-      <p class="small" style="margin:2px 0 6px;">Upload the artwork for this competition entry. Image is required to log.</p>
-      <input type="file" id="cp_image_file" accept="image/*" style="margin-bottom:6px;" />
+      <p class="small" style="margin:2px 0 6px;">Upload the artwork. Image is required to log.</p>
+      <input type="file" id="cp_image_file" accept="image/*" />
       <div id="cp_image_preview" style="margin-top:6px;"></div>
     </div>
-
     <div class="row" style="margin-top:10px;">
       <div>
         <label>Art Type <span class="required">* Required</span></label>
@@ -615,7 +996,7 @@ function renderCompete(){
       </div>
       <div>
         <label>Literature Word Count <span class="small">(optional)</span></label>
-        <input type="number" id="cp_lit" min="0" placeholder="e.g. 350 — min 200 for EXP" />
+        <input type="number" id="cp_lit" min="0" placeholder="min 200 for EXP" />
         <div class="small" id="cp_lit_preview" style="margin-top:2px;"></div>
       </div>
     </div>
@@ -625,10 +1006,7 @@ function renderCompete(){
         ${Object.keys(BONUS_EXP).map(k=>`<div class="pill" data-bonus="${k}">${k} (+${BONUS_EXP[k]})</div>`).join("")}
       </div>
     </div>
-    <div style="margin-top:8px;">
-      <label>Link to Art <span class="small">(optional)</span></label>
-      <input id="cp_link" placeholder="https://…" />
-    </div>
+    <div style="margin-top:8px;"><label>Link to Art <span class="small">(optional)</span></label><input id="cp_link" placeholder="https://…" /></div>
     <button id="cp_go" style="margin-top:12px;">✅ Log Competition</button>
     <div id="cp_result"></div>
   `;
@@ -636,26 +1014,21 @@ function renderCompete(){
 
   function refreshDiff(){
     const disc=card.querySelector('#cp_disc').value;
-    const diffs=DISCIPLINES[disc]?.difficulties||[];
-    card.querySelector('#cp_diff').innerHTML=diffs.map(d=>`<option>${d}</option>`).join("");
+    card.querySelector('#cp_diff').innerHTML=(DISCIPLINES[disc]?.difficulties||[]).map(d=>`<option>${d}</option>`).join("");
   }
   refreshDiff();
   card.querySelector('#cp_disc').onchange=refreshDiff;
-
   card.querySelectorAll('[data-bonus]').forEach(p=>p.onclick=()=>{
     const k=p.dataset.bonus;
     if(selectedBonuses.has(k)){selectedBonuses.delete(k);p.classList.remove('active');}
     else{selectedBonuses.add(k);p.classList.add('active');}
   });
-
   card.querySelector('#cp_lit').oninput=()=>{
     const wc=parseInt(card.querySelector('#cp_lit').value)||0;
-    const exp=calcLitExp(wc);
     const prev=card.querySelector('#cp_lit_preview');
-    prev.textContent=wc===0?"":(wc<200?`⚠️ Min 200 words for EXP`:`✅ +${exp} EXP`);
+    prev.textContent=wc===0?"":(wc<200?"⚠️ Min 200 words":(`✅ +${calcLitExp(wc)} EXP`));
     prev.style.color=wc<200&&wc>0?"#c9a23a":"#7a9b6e";
   };
-
   card.querySelector('#cp_image_file').onchange=e=>{
     const f=e.target.files[0]; if(!f) return;
     const r=new FileReader(); r.onload=()=>{
@@ -663,7 +1036,6 @@ function renderCompete(){
       card.querySelector('#cp_image_preview').innerHTML=`<img src="${uploadedImage}" style="max-height:120px;border-radius:6px;border:1px solid #4a392a;object-fit:contain;" />`;
     }; r.readAsDataURL(f);
   };
-
   card.querySelector('#cp_go').onclick=()=>{
     const hId=card.querySelector('#cp_horse').value;
     const h=state.horses.find(x=>x.id===hId);
@@ -673,70 +1045,173 @@ function renderCompete(){
     const artType=card.querySelector('#cp_art').value;
     const litWords=parseInt(card.querySelector('#cp_lit').value)||0;
     const link=card.querySelector('#cp_link').value.trim();
+    const venue=card.querySelector('#cp_venue').value.trim();
     const res=card.querySelector('#cp_result');
 
-    // Validation
-    if(!uploadedImage){
-      res.innerHTML='<div class="result fail">🖼️ An image is required to log a competition. Please upload your art first.</div>';
-      return;
-    }
-    if(!artType){
-      res.innerHTML='<div class="result fail">Please select an art type.</div>';
-      card.querySelector('#cp_art').classList.add('missing');
-      return;
-    }
-    card.querySelector('#cp_art').classList.remove('missing');
+    if(!uploadedImage){ res.innerHTML='<div class="result fail">🖼️ An image is required.</div>'; return; }
+    if(!artType){ res.innerHTML='<div class="result fail">Please select an art type.</div>'; return; }
 
-    // EXP
     let expGain=ART_EXP[artType]||0;
     const sources=[`${artType} (+${ART_EXP[artType]})`];
     const litExp=calcLitExp(litWords);
     if(litExp>0){expGain+=litExp; sources.push(`Lit ${litWords}w (+${litExp})`);}
-    // Placement EXP bonus
+    const placeNum=Number(placement)||null;
     const placeExp={1:4,2:3,3:2}[placement]||1;
     if(placement!=="0"&&placement!==""){expGain+=placeExp; sources.push(`Placement (+${placeExp})`);}
     selectedBonuses.forEach(k=>{if(BONUS_EXP[k]){expGain+=BONUS_EXP[k]; sources.push(`${k} (+${BONUS_EXP[k]})`);}});
     h.exp+=expGain;
     checkLevelUp(h);
+    (DISCIPLINES[disc]?.stats||[]).forEach(s=>h.stats[s]=(h.stats[s]||0)+1);
 
-    // Apply small stat boost from discipline
-    const discStats=DISCIPLINES[disc]?.stats||[];
-    discStats.forEach(s=>h.stats[s]=(h.stats[s]||0)+1);
+    h.artLog.unshift({day:state.log.length+1,type:"competition",label:`${disc} — ${diff}`,placement:placeNum,art:artType,lit:litWords?`${litWords} words`:null,bonuses:[...selectedBonuses],exp:expGain,link:link||null,image:uploadedImage});
+    if(!h.compHistory) h.compHistory=[];
+    h.compHistory.unshift({id:uid2(),discipline:disc,difficulty:diff,placement:placeNum,venue,date:"",note:"",image:uploadedImage,link:link||null});
 
-    const placeLabel=placement==="0"||placement===""?"No placement":["1st","2nd","3rd","4th","5th","6th"][Number(placement)-1]||placement+"th";
-    const label=`${disc} — ${diff}`;
-    const entry={
-      day:state.log.length+1, type:"competition", label,
-      placement:Number(placement)||null,
-      art:artType, lit:litWords?`${litWords} words`:null,
-      bonuses:[...selectedBonuses], exp:expGain,
-      link:link||null, image:uploadedImage,
-    };
-    h.artLog.unshift(entry);
-    addLog(`🏆 ${h.name} — ${label} · ${placeLabel} · +${expGain} EXP`);
+    const placeLabel=placeNum?["1st","2nd","3rd","4th","5th","6th"][placeNum-1]||placeNum+"th":"No placement";
+    addLog(`🏆 ${h.name} — ${disc} ${diff} · ${placeLabel} · +${expGain} EXP`);
     save();
-
-    const placeIcon=placement==="1"?"🥇":placement==="2"?"🥈":placement==="3"?"🥉":"🏆";
-    res.innerHTML=`<div class="result success">${placeIcon} ${placeLabel} logged for ${h.name}! +${expGain} EXP (${sources.join(", ")})</div>`;
-
-    // Reset
+    res.innerHTML=`<div class="result success">${placeNum===1?"🥇":placeNum===2?"🥈":placeNum===3?"🥉":"🏆"} ${placeLabel} logged! +${expGain} EXP (${sources.join(", ")})</div>`;
     uploadedImage=null;
-    card.querySelector('#cp_image_preview').innerHTML='';
-    card.querySelector('#cp_image_file').value='';
-    card.querySelector('#cp_lit').value='';
-    card.querySelector('#cp_lit_preview').textContent='';
-    card.querySelector('#cp_link').value='';
+    ['#cp_image_preview','#cp_lit_preview'].forEach(s=>card.querySelector(s).innerHTML='');
+    ['#cp_image_file','#cp_lit','#cp_link','#cp_venue'].forEach(s=>card.querySelector(s).value='');
     card.querySelector('#cp_place').value='';
     selectedBonuses.clear();
     card.querySelectorAll('[data-bonus]').forEach(p=>p.classList.remove('active'));
   };
-
   return wrap;
 }
 
-// ============================================
-// ART LOG TAB — all horses
-// ============================================
+function buildPastShowForm(){
+  const wrap=el('div');
+  let uploadedImage=null;
+  const card=el('div','card');
+  const discOpts=Object.keys(DISCIPLINES).map(d=>`<option value="${d}">${d}</option>`).join("");
+  card.innerHTML=`
+    <h3>Log a Past Show</h3>
+    <p class="small" style="margin-top:0;color:#b5a392;">Record old competition results — no EXP is awarded for past shows.</p>
+    <div class="row">
+      <div><label>Horse</label><select id="ps_horse">${state.horses.map(h=>`<option value="${h.id}">${h.name}</option>`).join("")}</select></div>
+      <div><label>Discipline</label><select id="ps_disc">${discOpts}</select></div>
+      <div><label>Difficulty</label><select id="ps_diff"></select></div>
+    </div>
+    <div class="row" style="margin-top:8px;">
+      <div><label>Venue / Show Name</label><input id="ps_venue" placeholder="e.g. Spring Classic 2023" /></div>
+      <div><label>Date</label><input id="ps_date" placeholder="e.g. March 2023" /></div>
+    </div>
+    <div class="row" style="margin-top:8px;">
+      <div><label>Placement</label>
+        <select id="ps_place">
+          <option value="">— select —</option>
+          <option value="1">🥇 1st</option><option value="2">🥈 2nd</option><option value="3">🥉 3rd</option>
+          <option value="4">4th</option><option value="5">5th</option><option value="6">6th</option>
+          <option value="0">Participant</option>
+        </select>
+      </div>
+      <div><label>Notes <span class="small">(optional)</span></label><input id="ps_note" placeholder="e.g. Double clear!" /></div>
+    </div>
+    <div style="margin-top:10px;">
+      <label>Photo / Art <span class="small">(optional)</span></label>
+      <input type="file" id="ps_image_file" accept="image/*" />
+      <div id="ps_image_preview" style="margin-top:6px;"></div>
+    </div>
+    <button id="ps_go" style="margin-top:10px;">📜 Add to History</button>
+    <div id="ps_result"></div>
+  `;
+  wrap.appendChild(card);
+
+  function refreshDiff(){
+    const disc=card.querySelector('#ps_disc').value;
+    card.querySelector('#ps_diff').innerHTML=(DISCIPLINES[disc]?.difficulties||[]).map(d=>`<option>${d}</option>`).join("");
+  }
+  refreshDiff();
+  card.querySelector('#ps_disc').onchange=refreshDiff;
+  card.querySelector('#ps_image_file').onchange=e=>{
+    const f=e.target.files[0]; if(!f) return;
+    const r=new FileReader(); r.onload=()=>{
+      uploadedImage=r.result;
+      card.querySelector('#ps_image_preview').innerHTML=`<img src="${uploadedImage}" style="max-height:100px;border-radius:6px;border:1px solid #4a392a;object-fit:contain;" />`;
+    }; r.readAsDataURL(f);
+  };
+  card.querySelector('#ps_go').onclick=()=>{
+    const hId=card.querySelector('#ps_horse').value;
+    const h=state.horses.find(x=>x.id===hId);
+    const disc=card.querySelector('#ps_disc').value;
+    const diff=card.querySelector('#ps_diff').value;
+    const placement=Number(card.querySelector('#ps_place').value)||null;
+    const venue=card.querySelector('#ps_venue').value.trim();
+    const date=card.querySelector('#ps_date').value.trim();
+    const note=card.querySelector('#ps_note').value.trim();
+    const res=card.querySelector('#ps_result');
+    if(!h.compHistory) h.compHistory=[];
+    h.compHistory.push({id:uid2(),discipline:disc,difficulty:diff,placement,venue,date,note,image:uploadedImage||null,link:null});
+    const placeLabel=placement?["1st","2nd","3rd","4th","5th","6th"][placement-1]||placement+"th":"Participant";
+    addLog(`📜 Added past show for ${h.name}: ${disc} ${diff} — ${placeLabel}${venue?` at ${venue}`:""}.`);
+    save();
+    res.innerHTML=`<div class="result success">✅ Past show added to ${h.name}'s history!</div>`;
+    uploadedImage=null;
+    card.querySelector('#ps_image_preview').innerHTML='';
+    ['#ps_image_file','#ps_venue','#ps_date','#ps_note'].forEach(s=>card.querySelector(s).value='');
+    card.querySelector('#ps_place').value='';
+  };
+  return wrap;
+}
+
+function buildShowHistory(){
+  const wrap=el('div');
+  state.horses.forEach(h=>{
+    const history=h.compHistory||[];
+    if(!history.length) return;
+    const trophies=history.filter(c=>c.placement>=1&&c.placement<=3);
+    const card=el('div','card');
+    card.innerHTML=`
+      <h3>${h.name} <span class="tag">${history.length} shows</span> <span class="tag" style="background:rgba(201,138,58,.15);color:#c98a3a;border-color:#c98a3a;">${trophies.length} 🏅</span></h3>
+      ${trophies.length?`<div style="margin-bottom:10px;">
+        <div class="small" style="margin-bottom:4px;">🏆 Ribbon Wall</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;">
+          ${trophies.map(c=>{
+            const icon=c.placement===1?"🥇":c.placement===2?"🥈":"🥉";
+            return `<div style="background:#15100c;border:1px solid #4a392a;border-radius:6px;padding:6px 10px;text-align:center;font-size:.78em;">
+              ${c.image?`<img src="${c.image}" style="width:50px;height:50px;object-fit:cover;border-radius:4px;display:block;margin:0 auto 4px;" />`:`<div style="font-size:1.8em;">${icon}</div>`}
+              <div>${icon} ${["1st","2nd","3rd"][c.placement-1]}</div>
+              <div style="opacity:.7;">${c.discipline}</div>
+              ${c.date?`<div style="opacity:.5;">${c.date}</div>`:""}
+            </div>`;
+          }).join("")}
+        </div>
+      </div>`:""}
+      <div class="artlog-panel" style="max-height:300px;">
+        ${history.map(c=>{
+          const ribbon=c.placement===1?"🥇":c.placement===2?"🥈":c.placement===3?"🥉":c.placement?"🏅":"";
+          const placeLabel=c.placement?["1st","2nd","3rd","4th","5th","6th"][c.placement-1]||c.placement+"th":"Participant";
+          return `<div class="artlog-entry">
+            <div style="display:flex;gap:8px;align-items:flex-start;">
+              ${c.image?`<img src="${c.image}" class="artlog-thumb" style="flex:none;" />`:""}
+              <div>
+                ${ribbon} <b>${c.discipline}</b> — ${c.difficulty} <span class="tag">${placeLabel}</span>
+                ${c.venue?`<div class="small">${c.venue}</div>`:""}
+                ${c.date?`<div class="small">${c.date}</div>`:""}
+                ${c.note?`<div class="small">${c.note}</div>`:""}
+                <button data-act="del-show" data-hid="${h.id}" data-cid="${c.id}" class="secondary" style="font-size:.7em;padding:2px 7px;margin-top:4px;">✕ Remove</button>
+              </div>
+            </div>
+          </div>`;
+        }).join("")}
+      </div>
+    `;
+    wrap.appendChild(card);
+  });
+
+  if(!state.horses.some(h=>(h.compHistory||[]).length)){
+    wrap.innerHTML='<div class="card small">No competition history yet.</div>';
+  }
+  wrap.querySelectorAll('[data-act="del-show"]').forEach(b=>b.onclick=()=>{
+    if(!confirm('Remove this show record?')) return;
+    const h=state.horses.find(x=>x.id===b.dataset.hid);
+    if(h) h.compHistory=(h.compHistory||[]).filter(c=>c.id!==b.dataset.cid);
+    save(); render();
+  });
+  return wrap;
+}
 
 function renderArtLog(){
   const wrap=el('div');
@@ -770,7 +1245,595 @@ function renderArtLog(){
     wrap.innerHTML='<div class="card small">No art logged yet — use the Training or Competitions tabs to add entries.</div>';
   }
 
+  wrap.querySelectorAll('[data-lightbox]').forEach(img=>{
+    img.onclick=e=>{ e.stopPropagation(); openLightbox(img.dataset.lightbox, img.dataset.caption); };
+  });
+
   return wrap;
+}
+
+// ============================================
+// TACK INVENTORY TAB (global pool of owned tack)
+// ============================================
+
+function renderTackInventory(){
+  const wrap=el('div');
+
+  const form=el('div','card',`
+    <h3>🏇 Add Tack Item</h3>
+    <p class="small" style="margin-top:0;">Add tack to your shared inventory. Then equip pieces on individual horses from their roster card.</p>
+    <div class="row">
+      <div><label>Item Name</label><input id="tk_name" placeholder="e.g. XC Saddle, Egg-bar Shoes" /></div>
+      <div><label>Category</label>
+        <select id="tk_cat">
+          <option>Saddle</option><option>Bridle</option><option>Shoes</option>
+          <option>Boots</option><option>Blanket</option><option>Other</option>
+        </select>
+      </div>
+    </div>
+    <div style="margin-top:8px;">
+      <label>Item Image</label>
+      <input type="file" id="tk_image_file" accept="image/*" />
+      <div id="tk_image_preview" style="margin-top:6px;"></div>
+    </div>
+    <div style="margin-top:8px;">
+      <label>Stat Bonuses While Equipped <span class="small">(optional)</span></label>
+      <div class="row">
+        ${STATS.map(s=>`<div style="min-width:90px;"><label style="font-size:.7em;">${STAT_LABELS[s]}</label><input type="number" id="tk_stat_${s}" value="0" style="padding:4px 6px;" /></div>`).join("")}
+      </div>
+    </div>
+    <button id="tk_add" style="margin-top:10px;">➕ Add to Inventory</button>
+  `);
+  wrap.appendChild(form);
+
+  let tackImage=null;
+  form.querySelector('#tk_image_file').onchange=e=>{
+    const f=e.target.files[0]; if(!f) return;
+    const r=new FileReader(); r.onload=()=>{
+      tackImage=r.result;
+      form.querySelector('#tk_image_preview').innerHTML=`<img src="${tackImage}" style="max-height:100px;border-radius:6px;border:1px solid #4a392a;" />`;
+    }; r.readAsDataURL(f);
+  };
+
+  form.querySelector('#tk_add').onclick=()=>{
+    const name=form.querySelector('#tk_name').value.trim();
+    if(!name){ alert("Give the tack item a name first!"); return; }
+    const cat=form.querySelector('#tk_cat').value;
+    const stats={};
+    STATS.forEach(s=>{
+      const v=Number(form.querySelector(`#tk_stat_${s}`).value)||0;
+      if(v!==0) stats[s]=v;
+    });
+    const item={ id:uid2(), name, category:cat, image:tackImage, stats };
+    if(!state.tackInventory) state.tackInventory=[];
+    state.tackInventory.push(item);
+    addLog(`🏇 Added "${name}" (${cat}) to the tack inventory.`);
+    save(); render();
+  };
+
+  // Inventory display
+  const inv = state.tackInventory||[];
+  const invCard=el('div','card');
+  invCard.innerHTML=`<h3>Owned Tack (${inv.length})</h3>`;
+  if(!inv.length){
+    invCard.innerHTML+=`<div class="small">No tack added yet.</div>`;
+  } else {
+    const grid=el('div');
+    grid.style.cssText='display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-top:8px;';
+    inv.forEach(item=>{
+      const statsStr=Object.entries(item.stats||{}).map(([s,v])=>`+${v} ${STAT_LABELS[s]}`).join(", ");
+      const div=el('div');
+      div.style.cssText='background:#15100c;border:1px solid #4a392a;border-radius:8px;padding:8px;text-align:center;';
+      div.innerHTML=`
+        ${item.image?`<img src="${item.image}" style="width:100%;height:90px;object-fit:cover;border-radius:5px;" />`:`<div style="height:90px;display:flex;align-items:center;justify-content:center;font-size:2em;color:#4a392a;">🏇</div>`}
+        <div style="margin-top:6px;font-weight:bold;font-size:.88em;">${item.name}</div>
+        <div class="small">${item.category}</div>
+        ${statsStr?`<div class="small" style="color:var(--good);margin-top:2px;">${statsStr}</div>`:""}
+        <button class="danger" data-act="del-tack" data-id="${item.id}" style="font-size:.7em;padding:3px 8px;margin-top:6px;">Remove</button>
+      `;
+      grid.appendChild(div);
+    });
+    invCard.appendChild(grid);
+  }
+  wrap.appendChild(invCard);
+
+  invCard.querySelectorAll('[data-act="del-tack"]').forEach(b=>b.onclick=()=>{
+    if(!confirm('Remove this tack item from inventory? It will be unequipped from any horses wearing it.')) return;
+    state.tackInventory=(state.tackInventory||[]).filter(t=>t.id!==b.dataset.id);
+    state.horses.forEach(h=>{ h.tackEquipped=(h.tackEquipped||[]).filter(id=>id!==b.dataset.id); });
+    save(); render();
+  });
+
+  return wrap;
+}
+
+// ============================================
+// LIGHTBLOOD PRICING DATA
+// ============================================
+
+const GENO_BASE_PRICES = [
+  {label:"Bay / Black", value:500},
+  {label:"Wild Bay / Seal Bay / Liver Chestnut", value:600},
+  {label:"Chestnut", value:700},
+];
+
+const GENO_MODIFIERS = {
+  "Dilutions": [
+    {label:"Dun", value:100},
+    {label:"Single Cream", value:100},
+    {label:"Double Cream", value:500},
+    {label:"Champagne", value:700},
+  ],
+  "Coat Modifiers": [
+    {label:"Sooty", value:100},
+    {label:"Pangare", value:100},
+    {label:"Silver / Flaxen", value:150},
+    {label:"Bend Or Spots", value:100},
+    {label:"Gulastra Plume (nSb)", value:200},
+  ],
+  "White Markings": [
+    {label:"Roan", value:100},
+    {label:"Rabicano", value:150},
+    {label:"Tobiano", value:200},
+    {label:"Sabino", value:200},
+    {label:"Splash", value:200},
+    {label:"Overo", value:200},
+    {label:"Manchado", value:350},
+  ],
+  "Appaloosa Markings": [
+    {label:"Snowcap Appaloosa (LpLp PATN2PATN2)", value:500},
+    {label:"Fewspot Appaloosa (LpLp PATN1)", value:500},
+    {label:"Leopard Appaloosa (nLp PATN1)", value:700},
+    {label:"Spotted Blanket Appaloosa (nLp PATN2)", value:700},
+    {label:"SemiLeopard Appaloosa (nLp PATN1PATN2)", value:700},
+    {label:"Varnish Appaloosa (LpLp)", value:900},
+    {label:"Snowflake Appaloosa (nLp)", value:900},
+  ],
+  "Grey": [
+    {label:"Fleabitten Grey (Gg)", value:150},
+    {label:"Dappled Grey (GG)", value:200},
+  ],
+  "Rare Markings": [
+    {label:"Fairylock", value:600},
+    {label:"Bloodmark", value:600},
+    {label:"Cryptic", value:700},
+    {label:"Brindle", value:900},
+    {label:"Somatic Mutation", value:900},
+    {label:"Lacing", value:900},
+    {label:"Peacock Appaloosa Mutation", value:900},
+    {label:"Chimera", value:1200},
+    {label:"Dom White", value:1200},
+    {label:"Vitiligo", value:900},
+  ],
+  "Line Features": [
+    {label:"Jewel Line — Glossy Coat", value:5000},
+    {label:"Historical Romance — Sealspot Roan", value:6000},
+    {label:"Hallowed Line — Silken", value:9000},
+    {label:"Light Years Line — Indigo Eyes", value:9000},
+    {label:"Circe Line — Circe Ears", value:9000},
+    {label:"Tiger Line — Tiger Dun", value:9000},
+    {label:"Wolf Line — Unrelated Bleu", value:9000},
+    {label:"Steel Poppy — Restricted Dapple", value:10000},
+    {label:"Dove Line — Dove Dilute", value:11000},
+    {label:"Church Mouse Line — Mouse Dilute", value:12000},
+  ],
+  "Mane Type": [
+    {label:"Standard Mane (free)", value:0},
+    {label:"Single Bald Mane", value:100},
+    {label:"Double Bald Mane", value:200},
+    {label:"Bald Mane Long Tail", value:150},
+    {label:"Double Long Mane", value:200},
+    {label:"Single Long Mane", value:100},
+  ],
+};
+
+const SHOW_EARNING_VALUES = {1:1000, 2:500, 3:250};
+const SHOW_EARNING_OTHER = 100;
+
+function calcShowEarnings(h){
+  return (h.compHistory||[]).reduce((sum, c)=>{
+    if(!c.placement || c.placement === 0) return sum;
+    return sum + (SHOW_EARNING_VALUES[c.placement] || SHOW_EARNING_OTHER);
+  }, 0);
+}
+
+function calcGenoPrice(h){
+  const base = h.genoBasePrice || 0;
+  const mods = (h.genoModifiers||[]).reduce((s, m)=>s + (m.value||0), 0);
+  return base + mods;
+}
+
+function calcNetWorth(h){
+  if(h.customNetWorth !== null && h.customNetWorth !== undefined && h.customNetWorth !== "") {
+    return Number(h.customNetWorth);
+  }
+  return calcGenoPrice(h) + calcShowEarnings(h);
+}
+
+function calcSlotPrice(h){
+  return Math.round(calcNetWorth(h) * 0.05);
+}
+
+
+// ============================================
+// HORSE PROFILE PAGE (deep-linkable)
+// ============================================
+
+function renderHorseProfilePage(app, h){
+  if(!h.pedigree) h.pedigree={};
+
+  const pct = h.level>=10?100:Math.min(100,((h.exp-(LEVEL_TABLE[h.level]?.exp||0))/((LEVEL_TABLE[h.level+1]?.exp||1)-(LEVEL_TABLE[h.level]?.exp||0)))*100);
+
+  // Net worth calc
+  const genoPrice    = calcGenoPrice(h);
+  const showEarnings = calcShowEarnings(h);
+  const netWorth     = calcNetWorth(h);
+  const slotPrice    = calcSlotPrice(h);
+
+  // Stat bars
+  const statBars = STATS.map(s=>{
+    const base=h.stats[s]||0, bonus=getEquippedStatBonus(h,s), eff=base+bonus;
+    return `<div class="statbar-wrap">
+      <span style="width:80px;font-size:.8em;">${STAT_LABELS[s]}</span>
+      <div class="statbar-bg"><div class="statbar-fill" style="width:${Math.min(100,eff)}%"></div></div>
+      <span style="font-size:.78em;width:60px;text-align:right;">${eff}${bonus?` <span style="color:#7a9b6e;">(+${bonus})</span>`:""}</span>
+    </div>`;
+  }).join("");
+
+  // Breeding slots
+  let slotsHtml="";
+  for(let i=0;i<h.breedingSlots;i++){
+    const rec=(h.breedingRecords||[]).find(r=>r.slotIndex===i);
+    slotsHtml+=`<div class="slot${rec?" filled":""}" title="${rec?(rec.partnerName||"Used"):"Open slot"}">${i+1}</div>`;
+  }
+
+  const breedingRecHtml = (h.breedingRecords||[]).length ? (h.breedingRecords.map(r=>`
+    <div class="small" style="padding:6px;background:#15100c;border-radius:5px;margin-bottom:4px;">
+      Slot ${r.slotIndex+1} — ${r.role==="sire"?"Sired with":"Bred to"} <b>${r.partnerName}</b>${r.partnerOwner?` (${r.partnerOwner})`:""}${r.date?` · ${r.date}`:""}
+      ${r.foalId?` → <a href="?horse=${r.foalId}" style="color:#c98a3a;">Foal: ${r.foalName}</a>`:r.foalName?` → Foal: ${r.foalName} (unlinked)`:""}
+      ${r.note?`<br><i style="opacity:.7;">${r.note}</i>`:""}
+    </div>`).join("")) : `<div class="small" style="opacity:.6;">No breeding records.</div>`;
+
+  // Tack
+  const inv=state.tackInventory||[];
+  const tackEquippedHtml=(h.tackEquipped||[]).map(tid=>{
+    const item=inv.find(t=>t.id===tid);
+    if(!item) return "";
+    const s=Object.entries(item.stats||{}).map(([k,v])=>`+${v} ${STAT_LABELS[k]}`).join(", ");
+    return `<span class="tag" style="background:#1a3a2a;color:#a0e8c0;border-color:#3a7a5a;">${item.name}${s?` (${s})`:""}</span>`;
+  }).join(" ")||`<span class="small">Nothing equipped.</span>`;
+
+  // Ribbon wall
+  const trophies=(h.compHistory||[]).filter(c=>c.placement>=1&&c.placement<=3);
+  const ribbonWall=trophies.length?`<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px;">
+    ${trophies.map(c=>{
+      const icon=c.placement===1?"🥇":c.placement===2?"🥈":"🥉";
+      return `<div style="background:#15100c;border:1px solid #4a392a;border-radius:8px;padding:8px;text-align:center;font-size:.78em;min-width:70px;">
+        ${c.image?`<img src="${c.image}" style="width:56px;height:56px;object-fit:cover;border-radius:5px;display:block;margin:0 auto 4px;cursor:zoom-in;" onclick="openLightbox('${c.image}','${c.discipline} — ${c.difficulty}')" />`:`<div style="font-size:2em;">${icon}</div>`}
+        <div>${icon} ${["1st","2nd","3rd"][c.placement-1]}</div>
+        <div style="opacity:.7;font-size:.9em;">${c.discipline}</div>
+        ${c.date?`<div style="opacity:.5;">${c.date}</div>`:""}
+      </div>`;
+    }).join("")}
+  </div>`:null;
+
+  // Competition history
+  const compHistoryHtml=(h.compHistory||[]).length?`<div class="artlog-panel" style="max-height:250px;">${(h.compHistory||[]).map(c=>{
+    const pl=c.placement;
+    const icon=pl===1?"🥇":pl===2?"🥈":pl===3?"🥉":pl?"🏅":"";
+    const label=pl?["1st","2nd","3rd","4th","5th","6th"][pl-1]||pl+"th":"Participant";
+    return `<div class="artlog-entry" style="display:flex;gap:8px;align-items:flex-start;">
+      ${c.image?`<img src="${c.image}" class="artlog-thumb" style="flex:none;cursor:zoom-in;" onclick="openLightbox('${c.image}','${c.discipline} ${c.difficulty}')" />`:""}
+      <div>${icon} <b>${c.discipline}</b> — ${c.difficulty} <span class="tag">${label}</span>
+        ${c.venue?`<div class="small">${c.venue}</div>`:""}
+        ${c.date?`<div class="small">${c.date}</div>`:""}
+        ${c.note?`<div class="small" style="opacity:.7;">${c.note}</div>`:""}
+      </div>
+    </div>`;
+  }).join("")}</div>` : `<div class="small" style="opacity:.6;">No competition history.</div>`;
+
+  // Art log
+  const artLogHtml=h.artLog.length?`<div class="artlog-panel" style="max-height:300px;">${h.artLog.map(e=>`
+    <div class="artlog-entry" style="display:flex;gap:8px;align-items:flex-start;">
+      ${e.image?`<img src="${e.image}" class="artlog-thumb" style="flex:none;cursor:zoom-in;" onclick="openLightbox('${e.image}','${e.label}')" />`:""}
+      <div><b>${e.label}</b> <span class="tag">+${e.exp} EXP</span>
+        ${e.link?`<a href="${e.link}" target="_blank" style="color:#c98a3a;font-size:.8em;margin-left:4px;">🔗</a>`:""}
+        <div class="small">${e.art||""}${e.lit?` · ${e.lit}`:""}</div>
+      </div>
+    </div>`).join("")}</div>`:
+    `<div class="small" style="opacity:.6;">No art logged yet.</div>`;
+
+  // Profile photo — clickable
+  const photoHtml = h.profileImage
+    ? `<img src="${h.profileImage}" onclick="openLightbox('${h.profileImage}','${h.name}')" style="width:150px;height:150px;border-radius:10px;object-fit:cover;border:3px solid #c98a3a;cursor:zoom-in;" />`
+    : `<div style="width:150px;height:150px;border-radius:10px;border:3px solid #4a392a;display:flex;align-items:center;justify-content:center;font-size:3.5em;background:#15100c;">🐴</div>`;
+
+  const refHtml = h.referenceImage
+    ? `<div style="margin-top:10px;"><div class="small" style="margin-bottom:4px;">📋 Reference / Registration</div>
+       <img src="${h.referenceImage}" onclick="openLightbox('${h.referenceImage}','${h.name} — Reference Sheet')" style="max-width:100%;max-height:220px;border-radius:8px;border:1px solid #4a392a;object-fit:contain;cursor:zoom-in;" />
+       ${h.referenceLink?`<div class="small" style="margin-top:4px;"><a href="${h.referenceLink}" target="_blank" style="color:#c98a3a;">🔗 View on site</a></div>`:""}</div>`
+    : "";
+
+  app.innerHTML=`
+    <style>
+      body { background:#1b1410; color:#f1e6d8; font-family:Georgia,serif; margin:0; padding:0; }
+      .pcard { background:#241a14; border:1px solid #4a392a; border-radius:8px; padding:16px; margin-bottom:14px; }
+      .pcard h3 { color:#c98a3a; margin-top:0; font-family:"Palatino Linotype",Georgia,serif; }
+      .pcard .small { font-size:.82em; color:#b5a392; }
+      a { color:#c98a3a; }
+      .statbar-wrap { display:flex; align-items:center; gap:5px; margin-bottom:3px; }
+      .statbar-bg { flex:1; height:7px; background:#15100c; border-radius:4px; overflow:hidden; }
+      .statbar-fill { height:100%; background:linear-gradient(90deg,#7a9b6e,#c98a3a); }
+      .expbar-bg { height:8px; background:#15100c; border-radius:5px; overflow:hidden; margin-top:4px; }
+      .expbar-fill { height:100%; background:linear-gradient(90deg,#8a6fb0,#c98a3a); }
+      .tag { display:inline-block; font-size:.72em; padding:2px 8px; border-radius:10px; background:#15100c; color:#b5a392; border:1px solid #4a392a; margin-left:3px; }
+      .slot { width:22px; height:22px; border-radius:50%; border:1px solid #c98a3a; display:inline-flex; align-items:center; justify-content:center; font-size:.65em; margin-right:4px; }
+      .slot.filled { background:#c98a3a; color:#15100c; }
+      .artlog-panel { background:#15100c; border:1px solid #4a392a; border-radius:6px; padding:8px; overflow-y:auto; }
+      .artlog-entry { padding:6px 0; border-bottom:1px dashed #2c2118; }
+      .artlog-entry:last-child { border-bottom:none; }
+      .artlog-thumb { width:52px; height:52px; border-radius:5px; object-fit:cover; border:1px solid #4a392a; }
+      .breedslots { display:flex; flex-wrap:wrap; gap:4px; margin-top:6px; }
+      .worth-row { display:flex; justify-content:space-between; padding:4px 0; border-bottom:1px dashed #2c2118; font-size:.88em; }
+      .worth-row:last-child { border-bottom:none; font-weight:bold; color:#c98a3a; }
+    </style>
+
+    <div style="max-width:900px;margin:0 auto;padding:16px;">
+      <div style="margin-bottom:12px;"><a href="${window.location.pathname}" style="color:#c98a3a;text-decoration:none;">← Back to Stable Manager</a></div>
+
+      <!-- HERO -->
+      <div class="pcard" style="display:flex;gap:20px;flex-wrap:wrap;align-items:flex-start;">
+        <div style="display:flex;flex-direction:column;gap:8px;align-items:center;">
+          ${photoHtml}
+          ${h.ownerName?`<div class="small" style="text-align:center;">Owner: ${h.ownerLink?`<a href="${h.ownerLink}" target="_blank">${h.ownerName}</a>`:h.ownerName}</div>`:""}
+          ${h.riderName?`<div class="small" style="text-align:center;">Rider: ${h.riderName}</div>`:""}
+          ${h.stableName?`<div class="small" style="text-align:center;">Stable: ${h.stableLink?`<a href="${h.stableLink}" target="_blank">${h.stableName}</a>`:h.stableName}</div>`:""}
+        </div>
+        <div style="flex:1;min-width:220px;">
+          <h1 style="margin:0 0 4px;color:#c98a3a;font-size:1.9em;">${h.name}</h1>
+          <div class="small" style="font-size:.95em;">${h.breed}${h.gender?` · ${h.gender}`:""} · Age ${h.age} (${h.stage})</div>
+          ${h.phenotype?`<div class="small">Phenotype: ${h.phenotype}</div>`:""}
+          ${h.genotype?`<div class="small">Genotype: ${h.genotype}</div>`:""}
+          <div style="margin-top:8px;"><span class="tag" style="font-size:.85em;">Level ${h.level}</span> <span class="tag" style="font-size:.85em;">${h.exp} EXP</span></div>
+          <div class="expbar-bg" style="margin-top:6px;max-width:260px;"><div class="expbar-fill" style="width:${pct}%"></div></div>
+          <div style="margin-top:12px;font-size:.78em;color:#b5a392;">💰 Net Worth: <b style="color:#c98a3a;">฿${netWorth.toLocaleString()}</b> &nbsp;|&nbsp; Breeding Slot: <b style="color:#c98a3a;">฿${slotPrice.toLocaleString()}</b></div>
+        </div>
+      </div>
+
+      <!-- PERSONALITY & HISTORY -->
+      ${h.personality||h.horseHistory ? `<div class="pcard">
+        ${h.personality?`<h3>🐴 Personality</h3><p style="font-size:.9em;line-height:1.7;white-space:pre-wrap;">${h.personality}</p>`:""}
+        ${h.horseHistory?`<h3>📜 History</h3><p style="font-size:.9em;line-height:1.7;white-space:pre-wrap;">${h.horseHistory}</p>`:""}
+      </div>` : ""}
+
+      <!-- REFERENCE -->
+      ${refHtml ? `<div class="pcard">${refHtml}</div>` : ""}
+
+      <!-- STATS -->
+      <div class="pcard">
+        <h3>📊 Stats</h3>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:4px;">${statBars}</div>
+      </div>
+
+      <!-- PEDIGREE & BREEDING -->
+      <div class="pcard">
+        <h3>🧬 Pedigree</h3>
+        ${renderPedigreeChart(h)}
+        <h3 style="margin-top:16px;">🐎 Breeding Slots</h3>
+        <div class="breedslots">${slotsHtml||'<span class="small">none yet</span>'}</div>
+        <div style="margin-top:10px;">${breedingRecHtml}</div>
+      </div>
+
+      <!-- NET WORTH BREAKDOWN -->
+      <div class="pcard">
+        <h3>💰 Net Worth Breakdown</h3>
+        <div class="small" style="margin-bottom:8px;">Based on Lightblood Pricing Guide. Breeding slot price = Net Worth × 5%.</div>
+        <div class="worth-row"><span>Genotype Base Price</span><span>฿${(h.genoBasePrice||0).toLocaleString()}</span></div>
+        ${(h.genoModifiers||[]).map(m=>`<div class="worth-row"><span>${m.label}</span><span>฿${(m.value||0).toLocaleString()}</span></div>`).join("")}
+        <div class="worth-row"><span>Total Genotype Value</span><span>฿${genoPrice.toLocaleString()}</span></div>
+        <div class="worth-row"><span>Show Earnings</span><span>฿${showEarnings.toLocaleString()}</span></div>
+        ${h.customNetWorth!==null&&h.customNetWorth!==undefined&&h.customNetWorth!==""?`<div class="worth-row"><span style="color:#d4a030;">⚠️ Custom override applied</span><span>฿${Number(h.customNetWorth).toLocaleString()}</span></div>`:""}
+        <div class="worth-row" style="margin-top:4px;padding-top:8px;border-top:1px solid #4a392a;"><span>💰 NET WORTH</span><span>฿${netWorth.toLocaleString()}</span></div>
+        <div class="worth-row"><span>🏇 Breeding Slot Price (5%)</span><span>฿${slotPrice.toLocaleString()}</span></div>
+      </div>
+
+      <!-- TACK -->
+      <div class="pcard">
+        <h3>🏇 Equipped Tack</h3>
+        <div>${tackEquippedHtml}</div>
+      </div>
+
+      <!-- RIBBON WALL -->
+      <div class="pcard">
+        <h3>🏆 Ribbon Wall</h3>
+        ${ribbonWall || '<div class="small" style="opacity:.6;">No placements yet.</div>'}
+        <h3 style="margin-top:16px;">📜 Competition History</h3>
+        ${compHistoryHtml}
+      </div>
+
+      <!-- ART LOG -->
+      <div class="pcard">
+        <h3>🎨 Art Log</h3>
+        ${artLogHtml}
+      </div>
+
+      <!-- SHARE LINK -->
+      <div style="text-align:center;margin:20px 0;">
+        <div class="small" style="margin-bottom:6px;">📎 Shareable link to this profile:</div>
+        <input readonly value="${window.location.origin}${window.location.pathname}?horse=${h.id}" onclick="this.select()" style="max-width:480px;width:100%;text-align:center;padding:8px;background:#15100c;border:1px solid #4a392a;color:#f1e6d8;border-radius:6px;font-family:monospace;" />
+      </div>
+    </div>
+  `;
+}
+
+
+
+// ============================================
+// PROFILE EDIT MODAL (owner, rider, stable, personality, history)
+// ============================================
+
+function showProfileModal(horseId){
+  const h=state.horses.find(x=>x.id===horseId);
+  if(!h) return;
+  const overlay=document.createElement('div');
+  overlay.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.9);z-index:9999;display:flex;align-items:flex-start;justify-content:center;padding:16px;overflow-y:auto;';
+
+  function field(id, label, val, placeholder, type='input'){
+    const inp = type==='textarea'
+      ? `<textarea id="${id}" rows="4" placeholder="${placeholder}" style="width:100%;padding:7px;background:#15100c;border:1px solid #4a392a;color:#f1e6d8;border-radius:5px;margin-top:3px;box-sizing:border-box;font-family:Georgia,serif;resize:vertical;">${val||''}</textarea>`
+      : `<input id="${id}" value="${val||''}" placeholder="${placeholder}" style="width:100%;padding:7px;background:#15100c;border:1px solid #4a392a;color:#f1e6d8;border-radius:5px;margin-top:3px;box-sizing:border-box;" />`;
+    return `<div style="margin-bottom:10px;"><label style="font-size:.78em;color:#b5a392;text-transform:uppercase;display:block;">${label}</label>${inp}</div>`;
+  }
+
+  overlay.innerHTML=`<div style="background:#2c1f16;border:2px solid #c98a3a;border-radius:10px;padding:24px;max-width:520px;width:100%;color:#f1e6d8;font-family:Georgia,serif;margin:auto;">
+    <h3 style="margin-top:0;color:#c98a3a;">✏️ Edit Profile — ${h.name}</h3>
+    ${field('pm_owner','Owner Name',h.ownerName,'e.g. @YourUsername')}
+    ${field('pm_ownerlink','Owner Link (optional)',h.ownerLink,'https://… (DeviantArt, Toyhouse…)')}
+    ${field('pm_rider','Rider Name (optional)',h.riderName,'e.g. Jane Smith')}
+    ${field('pm_stable','Stable / Boarding (optional)',h.stableName,'e.g. Willowbrook Stables')}
+    ${field('pm_stablelink','Stable Link (optional)',h.stableLink,'https://…')}
+    ${field('pm_personality','Personality',h.personality,'Describe this horse - personality, quirks, and character...','textarea')}
+    ${field('pm_history','History',h.horseHistory,'Background story, significant events, journey so far…','textarea')}
+    <button id="pm_save" style="width:100%;background:#c98a3a;color:#241a14;border:none;padding:10px;border-radius:6px;font-weight:bold;cursor:pointer;font-size:.95em;">💾 Save</button>
+    <button id="pm_cancel" style="margin-top:8px;width:100%;background:#2c2118;color:#f1e6d8;border:1px solid #4a392a;padding:10px;border-radius:6px;cursor:pointer;font-size:.95em;">Cancel</button>
+  </div>`;
+  document.body.appendChild(overlay);
+
+  overlay.querySelector('#pm_cancel').onclick=()=>overlay.remove();
+  overlay.querySelector('#pm_save').onclick=()=>{
+    h.ownerName  = overlay.querySelector('#pm_owner').value.trim();
+    h.ownerLink  = overlay.querySelector('#pm_ownerlink').value.trim();
+    h.riderName  = overlay.querySelector('#pm_rider').value.trim();
+    h.stableName = overlay.querySelector('#pm_stable').value.trim();
+    h.stableLink = overlay.querySelector('#pm_stablelink').value.trim();
+    h.personality  = overlay.querySelector('#pm_personality').value.trim();
+    h.horseHistory = overlay.querySelector('#pm_history').value.trim();
+    save(); overlay.remove(); render();
+  };
+}
+
+// ============================================
+// NET WORTH MODAL (Lightblood pricing)
+// ============================================
+
+function showNetWorthModal(horseId){
+  const h=state.horses.find(x=>x.id===horseId);
+  if(!h) return;
+  if(!h.genoModifiers) h.genoModifiers=[];
+
+  const overlay=document.createElement('div');
+  overlay.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.9);z-index:9999;display:flex;align-items:flex-start;justify-content:center;padding:16px;overflow-y:auto;';
+
+  function inp(style=''){
+    return `style="padding:6px;background:#15100c;border:1px solid #4a392a;color:#f1e6d8;border-radius:4px;${style}"`;
+  }
+
+  const baseOpts = GENO_BASE_PRICES.map(p=>`<option value="${p.value}" ${h.genoBasePrice===p.value?"selected":""}>${p.label} — ฿${p.value}</option>`).join("");
+  const modGroups = Object.entries(GENO_MODIFIERS).map(([group, items])=>`
+    <optgroup label="— ${group} —">
+      ${items.map(m=>`<option value="${m.value}|${m.label}">${m.label} (+฿${m.value})</option>`).join("")}
+    </optgroup>`).join("");
+
+  const existingMods = h.genoModifiers.map((m,i)=>`
+    <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
+      <span style="flex:1;font-size:.85em;">${m.label}</span>
+      <span style="color:#c98a3a;font-size:.85em;">+฿${m.value}</span>
+      <button data-remove="${i}" style="background:#b1473f;color:#fff;border:none;border-radius:4px;padding:2px 8px;cursor:pointer;font-size:.75em;">✕</button>
+    </div>`).join("") || `<div class="small" style="opacity:.6;">No modifiers added yet.</div>`;
+
+  const currentNW = calcNetWorth(h);
+  const currentSlot = calcSlotPrice(h);
+
+  overlay.innerHTML=`<div style="background:#2c1f16;border:2px solid #c98a3a;border-radius:10px;padding:24px;max-width:540px;width:100%;color:#f1e6d8;font-family:Georgia,serif;margin:auto;">
+    <h3 style="margin-top:0;color:#c98a3a;">💰 Net Worth — ${h.name}</h3>
+    <p style="color:#b5a392;font-size:.85em;margin-top:0;">Based on the Lightblood Pricing Guide. Breeding slot = Net Worth × 5%.</p>
+
+    <label style="font-size:.78em;color:#b5a392;text-transform:uppercase;display:block;margin-bottom:3px;">Genotype Base Price</label>
+    <select id="nw_base" style="width:100%;padding:7px;background:#15100c;border:1px solid #4a392a;color:#f1e6d8;border-radius:5px;margin-bottom:12px;">
+      <option value="0">— Select base —</option>
+      ${baseOpts}
+    </select>
+
+    <label style="font-size:.78em;color:#b5a392;text-transform:uppercase;display:block;margin-bottom:3px;">Add Modifier</label>
+    <div style="display:flex;gap:6px;margin-bottom:10px;">
+      <select id="nw_mod_pick" style="flex:1;padding:7px;background:#15100c;border:1px solid #4a392a;color:#f1e6d8;border-radius:5px;">
+        <option value="">— Pick modifier —</option>
+        ${modGroups}
+      </select>
+      <button id="nw_add_mod" style="background:#c98a3a;color:#241a14;border:none;padding:7px 14px;border-radius:5px;cursor:pointer;font-weight:bold;white-space:nowrap;">+ Add</button>
+    </div>
+
+    <div id="nw_mod_list" style="background:#15100c;border:1px solid #4a392a;border-radius:5px;padding:8px;min-height:36px;margin-bottom:12px;">
+      ${existingMods}
+    </div>
+
+    <label style="font-size:.78em;color:#b5a392;text-transform:uppercase;display:block;margin-bottom:3px;">Custom Net Worth Override <span style="opacity:.6;">(optional — leave blank to use calculated value)</span></label>
+    <input id="nw_custom" type="number" value="${h.customNetWorth!==null&&h.customNetWorth!==undefined&&h.customNetWorth!==""?h.customNetWorth:''}" placeholder="e.g. 5000" style="width:100%;padding:7px;background:#15100c;border:1px solid #4a392a;color:#f1e6d8;border-radius:5px;box-sizing:border-box;margin-bottom:12px;" />
+
+    <div id="nw_preview" style="background:#15100c;border:1px solid #4a392a;border-radius:6px;padding:10px;margin-bottom:12px;font-size:.88em;">
+      <div style="display:flex;justify-content:space-between;"><span>Genotype Value</span><span>฿${calcGenoPrice(h).toLocaleString()}</span></div>
+      <div style="display:flex;justify-content:space-between;"><span>Show Earnings</span><span>฿${calcShowEarnings(h).toLocaleString()}</span></div>
+      <div style="display:flex;justify-content:space-between;padding-top:6px;margin-top:6px;border-top:1px solid #2c2118;font-weight:bold;color:#c98a3a;"><span>Net Worth</span><span>฿${currentNW.toLocaleString()}</span></div>
+      <div style="display:flex;justify-content:space-between;color:#c98a3a;"><span>Slot Price (5%)</span><span>฿${currentSlot.toLocaleString()}</span></div>
+    </div>
+
+    <button id="nw_save" style="width:100%;background:#c98a3a;color:#241a14;border:none;padding:10px;border-radius:6px;font-weight:bold;cursor:pointer;font-size:.95em;">💾 Save</button>
+    <button id="nw_cancel" style="margin-top:8px;width:100%;background:#2c2118;color:#f1e6d8;border:1px solid #4a392a;padding:10px;border-radius:6px;cursor:pointer;font-size:.95em;">Cancel</button>
+  </div>`;
+  document.body.appendChild(overlay);
+
+  overlay.querySelector('#nw_cancel').onclick=()=>overlay.remove();
+
+  function refreshPreview(){
+    const base=Number(overlay.querySelector('#nw_base').value)||0;
+    const custom=overlay.querySelector('#nw_custom').value.trim();
+    const geno=base+(h.genoModifiers||[]).reduce((s,m)=>s+(m.value||0),0);
+    const shows=calcShowEarnings(h);
+    const nw=custom!==""?Number(custom):(geno+shows);
+    const slot=Math.round(nw*0.05);
+    overlay.querySelector('#nw_preview').innerHTML=`
+      <div style="display:flex;justify-content:space-between;"><span>Genotype Value</span><span>฿${geno.toLocaleString()}</span></div>
+      <div style="display:flex;justify-content:space-between;"><span>Show Earnings</span><span>฿${shows.toLocaleString()}</span></div>
+      ${custom!==""?`<div style="display:flex;justify-content:space-between;color:#d4a030;"><span>⚠️ Custom override</span><span>฿${Number(custom).toLocaleString()}</span></div>`:""}
+      <div style="display:flex;justify-content:space-between;padding-top:6px;margin-top:6px;border-top:1px solid #2c2118;font-weight:bold;color:#c98a3a;"><span>Net Worth</span><span>฿${nw.toLocaleString()}</span></div>
+      <div style="display:flex;justify-content:space-between;color:#c98a3a;"><span>Slot Price (5%)</span><span>฿${slot.toLocaleString()}</span></div>`;
+  }
+
+  overlay.querySelector('#nw_base').onchange=refreshPreview;
+  overlay.querySelector('#nw_custom').oninput=refreshPreview;
+
+  overlay.querySelector('#nw_add_mod').onclick=()=>{
+    const val=overlay.querySelector('#nw_mod_pick').value;
+    if(!val) return;
+    const [price, ...labelParts]=val.split('|');
+    const label=labelParts.join('|');
+    h.genoModifiers.push({label, value:Number(price)});
+    refreshModList();
+    refreshPreview();
+    overlay.querySelector('#nw_mod_pick').value='';
+  };
+
+  function refreshModList(){
+    const list=overlay.querySelector('#nw_mod_list');
+    list.innerHTML=h.genoModifiers.length ? h.genoModifiers.map((m,i)=>`
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
+        <span style="flex:1;font-size:.85em;">${m.label}</span>
+        <span style="color:#c98a3a;font-size:.85em;">+฿${m.value}</span>
+        <button data-remove="${i}" style="background:#b1473f;color:#fff;border:none;border-radius:4px;padding:2px 8px;cursor:pointer;font-size:.75em;">✕</button>
+      </div>`).join("") : `<div class="small" style="opacity:.6;">No modifiers added yet.</div>`;
+    list.querySelectorAll('[data-remove]').forEach(b=>b.onclick=()=>{
+      h.genoModifiers.splice(Number(b.dataset.remove),1);
+      refreshModList(); refreshPreview();
+    });
+  }
+  refreshModList();
+
+  overlay.querySelector('#nw_save').onclick=()=>{
+    h.genoBasePrice=Number(overlay.querySelector('#nw_base').value)||0;
+    const custom=overlay.querySelector('#nw_custom').value.trim();
+    h.customNetWorth=custom!==""?Number(custom):null;
+    save(); overlay.remove(); render();
+  };
 }
 
 // ============================================
