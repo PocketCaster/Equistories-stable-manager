@@ -235,9 +235,18 @@ async function save(){
 }
 
 // Save a single horse (faster — called after training/comp)
+// Automatically strips base64 images and saves them separately
 async function saveHorse(horse){
   if(!bankAccount.linked || !STABLE_URL) return;
   const {artLog,...horseData}=horse;
+  // Save images separately before stripping them
+  const IMAGE_KEYS = ['profileImage','referenceImage'];
+  for(const key of IMAGE_KEYS){
+    if(horseData[key] && horseData[key].startsWith('data:')){
+      await stableGas({ action:'saveHorseImage', userId:bankAccount.userId,
+        horseId:horse.id, imageKey:key, imageData:horseData[key] });
+    }
+  }
   await stableGas({ action:'saveHorse', userId:bankAccount.userId, horseId:horse.id, horseJson:JSON.stringify(horseData) });
 }
 
@@ -663,7 +672,7 @@ function renderRoster(){
     const f=e.target.files[0]; if(!f) return;
     const r=new FileReader(); r.onload=()=>{
       const h=state.horses.find(x=>x.id===inp.dataset.photoInput);
-      if(h){h.profileImage=r.result; save(); render();}
+      if(h){ h.profileImage=r.result; saveHorse(h); save(); render(); }
     }; r.readAsDataURL(f);
   });
   wrap.querySelectorAll('[data-act="upload-ref"]').forEach(b=>b.onclick=()=>
@@ -672,7 +681,7 @@ function renderRoster(){
     const f=e.target.files[0]; if(!f) return;
     const r=new FileReader(); r.onload=()=>{
       const h=state.horses.find(x=>x.id===inp.dataset.refInput);
-      if(h){h.referenceImage=r.result; save(); render();}
+      if(h){ h.referenceImage=r.result; saveHorse(h); save(); render(); }
     }; r.readAsDataURL(f);
   });
   wrap.querySelectorAll('[data-act="equip-select"]').forEach(sel=>sel.onchange=()=>{
@@ -1981,7 +1990,7 @@ function showProfileModal(horseId){
     h.stableLink = overlay.querySelector('#pm_stablelink').value.trim();
     h.personality  = overlay.querySelector('#pm_personality').value.trim();
     h.horseHistory = overlay.querySelector('#pm_history').value.trim();
-    save(); overlay.remove(); render();
+    saveHorse(h); save(); overlay.remove(); render();
   };
 }
 
@@ -2105,7 +2114,7 @@ function showNetWorthModal(horseId){
     h.genoBasePrice=Number(overlay.querySelector('#nw_base').value)||0;
     const custom=overlay.querySelector('#nw_custom').value.trim();
     h.customNetWorth=custom!==""?Number(custom):null;
-    save(); overlay.remove(); render();
+    saveHorse(h); save(); overlay.remove(); render();
   };
 }
 
