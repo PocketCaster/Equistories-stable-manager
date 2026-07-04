@@ -145,7 +145,11 @@ function calcLitExp(wc){
 // STATE
 // ============================================
 
+const BANK_URL = 'https://script.google.com/macros/s/AKfycby9WLxUPDAPg9EH5aTPATzTkHd8XeSKXuQ0WYqyQoHusEbws85qxwaML6cSovDod80/exec';
+let STABLE_URL = localStorage.getItem('equi_stable_url') || '';
+
 let state = { horses:[], log:[], tackInventory:[], loaded:false };
+let bankAccount = { userId:'', password:'', linked:false };
 let activeTab = "roster";
 let expandedLogs = new Set();
 
@@ -169,20 +173,129 @@ function openLightbox(src, caption){
 }
 
 // ============================================
-// SAVE / LOAD (localStorage — no backend needed for lite version)
+// GOOGLE SHEETS BACKEND
 // ============================================
 
-function save(){
-  try{ localStorage.setItem('equi-lite', JSON.stringify({horses:state.horses, log:state.log, tackInventory:state.tackInventory})); }
-  catch(e){ console.error('save failed',e); }
+// JSONP transport — same approach as full sim to bypass CORS
+function stableGas(payload){
+  return new Promise(resolve=>{
+    if(!STABLE_URL){ resolve({success:false,error:'No Stable Data URL configured.'}); return; }
+    const cb='sCb_'+Date.now()+'_'+Math.random().toString(36).slice(2,6);
+    const url=STABLE_URL+'?callback='+cb+'&data='+encodeURIComponent(JSON.stringify(payload));
+    const s=document.createElement('script');
+    let done=false;
+    window[cb]=(data)=>{ done=true; delete window[cb]; try{document.head.removeChild(s);}catch(e){} resolve(data); };
+    s.onerror=()=>{ if(!done){done=true;delete window[cb];try{document.head.removeChild(s);}catch(e){} resolve({success:false,error:'Network error'});} };
+    setTimeout(()=>{ if(!done){done=true;delete window[cb];try{document.head.removeChild(s);}catch(e){} resolve({success:false,error:'Timed out'});} },15000);
+    s.src=url; document.head.appendChild(s);
+  });
 }
 
-function load(){
+function gasPost(payload){
+  return new Promise(resolve=>{
+    const cb='gCb_'+Date.now()+'_'+Math.random().toString(36).slice(2,6);
+    const url=BANK_URL+'?callback='+cb+'&data='+encodeURIComponent(JSON.stringify(payload));
+    const s=document.createElement('script');
+    let done=false;
+    window[cb]=(data)=>{ done=true; delete window[cb]; try{document.head.removeChild(s);}catch(e){} resolve(data); };
+    s.onerror=()=>{ if(!done){done=true;delete window[cb];try{document.head.removeChild(s);}catch(e){} resolve({success:false,error:'Network error'});} };
+    setTimeout(()=>{ if(!done){done=true;delete window[cb];try{document.head.removeChild(s);}catch(e){} resolve({success:false,error:'Timed out'});} },12000);
+    s.src=url; document.head.appendChild(s);
+  });
+}
+
+function gasGet(params){
+  return new Promise(resolve=>{
+    const cb='ggCb_'+Date.now()+'_'+Math.random().toString(36).slice(2,6);
+    const qs=Object.entries(params).map(([k,v])=>encodeURIComponent(k)+'='+encodeURIComponent(v)).join('&');
+    const url=BANK_URL+'?'+qs+'&callback='+cb;
+    const s=document.createElement('script');
+    let done=false;
+    window[cb]=(data)=>{ done=true; delete window[cb]; try{document.head.removeChild(s);}catch(e){} resolve(data); };
+    s.onerror=()=>{ if(!done){done=true;delete window[cb];try{document.head.removeChild(s);}catch(e){} resolve(null);} };
+    setTimeout(()=>{ if(!done){done=true;delete window[cb];try{document.head.removeChild(s);}catch(e){} resolve(null);} },12000);
+    s.src=url; document.head.appendChild(s);
+  });
+}
+
+function saveBankAccount(){
+  try{ localStorage.setItem('equi-lite-bank', JSON.stringify(bankAccount)); }catch(e){}
+}
+
+// Save full stable to Google Sheets
+async function save(){
+  if(!bankAccount.linked || !STABLE_URL) return;
+  const userId = bankAccount.userId;
+  await stableGas({ action:'saveStableState', userId,
+    stateJson: JSON.stringify({ log:state.log, tackInventory:state.tackInventory }) });
+  for(const h of state.horses){
+    const {artLog,...horseData}=h;
+    await stableGas({ action:'saveHorse', userId, horseId:h.id, horseJson:JSON.stringify(horseData) });
+  }
+}
+
+// Save a single horse (faster — called after training/comp)
+async function saveHorse(horse){
+  if(!bankAccount.linked || !STABLE_URL) return;
+  const {artLog,...horseData}=horse;
+  await stableGas({ action:'saveHorse', userId:bankAccount.userId, horseId:horse.id, horseJson:JSON.stringify(horseData) });
+}
+
+// Save a new art log entry
+async function saveArtEntry(horse, entry){
+  if(!bankAccount.linked || !STABLE_URL) return;
+  await stableGas({ action:'saveArtLogEntry', userId:bankAccount.userId, horseId:horse.id, entryJson:JSON.stringify(entry) });
+}
+
+// Delete a horse from sheets
+async function deleteHorseFromSheets(horseId){
+  if(!bankAccount.linked || !STABLE_URL) return;
+  await stableGas({ action:'deleteHorse', userId:bankAccount.userId, horseId });
+}
+
+async function loadFromSheets(){
+  const userId = bankAccount.userId;
+  const stateRes = await stableGas({ action:'loadStableState', userId });
+  if(stateRes?.success && stateRes.data){
+    state.log           = stateRes.data.log || [];
+    state.tackInventory = stateRes.data.tackInventory || [];
+  } else {
+    state.log=[]; state.tackInventory=[];
+  }
+  const horsesRes = await stableGas({ action:'loadStable', userId });
+  state.horses = horsesRes?.success ? (horsesRes.data||[]) : [];
+  state.loaded = true;
+}
+
+// Load a single horse by ID without login (for public profile pages)
+async function loadPublicHorse(horseId){
+  const res = await stableGas({ action:'loadPublicHorse', horseId });
+  return res?.success ? res.data : null;
+}
+
+async function load(){
+  // Load bank credentials
   try{
-    const d = localStorage.getItem('equi-lite');
-    if(d){ const p=JSON.parse(d); state.horses=p.horses||[]; state.log=p.log||[]; state.tackInventory=p.tackInventory||[]; }
+    const b=localStorage.getItem('equi-lite-bank');
+    if(b){ const bd=JSON.parse(b); bankAccount={userId:bd.userId||'',password:bd.password||'',linked:bd.linked||false}; }
   }catch(e){}
-  state.loaded=true;
+
+  // Check for public horse profile URL first — no login needed
+  const params=new URLSearchParams(window.location.search);
+  const profileId=params.get('horse');
+  if(profileId){
+    // Try to serve profile without login
+    state.loaded=true;
+    render();
+    return;
+  }
+
+  if(bankAccount.linked && STABLE_URL){
+    await loadFromSheets();
+  } else {
+    state.horses=[]; state.log=[]; state.tackInventory=[];
+    state.loaded=true;
+  }
   render();
 }
 
@@ -259,21 +372,38 @@ function render(){
   const app = document.getElementById('app');
   if(!state.loaded){ app.innerHTML='<div style="padding:30px;color:#b5a392;">Loading…</div>'; return; }
 
-  // Check for horse profile URL (?horse=ID)
+  // Check for horse profile URL (?horse=ID) — public, no login needed
   const params = new URLSearchParams(window.location.search);
   const profileId = params.get('horse');
   if(profileId){
-    const h = state.horses.find(x=>x.id===profileId);
-    if(h){ renderHorseProfilePage(app, h); return; }
+    // First check if horse is in local state
+    const localHorse = state.horses.find(x=>x.id===profileId);
+    if(localHorse){ renderHorseProfilePage(app, localHorse); return; }
+    // Otherwise load from sheets publicly
+    app.innerHTML='<div style="padding:40px;text-align:center;color:#b5a392;font-family:Georgia,serif;">🐴 Loading horse profile…</div>';
+    loadPublicHorse(profileId).then(h=>{
+      if(h){ renderHorseProfilePage(app, h); }
+      else { app.innerHTML='<div style="padding:40px;text-align:center;color:#b5a392;font-family:Georgia,serif;">Horse not found. <a href="'+window.location.pathname+'" style="color:#c98a3a;">← Back</a></div>'; }
+    });
+    return;
+  }
+
+  // Show login screen if not linked
+  if(!bankAccount.linked){
+    renderLoginScreen(app);
+    return;
   }
 
   app.innerHTML=`
     <h1>🐴 EquiStories Art Tracker</h1>
-    <div class="tabs">
+    <div class="tabs" style="align-items:center;">
       ${["roster","train","compete","tack"].map(t=>`
         <div class="tab${activeTab===t?' active':''}" data-tab="${t}">
           ${t==="roster"?"Stable Roster":t==="train"?"Training":t==="compete"?"Competitions":"🏇 Tack Inventory"}
         </div>`).join("")}
+      <div style="flex:1;"></div>
+      <span class="small" style="color:var(--dim);margin-right:6px;">👤 ${bankAccount.userId}</span>
+      <button id="btn_signout" class="secondary" style="font-size:.78em;padding:4px 10px;margin-top:0;">🔓 Sign Out</button>
     </div>
     <div id="tab-content"></div>
   `;
@@ -281,12 +411,90 @@ function render(){
   app.querySelectorAll('[data-tab]').forEach(b=>{
     b.onclick=()=>{ activeTab=b.dataset.tab; render(); };
   });
+  const signOutBtn=app.querySelector('#btn_signout');
+  if(signOutBtn) signOutBtn.onclick=async()=>{
+    if(!confirm('Sign out? Your stable data is saved to Google Sheets — sign back in anytime.')) return;
+    bankAccount={userId:'',password:'',linked:false};
+    state.horses=[]; state.log=[]; state.tackInventory=[]; state.loaded=false;
+    saveBankAccount();
+    load();
+  };
 
   const content = app.querySelector('#tab-content');
   if(activeTab==="roster")   content.appendChild(renderRoster());
   else if(activeTab==="train")   content.appendChild(renderTraining());
   else if(activeTab==="compete") content.appendChild(renderCompete());
   else if(activeTab==="tack")    content.appendChild(renderTackInventory());
+}
+
+// ============================================
+// LOGIN SCREEN
+// ============================================
+
+function renderLoginScreen(app){
+  const stableSet = !!STABLE_URL;
+  app.innerHTML=`
+    <h1>🐴 EquiStories Art Tracker</h1>
+    <div style="max-width:460px;margin:40px auto;background:#241a14;border:1px solid #4a392a;border-radius:8px;padding:20px;">
+      <h3 style="margin-top:0;color:#c98a3a;">Sign in to your stable</h3>
+      <p class="small">Use the same User ID and password as your Buxx Bank account.</p>
+      ${!stableSet?'<div style="background:rgba(177,71,63,.15);border:1px solid #b1473f;border-radius:6px;padding:8px;margin-bottom:10px;font-size:.85em;color:#e08080;">⚠️ Stable Data URL not configured — expand Admin section below first.</div>':""}
+      <div style="margin-bottom:8px;"><label class="small">Bank User ID</label><input id="li_user" placeholder="Your userId" style="width:100%;padding:8px;background:#15100c;border:1px solid #4a392a;color:#f1e6d8;border-radius:5px;box-sizing:border-box;margin-top:3px;" /></div>
+      <div style="margin-bottom:10px;"><label class="small">Password</label><input id="li_pass" type="password" placeholder="Your password" style="width:100%;padding:8px;background:#15100c;border:1px solid #4a392a;color:#f1e6d8;border-radius:5px;box-sizing:border-box;margin-top:3px;" /></div>
+      <button id="li_go" style="width:100%;padding:10px;background:#c98a3a;color:#241a14;border:none;border-radius:6px;font-weight:bold;cursor:pointer;font-size:.95em;">🔐 Sign In</button>
+      <div id="li_result" style="margin-top:8px;"></div>
+      <hr style="border:none;border-top:1px solid #4a392a;margin:16px 0;" />
+      <details ${!stableSet?"open":""}>
+        <summary style="cursor:pointer;font-size:.85em;color:#b5a392;">⚙️ Admin: Configure Stable Data URL</summary>
+        <div style="margin-top:10px;">
+          <p class="small">Paste the /exec URL from your deployed Stable Data Apps Script.</p>
+          ${stableSet?'<div style="color:#7a9b6e;font-size:.82em;margin-bottom:6px;">✅ Stable URL is configured.</div>':'<div style="color:#b1473f;font-size:.82em;margin-bottom:6px;">⚠️ Not configured yet.</div>'}
+          <input id="li_stable_url" placeholder="https://script.google.com/macros/s/…/exec" value="${STABLE_URL||''}" style="width:100%;padding:7px;background:#15100c;border:1px solid #4a392a;color:#f1e6d8;border-radius:5px;box-sizing:border-box;margin-bottom:6px;" />
+          <div id="li_admin_lock" style="${stableSet?'':'display:none;'}">
+            <input id="li_admin_pass" type="password" placeholder="Admin passcode" style="width:100%;padding:7px;background:#15100c;border:1px solid #4a392a;color:#f1e6d8;border-radius:5px;box-sizing:border-box;margin-bottom:6px;" />
+          </div>
+          <button id="li_save_url" style="width:100%;padding:8px;background:#2c2118;color:#f1e6d8;border:1px solid #4a392a;border-radius:5px;cursor:pointer;">💾 Save Stable URL</button>
+          <div id="li_url_result" style="margin-top:4px;font-size:.82em;"></div>
+        </div>
+      </details>
+    </div>
+  `;
+
+  app.querySelector('#li_go').onclick = async()=>{
+    const userId=app.querySelector('#li_user').value.trim();
+    const password=app.querySelector('#li_pass').value.trim();
+    const res=app.querySelector('#li_result');
+    if(!userId||!password){ res.innerHTML='<div style="color:#e08080;font-size:.85em;">Please enter both User ID and password.</div>'; return; }
+    if(!STABLE_URL){ res.innerHTML='<div style="color:#e08080;font-size:.85em;">⚠️ Configure the Stable Data URL first (Admin section below).</div>'; return; }
+    res.innerHTML='<div class="small">Signing in…</div>';
+    const data=await gasPost({action:'loginPlayer',userId,password});
+    if(data?.success){
+      bankAccount={userId,password,linked:true};
+      saveBankAccount();
+      res.innerHTML='<div style="color:#7a9b6e;font-size:.85em;">✅ Welcome, '+data.data.displayName+'! Loading stable…</div>';
+      await loadFromSheets();
+      render();
+    } else {
+      res.innerHTML='<div style="color:#e08080;font-size:.85em;">❌ '+(data?.error||'Login failed — check your User ID and password.')+'</div>';
+    }
+  };
+  app.querySelector('#li_pass').onkeydown=e=>{ if(e.key==='Enter') app.querySelector('#li_go').click(); };
+
+  app.querySelector('#li_save_url').onclick=()=>{
+    const url=app.querySelector('#li_stable_url').value.trim();
+    const res=app.querySelector('#li_url_result');
+    const adminInp=app.querySelector('#li_admin_pass');
+    if(!url){ res.innerHTML='<span style="color:#e08080;">Please paste a URL first.</span>'; return; }
+    if(!url.includes('script.google.com')){ res.innerHTML='<span style="color:#e08080;">That does not look like a Google Apps Script URL.</span>'; return; }
+    // If URL already set, require passcode
+    if(STABLE_URL && adminInp){
+      if(adminInp.value !== 'Eqistories123'){ res.innerHTML='<span style="color:#e08080;">Incorrect admin passcode.</span>'; return; }
+    }
+    STABLE_URL=url;
+    localStorage.setItem('equi_stable_url',url);
+    res.innerHTML='<span style="color:#7a9b6e;">✅ Saved!</span>';
+    setTimeout(()=>renderLoginScreen(app), 800);
+  };
 }
 
 // ============================================
@@ -444,7 +652,9 @@ function renderRoster(){
   });
   wrap.querySelectorAll('[data-act="del"]').forEach(b=>b.onclick=()=>{
     if(!confirm('Remove this horse? This cannot be undone.')) return;
-    state.horses=state.horses.filter(x=>x.id!==b.dataset.id);
+    const delId=b.dataset.id;
+    state.horses=state.horses.filter(x=>x.id!==delId);
+    deleteHorseFromSheets(delId);
     save(); render();
   });
   wrap.querySelectorAll('[data-act="upload-photo"]').forEach(b=>b.onclick=()=>
@@ -898,9 +1108,12 @@ function renderTraining(){
     h.exp+=expGain;
     checkLevelUp(h);
 
-    h.artLog.unshift({day:state.log.length+1,type:"training",label,art:artType,lit:litWords?`${litWords} words`:null,bonuses:[...selectedBonuses],exp:expGain,link:link||null,image:uploadedImage});
+    const trainEntry={day:state.log.length+1,type:"training",label,art:artType,lit:litWords?`${litWords} words`:null,bonuses:[...selectedBonuses],exp:expGain,link:link||null,image:uploadedImage};
+    h.artLog.unshift(trainEntry);
     const statsStr=Object.entries(allStats).map(([s,v])=>`+${v} ${STAT_LABELS[s]}`).join(", ");
     addLog(`🎨 ${h.name} — ${label} (${statsStr}) · +${expGain} EXP`);
+    saveHorse(h);
+    saveArtEntry(h, trainEntry);
     save();
 
     res.innerHTML=`<div class="result success">✅ Training logged! ${statsStr} · +${expGain} EXP (${sources.join(", ")})</div>`;
@@ -1063,12 +1276,15 @@ function buildNewCompForm(){
     checkLevelUp(h);
     (DISCIPLINES[disc]?.stats||[]).forEach(s=>h.stats[s]=(h.stats[s]||0)+1);
 
-    h.artLog.unshift({day:state.log.length+1,type:"competition",label:`${disc} — ${diff}`,placement:placeNum,art:artType,lit:litWords?`${litWords} words`:null,bonuses:[...selectedBonuses],exp:expGain,link:link||null,image:uploadedImage});
+    const compEntry={day:state.log.length+1,type:"competition",label:`${disc} — ${diff}`,placement:placeNum,art:artType,lit:litWords?`${litWords} words`:null,bonuses:[...selectedBonuses],exp:expGain,link:link||null,image:uploadedImage};
+    h.artLog.unshift(compEntry);
     if(!h.compHistory) h.compHistory=[];
     h.compHistory.unshift({id:uid2(),discipline:disc,difficulty:diff,placement:placeNum,venue,date:"",note:"",image:uploadedImage,link:link||null});
 
     const placeLabel=placeNum?["1st","2nd","3rd","4th","5th","6th"][placeNum-1]||placeNum+"th":"No placement";
     addLog(`🏆 ${h.name} — ${disc} ${diff} · ${placeLabel} · +${expGain} EXP`);
+    saveHorse(h);
+    saveArtEntry(h, compEntry);
     save();
     res.innerHTML=`<div class="result success">${placeNum===1?"🥇":placeNum===2?"🥈":placeNum===3?"🥉":"🏆"} ${placeLabel} logged! +${expGain} EXP (${sources.join(", ")})</div>`;
     uploadedImage=null;
