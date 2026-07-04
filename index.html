@@ -99,6 +99,10 @@ const BONUS_EXP = {
   "Background":3, "Shading":3, "Rider/Handler shown":4, "Additional Creature (per)":2,
 };
 
+// One-time EXP bonus for uploading a horse's reference/registration sheet
+// for the first time. Only granted once per horse (tracked via refBonusGiven).
+const REF_SHEET_EXP = 5;
+
 const TRAININGS = [
   {id:"lunge",       name:"Lunging / Groundwork",     stats:{gaits:4,stamina:4,balance:4},   prompt:"Show your horse working on the lunge — rhythm, relaxation, and forward movement. Handler must be visible."},
   {id:"desensitize", name:"Object Desensitization",   stats:{boldness:3,harmony:3},           prompt:"Show your horse calmly facing something new and a little spooky — a tarp, a strange jump, an unfamiliar corner."},
@@ -171,6 +175,40 @@ function openLightbox(src, caption){
   lb.onclick = ()=>lb.remove();
   document.body.appendChild(lb);
 }
+// Exposed on window because it's called from onclick="..." attributes inside
+// dynamically-injected innerHTML, which resolve against global scope — not
+// the closure of this IIFE.
+window.openLightbox = openLightbox;
+
+// Downscale + compress an uploaded image file before turning it into a
+// base64 data URL. Uploads are synced to Google Sheets over a JSONP GET
+// request, which puts the whole image in a URL query string — full-size
+// phone photos (often 1-5MB) blow past the URL length limit and the sync
+// silently fails, so the image looks fine locally but never actually saves.
+// Keeping images small and compressed keeps them reliably under that limit.
+function resizeImageFile(file, maxDim=900, quality=0.75){
+  return new Promise((resolve,reject)=>{
+    const reader = new FileReader();
+    reader.onerror = ()=>reject(new Error('Could not read file.'));
+    reader.onload = ()=>{
+      const img = new Image();
+      img.onerror = ()=>reject(new Error('Could not decode image.'));
+      img.onload = ()=>{
+        let {width,height} = img;
+        if(width>maxDim || height>maxDim){
+          if(width>=height){ height=Math.round(height*(maxDim/width)); width=maxDim; }
+          else { width=Math.round(width*(maxDim/height)); height=maxDim; }
+        }
+        const canvas=document.createElement('canvas');
+        canvas.width=width; canvas.height=height;
+        canvas.getContext('2d').drawImage(img,0,0,width,height);
+        resolve(canvas.toDataURL('image/jpeg', quality));
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
 
 // ============================================
 // GOOGLE SHEETS BACKEND
@@ -223,31 +261,62 @@ function saveBankAccount(){
 }
 
 // Save full stable to Google Sheets
+// IMPORTANT: this used to re-send every horse's *full* base64 profileImage
+// and referenceImage on every single call — and save() runs after nearly
+// every action (training, tack changes, adding a horse, etc.), not just
+// photo uploads. A real photo is way too big for the GET-request transport
+// this app uses, so those requests were silently failing constantly, which
+// is the main reason horses/photos kept vanishing or failing to sync.
+// Images are uploaded separately (via saveHorse/saveHorseImageChunked) —
+// so here we just strip them out and send the lightweight rest of the data.
 async function save(){
   if(!bankAccount.linked || !STABLE_URL) return;
   const userId = bankAccount.userId;
   await stableGas({ action:'saveStableState', userId,
     stateJson: JSON.stringify({ log:state.log, tackInventory:state.tackInventory }) });
   for(const h of state.horses){
-    const {artLog,...horseData}=h;
+    const {artLog, profileImage, referenceImage, ...horseData}=h;
     await stableGas({ action:'saveHorse', userId, horseId:h.id, horseJson:JSON.stringify(horseData) });
   }
 }
 
+// Upload a base64 image in small pieces instead of one request. A full-size
+// photo's base64 string is tens of thousands of characters, which is far
+// past what a GET request's URL can reliably carry — that request just
+// silently fails, which is why photos/reference sheets used to disappear
+// the moment the app re-loaded from the sheet. Splitting it into small
+// chunks keeps every request safely within URL length limits.
+const IMAGE_CHUNK_SIZE = 3000;
+async function saveHorseImageChunked(userId, horseId, imageKey, imageData){
+  const totalChunks = Math.ceil(imageData.length / IMAGE_CHUNK_SIZE) || 1;
+  for(let i=0;i<totalChunks;i++){
+    const chunk = imageData.slice(i*IMAGE_CHUNK_SIZE, (i+1)*IMAGE_CHUNK_SIZE);
+    const res = await stableGas({ action:'saveHorseImageChunk', userId, horseId, imageKey,
+      chunk, chunkIndex:i, totalChunks });
+    if(!res?.success) return false;
+  }
+  return true;
+}
+
 // Save a single horse (faster — called after training/comp)
-// Automatically strips base64 images and saves them separately
+// Automatically strips base64 images and saves them separately.
+// Returns true only if every request involved actually succeeded, so
+// callers can warn the user instead of assuming data was saved.
 async function saveHorse(horse){
-  if(!bankAccount.linked || !STABLE_URL) return;
+  if(!bankAccount.linked || !STABLE_URL) return false;
   const {artLog,...horseData}=horse;
+  let allOk = true;
   // Save images separately before stripping them
   const IMAGE_KEYS = ['profileImage','referenceImage'];
   for(const key of IMAGE_KEYS){
     if(horseData[key] && horseData[key].startsWith('data:')){
-      await stableGas({ action:'saveHorseImage', userId:bankAccount.userId,
-        horseId:horse.id, imageKey:key, imageData:horseData[key] });
+      const ok = await saveHorseImageChunked(bankAccount.userId, horse.id, key, horseData[key]);
+      if(!ok) allOk = false;
     }
   }
-  await stableGas({ action:'saveHorse', userId:bankAccount.userId, horseId:horse.id, horseJson:JSON.stringify(horseData) });
+  const res = await stableGas({ action:'saveHorse', userId:bankAccount.userId, horseId:horse.id, horseJson:JSON.stringify(horseData) });
+  if(!res?.success) allOk = false;
+  return allOk;
 }
 
 // Save a new art log entry
@@ -273,6 +342,10 @@ async function loadFromSheets(){
   }
   const horsesRes = await stableGas({ action:'loadStable', userId });
   state.horses = horsesRes?.success ? (horsesRes.data||[]) : [];
+  // Backfill: horses saved before the reference-sheet bonus existed may
+  // already have a reference sheet uploaded. Don't let a later re-upload
+  // retroactively award the "first submission" bonus for those.
+  state.horses.forEach(h=>{ if(h.referenceImage && h.refBonusGiven===undefined) h.refBonusGiven=true; });
   state.loaded = true;
 }
 
@@ -289,16 +362,9 @@ async function load(){
     if(b){ const bd=JSON.parse(b); bankAccount={userId:bd.userId||'',password:bd.password||'',linked:bd.linked||false}; }
   }catch(e){}
 
-  // Check for public horse profile URL first — no login needed
-  const params=new URLSearchParams(window.location.search);
-  const profileId=params.get('horse');
-  if(profileId){
-    // Try to serve profile without login
-    state.loaded=true;
-    render();
-    return;
-  }
-
+  // If we land directly on a shared profile URL (no prior session in this tab),
+  // still load the full stable in the background if we're logged in, so that
+  // navigating "back" to the roster doesn't show a blank/incomplete state.
   if(bankAccount.linked && STABLE_URL){
     await loadFromSheets();
   } else {
@@ -307,6 +373,34 @@ async function load(){
   }
   render();
 }
+
+// ============================================
+// CLIENT-SIDE ROUTING (no full page reloads)
+// ============================================
+// Real navigation (<a href="?horse=...">) reloads the whole page, which
+// (a) wipes in-memory state and (b) can abort in-flight saves to Google
+// Sheets mid-request, causing data loss. These helpers update the URL
+// with pushState and re-render in place instead.
+
+function goToProfile(horseId){
+  const url = new URL(window.location.href);
+  url.searchParams.set('horse', horseId);
+  history.pushState({horse:horseId}, '', url);
+  render();
+  window.scrollTo(0,0);
+}
+
+function goToRoster(){
+  const url = new URL(window.location.href);
+  url.searchParams.delete('horse');
+  history.pushState({}, '', url);
+  render();
+  window.scrollTo(0,0);
+}
+
+window.addEventListener('popstate', render);
+window.goToProfile = goToProfile;
+window.goToRoster = goToRoster;
 
 // ============================================
 // HORSE
@@ -321,7 +415,7 @@ function newHorse(data){
     stage: age<1?"foal":age<2?"yearling":age<3?"two-year-old":"adult",
     level:1, exp:0, stats,
     breedingSlots:2, breedingFilled:0,
-    profileImage:null, referenceImage:null, referenceLink:null,
+    profileImage:null, referenceImage:null, referenceLink:null, refBonusGiven:false,
     artLog:[],
     gender:data.gender||"", phenotype:data.phenotype||"", genotype:data.genotype||"",
     // Pedigree — 3 generations. Each ancestor: {name, link, inRosterId}
@@ -612,9 +706,9 @@ function renderRoster(){
         </div>
         <div style="flex:1;">
           <div style="display:flex;align-items:baseline;flex-wrap:wrap;gap:6px;">
-            <a href="?horse=${h.id}" style="font-size:1.1em;color:var(--accent);font-weight:bold;text-decoration:none;">${h.name}</a>
+            <span data-act="view-profile" data-id="${h.id}" style="font-size:1.1em;color:var(--accent);font-weight:bold;text-decoration:none;cursor:pointer;">${h.name}</span>
             <span class="tag">Lvl ${h.level}</span>
-            <a href="?horse=${h.id}" class="small" style="color:var(--accent);">🔗 Profile Page</a>
+            <span data-act="view-profile" data-id="${h.id}" class="small" style="color:var(--accent);cursor:pointer;">🔗 Profile Page</span>
           </div>
           <div class="small">${h.breed} · Age ${h.age} (${h.stage})${h.gender?` · ${h.gender}`:""}</div>
           <div class="small">EXP: ${h.exp} / ${h.level<10?LEVEL_TABLE[h.level+1].exp:"MAX"}</div>
@@ -668,21 +762,38 @@ function renderRoster(){
   });
   wrap.querySelectorAll('[data-act="upload-photo"]').forEach(b=>b.onclick=()=>
     wrap.querySelector(`[data-photo-input="${b.dataset.id}"]`).click());
-  wrap.querySelectorAll('[data-photo-input]').forEach(inp=>inp.onchange=e=>{
+  wrap.querySelectorAll('[data-photo-input]').forEach(inp=>inp.onchange=async e=>{
     const f=e.target.files[0]; if(!f) return;
-    const r=new FileReader(); r.onload=()=>{
-      const h=state.horses.find(x=>x.id===inp.dataset.photoInput);
-      if(h){ h.profileImage=r.result; saveHorse(h); save(); render(); }
-    }; r.readAsDataURL(f);
+    const h=state.horses.find(x=>x.id===inp.dataset.photoInput);
+    if(!h) return;
+    try{
+      h.profileImage = await resizeImageFile(f);
+      render();
+      const ok = await saveHorse(h);
+      if(!ok) alert(`${h.name}'s photo was updated here, but saving it to the Stable Data sheet failed. Try again, or check your Stable Data URL in Admin settings.`);
+    }catch(err){ alert('Could not process that image: '+err.message); }
   });
   wrap.querySelectorAll('[data-act="upload-ref"]').forEach(b=>b.onclick=()=>
     wrap.querySelector(`[data-ref-input="${b.dataset.id}"]`).click());
-  wrap.querySelectorAll('[data-ref-input]').forEach(inp=>inp.onchange=e=>{
+  wrap.querySelectorAll('[data-ref-input]').forEach(inp=>inp.onchange=async e=>{
     const f=e.target.files[0]; if(!f) return;
-    const r=new FileReader(); r.onload=()=>{
-      const h=state.horses.find(x=>x.id===inp.dataset.refInput);
-      if(h){ h.referenceImage=r.result; saveHorse(h); save(); render(); }
-    }; r.readAsDataURL(f);
+    const h=state.horses.find(x=>x.id===inp.dataset.refInput);
+    if(!h) return;
+    try{
+      h.referenceImage = await resizeImageFile(f);
+      let bonusMsg = "";
+      if(!h.refBonusGiven){
+        h.refBonusGiven = true;
+        h.exp += REF_SHEET_EXP;
+        checkLevelUp(h);
+        addLog(`📋 ${h.name} — Reference sheet submitted · +${REF_SHEET_EXP} EXP`);
+        bonusMsg = ` +${REF_SHEET_EXP} EXP awarded for first reference sheet submission!`;
+      }
+      render();
+      const ok = await saveHorse(h);
+      if(!ok) alert(`${h.name}'s reference sheet was updated here, but saving it to the Stable Data sheet failed. Try again, or check your Stable Data URL in Admin settings.`);
+      else if(bonusMsg) alert(`📋 Reference sheet saved for ${h.name}.${bonusMsg}`);
+    }catch(err){ alert('Could not process that image: '+err.message); }
   });
   wrap.querySelectorAll('[data-act="equip-select"]').forEach(sel=>sel.onchange=()=>{
     const h=state.horses.find(x=>x.id===sel.dataset.id);
@@ -702,6 +813,7 @@ function renderRoster(){
   wrap.querySelectorAll('[data-act="edit-lineage"]').forEach(b=>b.onclick=()=>showLineageModal(b.dataset.id));
   wrap.querySelectorAll('[data-act="edit-profile"]').forEach(b=>b.onclick=()=>showProfileModal(b.dataset.id));
   wrap.querySelectorAll('[data-act="edit-worth"]').forEach(b=>b.onclick=()=>showNetWorthModal(b.dataset.id));
+  wrap.querySelectorAll('[data-act="view-profile"]').forEach(b=>b.onclick=()=>goToProfile(b.dataset.id));
 
   return wrap;
 }
@@ -724,7 +836,7 @@ function showBreedingSlotModal(horseId, slotIndex){
       <div style="background:#15100c;padding:10px;border-radius:6px;margin-bottom:10px;">
         <b>${existing.role==="sire"?"Sired with":"Bred to"}:</b> ${existing.partnerName}${existing.partnerOwner?` (${existing.partnerOwner})`:""}<br>
         <b>Date:</b> ${existing.date||"—"}<br>
-        ${existing.foalId ? `<b>Foal:</b> <a href="?horse=${existing.foalId}" style="color:#c98a3a;">${existing.foalName}</a>` : (existing.foalName?`<b>Foal:</b> ${existing.foalName} (not linked)`:'<b>Foal:</b> not yet born/added')}
+        ${existing.foalId ? `<b>Foal:</b> <span onclick="goToProfile('${existing.foalId}')" style="color:#c98a3a;cursor:pointer;text-decoration:underline;">${existing.foalName}</span>` : (existing.foalName?`<b>Foal:</b> ${existing.foalName} (not linked)`:'<b>Foal:</b> not yet born/added')}
         ${existing.note?`<br><i>${existing.note}</i>`:""}
       </div>
       ${!existing.foalId ? `
@@ -824,9 +936,11 @@ function pedEntry(h, key){
 function pedLink(entry, label){
   const name = entry.name || "Unknown";
   const inRoster = entry.inRosterId ? state.horses.find(x=>x.id===entry.inRosterId) : null;
-  const href = inRoster ? `?horse=${inRoster.id}` : (entry.link || null);
-  if(href && name !== "Unknown"){
-    return `<a href="${href}" ${!inRoster?'target="_blank"':''} style="color:#c98a3a;text-decoration:none;font-weight:bold;">${name}</a>`;
+  if(inRoster && name !== "Unknown"){
+    return `<span onclick="goToProfile('${inRoster.id}')" style="color:#c98a3a;text-decoration:underline;font-weight:bold;cursor:pointer;">${name}</span>`;
+  }
+  if(entry.link && name !== "Unknown"){
+    return `<a href="${entry.link}" target="_blank" style="color:#c98a3a;text-decoration:none;font-weight:bold;">${name}</a>`;
   }
   return `<span style="color:${name==="Unknown"?"#4a392a":"#f1e6d8"};font-weight:${name!=="Unknown"?"bold":"normal"};">${name}</span>`;
 }
@@ -1758,7 +1872,7 @@ function renderHorseProfilePage(app, h){
   const breedingRecHtml = (h.breedingRecords||[]).length ? (h.breedingRecords.map(r=>`
     <div class="small" style="padding:6px;background:#15100c;border-radius:5px;margin-bottom:4px;">
       Slot ${r.slotIndex+1} — ${r.role==="sire"?"Sired with":"Bred to"} <b>${r.partnerName}</b>${r.partnerOwner?` (${r.partnerOwner})`:""}${r.date?` · ${r.date}`:""}
-      ${r.foalId?` → <a href="?horse=${r.foalId}" style="color:#c98a3a;">Foal: ${r.foalName}</a>`:r.foalName?` → Foal: ${r.foalName} (unlinked)`:""}
+      ${r.foalId?` → <span onclick="goToProfile('${r.foalId}')" style="color:#c98a3a;cursor:pointer;text-decoration:underline;">Foal: ${r.foalName}</span>`:r.foalName?` → Foal: ${r.foalName} (unlinked)`:""}
       ${r.note?`<br><i style="opacity:.7;">${r.note}</i>`:""}
     </div>`).join("")) : `<div class="small" style="opacity:.6;">No breeding records.</div>`;
 
@@ -1861,7 +1975,7 @@ function renderHorseProfilePage(app, h){
     </style>
 
     <div style="max-width:900px;margin:0 auto;padding:16px;">
-      <div style="margin-bottom:12px;"><a href="${window.location.pathname}" style="color:#c98a3a;text-decoration:none;">← Back to Stable Manager</a></div>
+      <div style="margin-bottom:12px;"><span data-act="back-to-roster" style="color:#c98a3a;text-decoration:none;cursor:pointer;">← Back to Stable Manager</span></div>
 
       <!-- HERO -->
       <div class="pcard" style="display:flex;gap:20px;flex-wrap:wrap;align-items:flex-start;">
@@ -1946,6 +2060,9 @@ function renderHorseProfilePage(app, h){
       </div>
     </div>
   `;
+
+  const backLink = app.querySelector('[data-act="back-to-roster"]');
+  if(backLink) backLink.onclick = goToRoster;
 }
 
 
