@@ -263,11 +263,12 @@ function resizeImageFile(file, maxDim=900, quality=0.75){
 // GOOGLE SHEETS BACKEND
 // ============================================
 
-function stableGas(payload){
+function stableGas(payload, urlOverride){
   return new Promise(resolve=>{
-    if(!STABLE_URL){ resolve({success:false,error:'No Stable Data URL configured.'}); return; }
+    const targetUrl = urlOverride || STABLE_URL;
+    if(!targetUrl){ resolve({success:false,error:'No Stable Data URL configured.'}); return; }
     const cb='sCb_'+Date.now()+'_'+Math.random().toString(36).slice(2,6);
-    const url=STABLE_URL+'?callback='+cb+'&data='+encodeURIComponent(JSON.stringify(payload));
+    const url=targetUrl+'?callback='+cb+'&data='+encodeURIComponent(JSON.stringify(payload));
     const s=document.createElement('script');
     let done=false;
     window[cb]=(data)=>{ done=true; delete window[cb]; try{document.head.removeChild(s);}catch(e){} resolve(data); };
@@ -384,8 +385,8 @@ async function loadFromSheets(){
   state.loaded = true;
 }
 
-async function loadPublicHorse(horseId){
-  const res = await stableGas({ action:'loadPublicHorse', horseId });
+async function loadPublicHorse(horseId, urlOverride){
+  const res = await stableGas({ action:'loadPublicHorse', horseId }, urlOverride);
   return res?.success ? res.data : null;
 }
 
@@ -548,7 +549,18 @@ function render(){
     const localHorse = state.horses.find(x=>x.id===profileId);
     if(localHorse){ renderHorseProfilePage(app, localHorse); return; }
     app.innerHTML='<div style="padding:40px;text-align:center;color:#b5a392;font-family:Georgia,serif;">🐴 Loading horse profile…</div>';
-    loadPublicHorse(profileId).then(h=>{
+    // FIX: STABLE_URL only ever exists in the browser localStorage of
+    // whoever set it up in Admin settings. A visitor opening someone
+    // else's shared profile link has never done that, so STABLE_URL was
+    // blank for them and the fetch never even ran — it just immediately
+    // said "not found". The share link now carries the Stable Data URL
+    // as a `stable` query param, so we can use it here even if this
+    // visitor has none configured locally. If they don't already have
+    // one set, adopt it for the rest of this session too (not persisted,
+    // so it won't override anything they configure themselves later).
+    const stableOverride = params.get('stable');
+    if(stableOverride && !STABLE_URL) STABLE_URL = stableOverride;
+    loadPublicHorse(profileId, stableOverride).then(h=>{
       if(h){ renderHorseProfilePage(app, h); }
       else { app.innerHTML='<div style="padding:40px;text-align:center;color:#b5a392;font-family:Georgia,serif;">Horse not found. <a href="'+window.location.pathname+'" style="color:#c98a3a;">← Back</a></div>'; }
     });
@@ -2322,6 +2334,13 @@ function calcSlotPrice(h){
 function renderHorseProfilePage(app, h){
   if(!h.pedigree) h.pedigree={};
 
+  // Build the shareable link so it also carries the Stable Data URL as a
+  // `stable` param — this is what lets someone who has never configured
+  // Admin settings in their own browser still load this public profile.
+  const shareUrl = new URL(window.location.origin + window.location.pathname);
+  shareUrl.searchParams.set('horse', h.id);
+  if(STABLE_URL) shareUrl.searchParams.set('stable', STABLE_URL);
+
   const pct = h.level>=10?100:Math.min(100,((h.exp-(LEVEL_TABLE[h.level]?.exp||0))/((LEVEL_TABLE[h.level+1]?.exp||1)-(LEVEL_TABLE[h.level]?.exp||0)))*100);
 
   const genoPrice    = calcGenoPrice(h);
@@ -2527,7 +2546,7 @@ function renderHorseProfilePage(app, h){
 
       <div style="text-align:center;margin:20px 0;">
         <div class="small" style="margin-bottom:6px;">📎 Shareable link to this profile:</div>
-        <input readonly value="${window.location.origin}${window.location.pathname}?horse=${h.id}" onclick="this.select()" style="max-width:480px;width:100%;text-align:center;padding:8px;background:#15100c;border:1px solid #4a392a;color:#f1e6d8;border-radius:6px;font-family:monospace;" />
+        <input readonly value="${shareUrl.toString()}" onclick="this.select()" style="max-width:480px;width:100%;text-align:center;padding:8px;background:#15100c;border:1px solid #4a392a;color:#f1e6d8;border-radius:6px;font-family:monospace;" />
       </div>
     </div>
   `;
