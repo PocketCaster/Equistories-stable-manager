@@ -299,9 +299,20 @@ function stableGas(payload, urlOverride){
     const url=targetUrl+'?callback='+cb+'&data='+encodeURIComponent(JSON.stringify(payload));
     const s=document.createElement('script');
     let done=false;
-    window[cb]=(data)=>{ done=true; delete window[cb]; try{document.head.removeChild(s);}catch(e){} resolve(data); };
-    s.onerror=()=>{ if(!done){done=true;delete window[cb];try{document.head.removeChild(s);}catch(e){} resolve({success:false,error:'Network error'});} };
-    setTimeout(()=>{ if(!done){done=true;delete window[cb];try{document.head.removeChild(s);}catch(e){} resolve({success:false,error:'Timed out'});} },15000);
+    // FIX: every failure (network error, timeout, or the backend genuinely
+    // responding with success:false) used to just resolve silently — the
+    // caller saw a boolean and the actual reason was thrown away. Now it's
+    // logged to the console, tagged by action, so a failed save can
+    // actually be diagnosed instead of guessed at.
+    const finish=(data)=>{
+      if(!data || data.success===false){
+        console.error('[EquiStories save failed]', payload.action, '—', data?.error || 'no response (network/CORS/timeout)', {payload, response:data});
+      }
+      resolve(data);
+    };
+    window[cb]=(data)=>{ done=true; delete window[cb]; try{document.head.removeChild(s);}catch(e){} finish(data); };
+    s.onerror=()=>{ if(!done){done=true;delete window[cb];try{document.head.removeChild(s);}catch(e){} finish({success:false,error:'Network error'});} };
+    setTimeout(()=>{ if(!done){done=true;delete window[cb];try{document.head.removeChild(s);}catch(e){} finish({success:false,error:'Timed out'});} },15000);
     s.src=url; document.head.appendChild(s);
   });
 }
@@ -1883,7 +1894,7 @@ function buildShowLogForm(){
     if(hOk && entryOk){
       res.innerHTML=`<div class="result success">✅ Show logged & saved!${expGain?` +${expGain} EXP (${sources.join(", ")})`:""} ${prizeImages.length?`🎀 ${prizeImages.length} prize(s) saved.`:""}</div>`;
     } else {
-      res.innerHTML=`<div class="result fail">⚠️ Show was recorded here, but saving it to the Stable Data sheet failed. Try again, or check your Stable Data URL in Admin settings.</div>`;
+      res.innerHTML=`<div class="result fail">⚠️ Show was recorded here, but saving it to the Stable Data sheet failed. Try again, or check your Stable Data URL in Admin settings.<br><span class="small">(Open your browser's console — F12 or right-click → Inspect → Console — for the specific error, tagged "[EquiStories save failed]".)</span></div>`;
     }
 
     artImage=null; prizeImages.length=0;
