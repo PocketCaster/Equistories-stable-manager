@@ -2065,22 +2065,21 @@ const GENETIC_LOCI = [
       {code:"Chch", desc:"Champagne", price:700},
       {code:"ChCh", desc:"Champagne (homozygous)", price:700},
     ]},
-  // Silver and Flaxen are two different genes that act on the SAME red
-  // extension/agouti split, but were previously coded as one locus gated
-  // by BOTH extension AND agouti — which meant the whole thing vanished
-  // on chestnut (killing Flaxen along with Silver). Split into two
-  // independent loci so each shows under the right base color: Silver
-  // acts on black pigment (Bay, Black, Seal Bay, Wild Bay — any agouti,
-  // as long as the horse is black-based), Flaxen acts on chestnut's
-  // mane/tail (Chestnut, Liver Chestnut, Black Chestnut — any agouti,
-  // as long as the horse is red-based / ee).
-  { key:"silver", label:"Silver Dapple (Z)", requiresAny:{extension:["EE","Ee"], agouti:["AA","Aa","aa","AtA","Ata","AtAt","Atat"]},
+  // Silver and Flaxen can each be CARRIED on either base color, but only
+  // VISUALLY EXPRESSED on one: Silver shows on black-based horses
+  // (EE/Ee), Flaxen shows on chestnut (ee). A chestnut can carry Silver
+  // invisibly, and a black-based horse can carry Flaxen invisibly. So
+  // unlike the other loci, these are never hidden by requiresAny — the
+  // genotype is always selectable — and computeGenoResult() below decides
+  // whether the carried allele is actually expressed in the phenotype
+  // (and priced) based on the horse's Extension.
+  { key:"silver", label:"Silver Dapple (Z) — carrier allowed on chestnut, only expressed on black-based", requiresAny:null,
     options:[
       {code:"zz", desc:"No Silver", price:0},
       {code:"Zz", desc:"Silver Dapple", price:150},
       {code:"ZZ", desc:"Silver Dapple (homozygous)", price:150},
     ]},
-  { key:"flaxen", label:"Flaxen (F)", requiresAny:{extension:["ee"], agouti:["AA","Aa","aa","AtA","Ata","AtAt","Atat"]},
+  { key:"flaxen", label:"Flaxen (F) — carrier allowed on black-based, only expressed on chestnut", requiresAny:null,
     options:[
       {code:"ff", desc:"No Flaxen", price:0},
       {code:"nF", desc:"Flaxen", price:150},
@@ -2239,7 +2238,7 @@ function computeGenoResult(selections, breed){
       const satisfiesAll=Object.entries(locus.requiresAny).every(([reqKey,reqCodes])=>reqCodes.includes(selections[reqKey]));
       if(!satisfiesAll) return;
     }
-    if(["leopard","patn1","patn2"].includes(locus.key)) return;
+    if(["leopard","patn1","patn2","silver","flaxen"].includes(locus.key)) return;
     const opt = locus.options.find(o=>o.code===code);
     if(!opt) return;
     genoParts.push(code);
@@ -2257,6 +2256,29 @@ function computeGenoResult(selections, breed){
     if(appy){
       phenoParts.push(appy.label);
       modifiers.push({label:appy.label, value:appy.price});
+    }
+  }
+
+  // Silver and Flaxen: the allele is always recorded in the genotype
+  // string (so carrier status is visible even when not expressed), but
+  // only shows up in the phenotype/price when it's actually expressed —
+  // Silver on black-based (EE/Ee), Flaxen on chestnut (ee).
+  const blackBased = selections.extension==="EE" || selections.extension==="Ee";
+  const redBased = selections.extension==="ee";
+  if(allowed.has("silver") && selections.silver){
+    genoParts.push(selections.silver);
+    const opt = GENETIC_LOCI.find(l=>l.key==="silver").options.find(o=>o.code===selections.silver);
+    if(opt && opt.price>0 && blackBased){
+      phenoParts.push(opt.desc);
+      modifiers.push({label:opt.desc, value:opt.price});
+    }
+  }
+  if(allowed.has("flaxen") && selections.flaxen){
+    genoParts.push(selections.flaxen);
+    const opt = GENETIC_LOCI.find(l=>l.key==="flaxen").options.find(o=>o.code===selections.flaxen);
+    if(opt && opt.price>0 && redBased){
+      phenoParts.push(opt.desc);
+      modifiers.push({label:opt.desc, value:opt.price});
     }
   }
 
