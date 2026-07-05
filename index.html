@@ -393,6 +393,15 @@ function resolveImageRefs(horse){
     if(typeof e.image==='string' && e.image.startsWith('@img:')){
       const key=e.image.slice(5);
       e.image = horse[key] || null;
+      // FIX: without this, every image freshly pulled back from the sheet
+      // looked identical (to saveHorse/saveArtEntry) to a brand-new,
+      // never-uploaded image — because it's still real base64 data, not a
+      // placeholder. That meant the very next save re-uploaded this and
+      // every other already-stored photo all over again, one chunked
+      // request at a time, which for a stable with any real show history
+      // could take long enough to look like the Save button did nothing.
+      // Since we just pulled this out of storage, it's already there.
+      e._imgUploaded = true;
       usedKeys.add(key);
     }
   });
@@ -400,12 +409,15 @@ function resolveImageRefs(horse){
     if(typeof r.image==='string' && r.image.startsWith('@img:')){
       const key=r.image.slice(5);
       r.image = horse[key] || null;
+      r._imgUploaded = true;
       usedKeys.add(key);
     }
-    (r.prizes||[]).forEach(p=>{
+    (r.prizes||[]).forEach((p,i)=>{
       if(p && typeof p.dataUrl==='string' && p.dataUrl.startsWith('@img:')){
         const key=p.dataUrl.slice(5);
         p.dataUrl = horse[key] || null;
+        if(!r._prizeUploaded) r._prizeUploaded={};
+        r._prizeUploaded[i] = true;
         usedKeys.add(key);
       }
     });
@@ -1793,6 +1805,7 @@ function buildShowLogForm(){
     const litWords=parseInt(card.querySelector('#cs_lit')?.value)||0;
     const link=card.querySelector('#cs_link')?.value.trim()||"";
     const res=card.querySelector('#cs_result');
+    res.innerHTML=`<div class="result">⏳ Saving…</div>`;
 
     let expGain=0;
     let nonPlacementExp=0;
@@ -1835,7 +1848,6 @@ function buildShowLogForm(){
     const placeLabel=placement?["1st","2nd","3rd","4th","5th","6th"][placement-1]||placement+"th":"Participant";
     addLog(`🏆 ${h.name} — ${disc}${venue?" at "+venue:""} · ${placeLabel}${expGain?` · +${expGain} EXP`:""}`);
 
-    res.innerHTML=`<div class="result">⏳ Saving…</div>`;
     // FIX: previously fired without awaiting/checking, so a failed save
     // (oversized payload, network hiccup) never surfaced to the user —
     // the whole show record just quietly failed to persist.
