@@ -84,10 +84,16 @@ const STATS = ["stamina","strength","scope","speed","handiness","boldness","bala
 const STAT_LABELS = {stamina:"Stamina",strength:"Strength",scope:"Scope",speed:"Speed",handiness:"Handiness",boldness:"Boldness",balance:"Balance",gaits:"Gaits",harmony:"Harmony"};
 
 const LEVEL_TABLE = {
-  1:{exp:0,bonus:0,slots:2}, 2:{exp:50,bonus:2,slots:1}, 3:{exp:100,bonus:2,slots:1},
-  4:{exp:150,bonus:3,slots:1}, 5:{exp:200,bonus:3,slots:1}, 6:{exp:250,bonus:3,slots:1},
-  7:{exp:300,bonus:4,slots:1}, 8:{exp:500,bonus:4,slots:1}, 9:{exp:750,bonus:4,slots:1},
-  10:{exp:1000,bonus:5,slots:2},
+  1:{exp:0,   bonus:0, slots:0},
+  2:{exp:50,  bonus:2, slots:1},
+  3:{exp:100, bonus:2, slots:0},
+  4:{exp:150, bonus:3, slots:1},
+  5:{exp:200, bonus:3, slots:1, badge:"Quality Stock"},
+  6:{exp:250, bonus:3, slots:1},
+  7:{exp:300, bonus:4, slots:1},
+  8:{exp:500, bonus:4, slots:1},
+  9:{exp:750, bonus:4, slots:1},
+  10:{exp:1000,bonus:5, slots:2, badge:"Excellent Stock"},
 };
 
 const ART_EXP = {
@@ -97,52 +103,107 @@ const ART_EXP = {
 
 const BONUS_EXP = {
   "Background":3, "Shading":3, "Rider/Handler shown":4, "Additional Creature (per)":2,
+  "Simple Animation":2, "Complex Animation":5,
 };
 
 // One-time EXP bonus for uploading a horse's reference/registration sheet
 // for the first time. Only granted once per horse (tracked via refBonusGiven).
-const REF_SHEET_EXP = 5;
+// Matches the "Reference: +4 Exp" entry in the EquiStories-RPG ruleset.
+const REF_SHEET_EXP = 4;
 
+// Adult training options — names and stat values match the EquiStories-RPG
+// "Horse Stat System and Training" ruleset exactly.
 const TRAININGS = [
-  {id:"lunge",       name:"Lunging / Groundwork",     stats:{gaits:4,stamina:4,balance:4},   prompt:"Show your horse working on the lunge — rhythm, relaxation, and forward movement. Handler must be visible."},
-  {id:"desensitize", name:"Object Desensitization",   stats:{boldness:3,harmony:3},           prompt:"Show your horse calmly facing something new and a little spooky — a tarp, a strange jump, an unfamiliar corner."},
-  {id:"flatwork",    name:"Flatwork",                  stats:{gaits:3,balance:3,handiness:3}, prompt:"Show your horse working on the flat — transitions, lateral work, or a polished school movement. Rider must be shown."},
-  {id:"polework",    name:"Pole Work",                 stats:{balance:4,gaits:3,scope:2},     prompt:"Show your horse navigating ground poles or cavaletti — clean feet, focused eyes."},
-  {id:"jumping",     name:"Jump Schooling",            stats:{scope:4,boldness:3,balance:3},  prompt:"Show your horse jumping a single fence or small course in a schooling context."},
-  {id:"xc",          name:"XC School",                 stats:{boldness:4,scope:4,stamina:4},  prompt:"Show your horse tackling a cross-country style fence or water complex out in open terrain."},
-  {id:"water",       name:"Water Complex",             stats:{boldness:5,stamina:3},           prompt:"Depict your horse entering, splashing through, or exiting a water jump."},
-  {id:"ditch",       name:"Ditch & Coffin",            stats:{boldness:5,scope:3},             prompt:"Show your horse jumping a ditch, coffin combination, or sunken road."},
-  {id:"trail",       name:"Trail Ride",                stats:{boldness:2,harmony:3,stamina:2},prompt:"Depict your horse and rider out on a relaxed trail — through forest, along a beach, across open fields."},
-  {id:"liberty",     name:"Liberty Work",              stats:{harmony:5,boldness:2},           prompt:"Depict your horse working completely at liberty with no tack."},
-  {id:"bareback",    name:"Bareback Riding",           stats:{balance:4,harmony:3},            prompt:"Depict rider and horse working without a saddle — any gait or activity."},
-  {id:"slope",       name:"Working on a Slope",        stats:{strength:4,stamina:3,balance:3},prompt:"Show your horse working up or down a hill — could be hacking, schooling, or conditioning work."},
-  {id:"swim",        name:"Swimming / Water Work",     stats:{stamina:5,strength:3,boldness:2},prompt:"Show your horse swimming in open water or walking through a deep creek or river."},
-  {id:"horsemanship",name:"Natural Horsemanship",      stats:{harmony:4,boldness:3},           prompt:"Show a join-up, leading without a halter, or pressure-and-release groundwork."},
-  {id:"bonding",     name:"Bonding / Quiet Time",      stats:{harmony:4},                      prompt:"Show a quiet moment between horse and handler — grooming, grazing together, hand-grazing, or just being present."},
-  {id:"equibreak",   name:"Equibreak",                 stats:{harmony:3},                      prompt:"Depict a breaking milestone — first halter, first tack, first rider, or first solo work under saddle.", foalOnly:true},
-  {id:"show_prep",   name:"Show Prep / Grooming",      stats:{harmony:2},                      prompt:"Show your horse being bathed, braided, or otherwise prepared for a show."},
-  {id:"vet_farrier", name:"Vet / Farrier Visit",       stats:{harmony:2,boldness:2},           prompt:"Show your horse during a vet exam, farrier appointment, or dental float."},
-  {id:"pasture",     name:"Pasture / Herd Time",       stats:{harmony:3,boldness:2},           prompt:"Depict your horse loose in a field — with herd mates, playing, or grazing at peace."},
-  {id:"stretching",  name:"Stretching / Cool Down",    stats:{balance:2,harmony:2,stamina:2}, prompt:"Depict a post-workout stretch — carrot stretches or cooling down at a slow walk."},
-  {id:"jumpcourse",  name:"Stadium Jumping Course",    stats:{scope:4,handiness:4,balance:3}, prompt:"Depict your horse jumping a full stadium course — colored poles, combinations, oxers."},
-  {id:"hack_canter", name:"Forward Canter Hack",       stats:{speed:3,stamina:3,boldness:2},  prompt:"Show your horse in a big forward canter across open ground — covering ground freely."},
+  {id:"bonding",     name:"Bonding / Misc. Art",             stats:{harmony:3},                                    prompt:"Any quiet moment between horse and handler/rider — grooming, feeding, hand-grazing — or any other miscellaneous/extra artwork of your horse that isn't tied to a specific training."},
+  {id:"light_hack",  name:"Light Hack",                     stats:{balance:2,gaits:2,harmony:2},                  prompt:"Show a warmup, cool-down, or casual hack under saddle."},
+  {id:"transition",  name:"Transition Work",                stats:{harmony:3,gaits:3,strength:3,stamina:3},       prompt:"Show your horse working through upward and downward transitions."},
+  {id:"slope",       name:"Working on a Slope",              stats:{stamina:4,strength:4,balance:4},               prompt:"Show your horse walking, trotting, or cantering up or down a slope."},
+  {id:"gallop",      name:"Gallop",                          stats:{speed:4,stamina:4},                            prompt:"Show your horse running at top speed — on the track, free-lunging, round pen, or under saddle in a large arena."},
+  {id:"polework",    name:"Pole Work",                       stats:{balance:3,strength:3,boldness:3},              prompt:"Show your horse working over ground poles or cavaletti."},
+  {id:"combinations",name:"Combinations",                    stats:{boldness:4,strength:4,scope:4,balance:4},      prompt:"Show your horse free-jumping a combination — no rider, so the horse focuses on itself."},
+  {id:"coursework",  name:"Course Work",                     stats:{scope:4,handiness:4,stamina:4,balance:4},      prompt:"Show your horse jumping a full course."},
+  {id:"flatwork",    name:"Flat Work",                       stats:{strength:4,balance:4,gaits:4},                 prompt:"Show your horse working on the flat — figure eights, serpentines, leg-yield, piaffe, or similar suppling work."},
+  {id:"lunge",       name:"Lunging / Groundwork",             stats:{gaits:4,stamina:4,balance:4},                  prompt:"Show your horse working on the lunge or in-hand — building balance and a working relationship with its handler."},
+  {id:"free_jump",   name:"Free Jumping / Lunged Jumping",    stats:{strength:3,scope:3,balance:3},                 prompt:"Show your horse jumping a fence or series of fences at liberty or on the lunge, without a rider."},
+  {id:"circling",    name:"Circling",                         stats:{balance:2,strength:2,handiness:2},             prompt:"Show your horse circling on the flat — around a cone, barrel, or object at the trot or canter."},
+  {id:"grounddrive", name:"Ground Driving",                   stats:{strength:3,stamina:3,harmony:3},               prompt:"Show your horse being ground-driven with long lines, pulling a cart or weighted object."},
+  {id:"desensitize", name:"Object Desensitization",           stats:{boldness:3,harmony:3},                         prompt:"Show your horse being desensitized to something new — an unfamiliar object, place, or spooky corner."},
+  {id:"equibreak",   name:"Equibreak",                        stats:{harmony:3},                                    prompt:"Depict a breaking milestone for a young or not-yet-broke horse — first halter, first tack, first rider, or first solo work under saddle.", youngOnly:true},
 ];
 
-const DISCIPLINES = {
-  "Show Jumping":    {stats:["scope","balance","handiness"],      difficulties:["Intro","Beginner Novice","Novice","Training","Preliminary","Intermediate","Advanced"]},
-  "Dressage":        {stats:["gaits","harmony","balance"],         difficulties:["Intro","Training","First","Second","Third","Fourth","Prix St. Georges","Grand Prix"]},
-  "Eventing":        {stats:["scope","stamina","boldness"],        difficulties:["Intro","Beginner Novice","Novice","Training","Preliminary","Intermediate","Advanced"]},
-  "Hunter":          {stats:["gaits","scope","harmony"],           difficulties:["Short Stirrup","Beginner","Elementary","Medium","Working","Amateur","Open"]},
-  "Western Pleasure":{stats:["gaits","harmony","balance"],         difficulties:["Walk-Trot","Novice","Amateur","Open","Select"]},
-  "Reining":         {stats:["handiness","balance","harmony"],     difficulties:["Novice","Level 1","Level 2","Level 3","Level 4"]},
-  "Endurance":       {stats:["stamina","boldness","strength"],     difficulties:["LD 25mi","50mi","75mi","100mi"]},
-  "Barrel Racing":   {stats:["speed","handiness","boldness"],      difficulties:["Amateur","Open","Youth","Pro"]},
-  "Trail Class":     {stats:["harmony","handiness","boldness"],    difficulties:["Novice","Amateur","Open"]},
+// Age-up milestones for young horses. Each stage requires completing a set
+// number of DISTINCT prompts from its list of options before the horse can
+// advance to the next stage (foal → yearling → two-year-old → adult).
+const MILESTONES = {
+  foal: {
+    next: "yearling",
+    required: 2,
+    options: [
+      {id:"foal_wean",  name:"Weaning / Separated from Mother",        stats:{harmony:1}, prompt:"Depict your foal weaning or being separated from its mother. One full body of the foal."},
+      {id:"foal_tack",  name:"First Halter / Saddle Pad / Blanket",     stats:{harmony:1}, prompt:"Depict your foal wearing a halter, saddle pad, and/or blanket for the first time. One full body of the foal."},
+      {id:"foal_stand", name:"Standing Tied / Led / Groomed",           stats:{harmony:2}, prompt:"Show your foal standing tied, being led, or being groomed for the first time. One full body of the foal."},
+    ],
+  },
+  yearling: {
+    next: "two-year-old",
+    required: 2,
+    options: [
+      {id:"yearling_desensitize", name:"Object Desensitization",              stats:{harmony:1}, prompt:"Depict your yearling being desensitized to objects — plastic bags, clippers, sprays, etc. One full body of the yearling."},
+      {id:"yearling_tack",        name:"First Bridle / Saddle / Leg Covering", stats:{harmony:1}, prompt:"Depict your yearling wearing a first bridle, saddle, or leg covering for the first time. One full body of the yearling."},
+      {id:"yearling_stand",       name:"Standing for Farrier / Vet / Crossties", stats:{harmony:2}, prompt:"Depict your yearling learning to stand for the farrier, vet, or crossties at length. One full body of the yearling."},
+    ],
+  },
+  "two-year-old": {
+    next: "adult",
+    required: 3, // all of them
+    options: [
+      {id:"2yo_backing",    name:"Backing a Rider / Doll",             stats:{balance:2,harmony:2}, prompt:"Depict your two-year-old backing a rider or doll for the first time. One full body of the adult."},
+      {id:"2yo_aids",       name:"Training Aids & Objects",            stats:{harmony:3},           prompt:"Depict your two-year-old experiencing training aids and objects — cones, ground poles, flower boxes, jumps, etc. One full body of the adult."},
+      {id:"2yo_groundwork", name:"Groundwork / Lunging / In-Hand",     stats:{gaits:3,stamina:3,balance:3,harmony:3}, prompt:"Depict your two-year-old starting groundwork, lunging, or in-hand training. One full body of the adult."},
+    ],
+  },
 };
 
+// Returns the list of training options a horse can currently log, based on
+// its stage: milestone prompts (+ Equibreak) for young horses, or the full
+// adult training list once they're broke.
+function trainingOptionsFor(h){
+  const m = MILESTONES[h.stage];
+  if(m){
+    const equibreak = TRAININGS.find(t=>t.id==="equibreak");
+    return [...m.options, equibreak];
+  }
+  return TRAININGS.filter(t=>!t.youngOnly);
+}
+
+const GENERIC_DIFFICULTIES = ["Schooling","Local","Regional","National","Championship"];
+
+const DISCIPLINES = {
+  "Fox Hunting":                   {stats:["boldness","stamina","harmony"],                                              difficulties:GENERIC_DIFFICULTIES},
+  "Hunter O/F & U/S":              {stats:["balance","gaits","harmony"],                                                 difficulties:GENERIC_DIFFICULTIES},
+  "Handy Hunter / Hunter Derby":   {stats:["handiness","scope","balance"],                                               difficulties:GENERIC_DIFFICULTIES},
+  "Equitation Flat & O/F":         {stats:["harmony","balance","gaits"],                                                 difficulties:GENERIC_DIFFICULTIES},
+  "Dressage":                      {stats:["balance","gaits","strength"],                                                difficulties:["Intro","Training","First","Second","Third","Fourth","Prix St. Georges","Grand Prix"]},
+  "Racing":                        {stats:["stamina","speed","balance"],                                                 difficulties:GENERIC_DIFFICULTIES},
+  "Steeplechase":                  {stats:["stamina","speed","strength"],                                                difficulties:GENERIC_DIFFICULTIES},
+  "Show Jumping":                  {stats:["boldness","scope","handiness"],                                              difficulties:GENERIC_DIFFICULTIES},
+  "Cross Country":                 {stats:["stamina","boldness","speed"],                                                difficulties:GENERIC_DIFFICULTIES},
+  "Conformation / Liberty / Hunter Model": {stats:["gaits","harmony","balance"],                                        difficulties:GENERIC_DIFFICULTIES},
+  "3-Day Eventing":                {stats:["balance","gaits","strength","boldness","scope","handiness","stamina","speed"], difficulties:GENERIC_DIFFICULTIES},
+  "Forest Work & Log Pulling":     {stats:["stamina","strength","handiness"],                                            difficulties:GENERIC_DIFFICULTIES},
+  "Cart Driving":                  {stats:["stamina","strength","boldness"],                                             difficulties:GENERIC_DIFFICULTIES},
+  "Working Equitation Trail":      {stats:["harmony","balance","strength"],                                              difficulties:GENERIC_DIFFICULTIES},
+  "Western Pleasure":              {stats:["harmony","balance","gaits"],                                                 difficulties:GENERIC_DIFFICULTIES},
+  "Pole Bending & Barrels":        {stats:["speed","handiness","balance"],                                               difficulties:GENERIC_DIFFICULTIES},
+  "Cutting":                       {stats:["harmony","boldness","handiness"],                                            difficulties:GENERIC_DIFFICULTIES},
+  "Reining":                       {stats:["balance","gaits","strength"],                                                difficulties:GENERIC_DIFFICULTIES},
+};
+
+// Literature EXP per the ruleset: +2 EXP for reaching the 200-word minimum,
+// plus +5 EXP for every 750 words on top of that.
 function calcLitExp(wc){
   if(!wc || wc < 200) return 0;
-  return 2 + Math.floor((wc-200)/500)*2;
+  return 2 + Math.floor(wc/750)*5;
 }
 
 // ============================================
@@ -272,12 +333,15 @@ function saveBankAccount(){
 async function save(){
   if(!bankAccount.linked || !STABLE_URL) return;
   const userId = bankAccount.userId;
-  await stableGas({ action:'saveStableState', userId,
-    stateJson: JSON.stringify({ log:state.log, tackInventory:state.tackInventory }) });
-  for(const h of state.horses){
-    const {artLog, profileImage, referenceImage, ...horseData}=h;
-    await stableGas({ action:'saveHorse', userId, horseId:h.id, horseJson:JSON.stringify(horseData) });
-  }
+  const tasks = [
+    stableGas({ action:'saveStableState', userId,
+      stateJson: JSON.stringify({ log:state.log, tackInventory:state.tackInventory }) }),
+    ...state.horses.map(h=>{
+      const {artLog, profileImage, referenceImage, ...horseData}=h;
+      return stableGas({ action:'saveHorse', userId, horseId:h.id, horseJson:JSON.stringify(horseData) });
+    }),
+  ];
+  await Promise.all(tasks);
 }
 
 // Upload a base64 image in small pieces instead of one request. A full-size
@@ -333,19 +397,27 @@ async function deleteHorseFromSheets(horseId){
 
 async function loadFromSheets(){
   const userId = bankAccount.userId;
-  const stateRes = await stableGas({ action:'loadStableState', userId });
+  const [stateRes, horsesRes] = await Promise.all([
+    stableGas({ action:'loadStableState', userId }),
+    stableGas({ action:'loadStable', userId }),
+  ]);
   if(stateRes?.success && stateRes.data){
     state.log           = stateRes.data.log || [];
     state.tackInventory = stateRes.data.tackInventory || [];
   } else {
     state.log=[]; state.tackInventory=[];
   }
-  const horsesRes = await stableGas({ action:'loadStable', userId });
   state.horses = horsesRes?.success ? (horsesRes.data||[]) : [];
   // Backfill: horses saved before the reference-sheet bonus existed may
   // already have a reference sheet uploaded. Don't let a later re-upload
   // retroactively award the "first submission" bonus for those.
-  state.horses.forEach(h=>{ if(h.referenceImage && h.refBonusGiven===undefined) h.refBonusGiven=true; });
+  state.horses.forEach(h=>{
+    if(h.referenceImage && h.refBonusGiven===undefined) h.refBonusGiven=true;
+    if(!Array.isArray(h.completedMilestones)) h.completedMilestones=[];
+    if(!Array.isArray(h.badges)) h.badges=[];
+    if(h.level>=5 && !h.badges.includes("Quality Stock")) h.badges.push("Quality Stock");
+    if(h.level>=10 && !h.badges.includes("Excellent Stock")) h.badges.push("Excellent Stock");
+  });
   state.loaded = true;
 }
 
@@ -406,17 +478,20 @@ window.goToRoster = goToRoster;
 // HORSE
 // ============================================
 
+const BASE_STAT_VALUE = 10;
+const BASE_BREEDING_SLOTS = 2;
+
 function newHorse(data){
   const stats={};
-  STATS.forEach(s=>stats[s]=10);
+  STATS.forEach(s=>stats[s]=BASE_STAT_VALUE);
   const age = Number(data.age)||3;
   return {
     id:uid(), name:data.name, breed:data.breed||"Unspecified", age,
     stage: age<1?"foal":age<2?"yearling":age<3?"two-year-old":"adult",
     level:1, exp:0, stats,
-    breedingSlots:2, breedingFilled:0,
+    breedingSlots:BASE_BREEDING_SLOTS, breedingFilled:0,
     profileImage:null, referenceImage:null, referenceLink:null, refBonusGiven:false,
-    artLog:[],
+    artLog:[], completedMilestones:[], badges:[],
     gender:data.gender||"", phenotype:data.phenotype||"", genotype:data.genotype||"",
     // Pedigree — 3 generations. Each ancestor: {name, link, inRosterId}
     // Slot keys: sire, dam, ss, sd, ds, dd, sss, ssd, sds, sdd, dss, dsd, dds, ddd
@@ -457,14 +532,69 @@ function getEffectiveStat(h, stat){
   return (h.stats[stat]||0) + getEquippedStatBonus(h, stat);
 }
 
-function checkLevelUp(h){
+function applyLevelsFromExp(h, silent){
   while(h.level<10 && h.exp>=LEVEL_TABLE[h.level+1].exp){
     h.level++;
     const t=LEVEL_TABLE[h.level];
     STATS.forEach(s=>h.stats[s]+=t.bonus);
     h.breedingSlots+=t.slots;
-    addLog(`🎉 ${h.name} reached Level ${h.level}! +${t.bonus} to all stats.`);
+    if(!silent) addLog(`🎉 ${h.name} reached Level ${h.level}! +${t.bonus} to all stats.`);
+    if(t.badge){
+      if(!Array.isArray(h.badges)) h.badges=[];
+      if(!h.badges.includes(t.badge)) h.badges.push(t.badge);
+      if(!silent) addLog(`🏆 ${h.name} earned the ${t.badge} trophy!`);
+    }
   }
+}
+function checkLevelUp(h){ applyLevelsFromExp(h, false); }
+
+// Rebuilds a horse's exp/stats/level/breedingSlots/badges/completedMilestones
+// entirely from scratch by replaying its remaining art log entries in order.
+// This is what makes deleting or editing a training/competition entry safe —
+// rather than trying to subtract one entry's effects back out (error-prone
+// once several level-ups and milestones have layered on top of each other),
+// we just recompute the whole horse from what's left.
+function recomputeHorse(h){
+  const baseStats={}; STATS.forEach(s=>baseStats[s]=BASE_STAT_VALUE);
+  h.stats = baseStats;
+  h.level = 1;
+  h.breedingSlots = BASE_BREEDING_SLOTS + (h.breedingFilled||0)*0; // slots unaffected by fills
+  h.badges = [];
+  h.completedMilestones = [];
+  h.exp = 0;
+
+  const chronological = [...(h.artLog||[])].reverse(); // artLog is newest-first
+  chronological.forEach(entry=>{
+    h.exp += entry.exp||0;
+    if(entry.statsDelta) Object.entries(entry.statsDelta).forEach(([s,v])=>{ h.stats[s]=(h.stats[s]||0)+v; });
+    if(entry.milestoneIds) entry.milestoneIds.forEach(id=>{ if(!h.completedMilestones.includes(id)) h.completedMilestones.push(id); });
+  });
+  applyLevelsFromExp(h, true);
+}
+
+// Deletes a single art log entry (training or competition) and recomputes
+// the horse's exp/stats/level/badges/milestones from what's left. If a
+// competition record referenced this entry, that record is removed too.
+function deleteArtLogEntry(h, entryId){
+  const idx=(h.artLog||[]).findIndex(e=>e.id===entryId);
+  if(idx===-1) return;
+  h.artLog.splice(idx,1);
+  if(h.compHistory) h.compHistory = h.compHistory.filter(r=>r.artLogId!==entryId);
+  recomputeHorse(h);
+  addLog(`🗑️ Deleted a log entry for ${h.name} — EXP/stats reversed.`);
+  saveHorse(h); save(); render();
+}
+
+// Deletes a competition history record and its linked art log entry (if any),
+// reversing EXP/stats the same way.
+function deleteCompRecord(h, recId){
+  const rec=(h.compHistory||[]).find(r=>r.id===recId);
+  if(!rec) return;
+  h.compHistory = h.compHistory.filter(r=>r.id!==recId);
+  if(rec.artLogId) h.artLog = (h.artLog||[]).filter(e=>e.id!==rec.artLogId);
+  recomputeHorse(h);
+  addLog(`🗑️ Deleted a show record for ${h.name} — EXP/stats reversed.`);
+  saveHorse(h); save(); render();
 }
 
 // ============================================
@@ -623,21 +753,61 @@ function renderRoster(){
           <option>Filly</option><option>Colt</option><option>Rig</option>
         </select>
       </div>
-      <div><label>Phenotype <span class="small">(optional)</span></label><input id="nh_pheno" placeholder="e.g. Bay, Dapple Grey" /></div>
-      <div><label>Genotype <span class="small">(optional)</span></label><input id="nh_geno" placeholder="e.g. Ee Aa nCr" /></div>
     </div>
+    <h4 style="margin:14px 0 4px;color:var(--accent);">🧬 Genetics</h4>
+    <p class="small" style="margin:0 0 8px;">Pick alleles for each gene — the loci shown update based on Breed. This feeds directly into Net Worth.</p>
+    <div id="nh_genetics_wrap"></div>
+    <div id="nh_geno_preview" class="prompt-box" style="margin-top:8px;"></div>
     <button id="nh_add" style="margin-top:10px;">Add to Stable</button>
   `);
   wrap.appendChild(form);
+
+  const genoSelections={extension:"EE", agouti:"AA"};
+  function renderGeneticsPicker(){
+    const breed=form.querySelector('#nh_breed').value;
+    const loci=[GENETIC_LOCI.find(l=>l.key==="extension"), GENETIC_LOCI.find(l=>l.key==="agouti"),
+      ...getAllowedLoci(breed).map(k=>GENETIC_LOCI.find(l=>l.key===k))].filter(Boolean);
+    const wrapEl=form.querySelector('#nh_genetics_wrap');
+    wrapEl.innerHTML=`<div class="row" style="flex-wrap:wrap;gap:8px;">
+      ${loci.map(locus=>{
+        // Gated loci (Silver, PATN1/2) only show once their prerequisite is satisfied
+        if(locus.requiresAny){
+          const [reqKey, reqCodes]=Object.entries(locus.requiresAny)[0];
+          if(!reqCodes.includes(genoSelections[reqKey])) return "";
+        }
+        if(locus.key==="agouti" && genoSelections.extension==="ee") return ""; // agouti invisible on chestnut
+        const current=genoSelections[locus.key]||locus.options[0].code;
+        genoSelections[locus.key]=current;
+        return `<div style="min-width:180px;"><label class="small">${locus.label}</label>
+          <select data-locus="${locus.key}" style="width:100%;">
+            ${locus.options.map(o=>`<option value="${o.code}" ${o.code===current?"selected":""}>${o.code} — ${o.desc}</option>`).join("")}
+          </select>
+        </div>`;
+      }).join("")}
+    </div>`;
+    wrapEl.querySelectorAll('[data-locus]').forEach(sel=>sel.onchange=()=>{
+      genoSelections[sel.dataset.locus]=sel.value;
+      renderGeneticsPicker();
+    });
+    refreshGenoPreview();
+  }
+  function refreshGenoPreview(){
+    const breed=form.querySelector('#nh_breed').value;
+    const result=computeGenoResult(genoSelections, breed);
+    form.querySelector('#nh_geno_preview').innerHTML=
+      `<b>Phenotype:</b> ${result.phenotype}<br><b>Genotype:</b> ${result.genotype}<br><span class="small">Genetics value: ฿${result.totalPrice.toLocaleString()}</span>`;
+  }
+  renderGeneticsPicker();
+  form.querySelector('#nh_breed').oninput=renderGeneticsPicker;
   form.querySelector('#nh_add').onclick=()=>{
     const name=form.querySelector('#nh_name').value.trim();
     const age=form.querySelector('#nh_age').value;
     const breed=form.querySelector('#nh_breed').value.trim()||"Unspecified";
     const gender=form.querySelector('#nh_gender').value;
-    const phenotype=form.querySelector('#nh_pheno').value.trim();
-    const genotype=form.querySelector('#nh_geno').value.trim();
     if(!name){alert("Give your horse a name first!"); return;}
-    const h=newHorse({name,age,breed,gender,phenotype,genotype});
+    const geno=computeGenoResult(genoSelections, breed);
+    const h=newHorse({name,age,breed,gender,phenotype:geno.phenotype,genotype:geno.genotype,
+      genoBasePrice:geno.genoBasePrice, genoModifiers:geno.genoModifiers});
     state.horses.push(h);
     addLog(`🐎 ${h.name} (${breed}) joined the stable.`);
     save(); render();
@@ -672,6 +842,7 @@ function renderRoster(){
             ${e.image?`<img src="${e.image}" class="artlog-thumb" data-lightbox="${e.image}" data-caption="${e.label}" style="cursor:zoom-in;" />`:""}
             <b>${e.label}</b> ${e.type==="competition"&&e.placement?`<span class="tag">${["1st","2nd","3rd","4th","5th","6th"][e.placement-1]||e.placement+"th"}</span>`:""}
             <span class="tag">+${e.exp} EXP</span>
+            <span data-act="delete-artlog" data-id="${h.id}" data-entry="${e.id}" style="cursor:pointer;color:#c96a3a;font-size:.85em;margin-left:6px;" title="Delete this entry (reverses its EXP/stats)">🗑️</span>
             ${e.link?`<a href="${e.link}" target="_blank" class="artlog-link" style="font-size:.8em;margin-left:6px;">🔗 View</a>`:""}
             <div class="small" style="margin-top:2px;">${e.art||""}${e.lit?` · ${e.lit}`:""}</div>
           </div>`).join("") : '<div class="small">No entries yet.</div>'}
@@ -708,6 +879,7 @@ function renderRoster(){
           <div style="display:flex;align-items:baseline;flex-wrap:wrap;gap:6px;">
             <span data-act="view-profile" data-id="${h.id}" style="font-size:1.1em;color:var(--accent);font-weight:bold;text-decoration:none;cursor:pointer;">${h.name}</span>
             <span class="tag">Lvl ${h.level}</span>
+            ${(h.badges||[]).map(b=>`<span class="tag" title="${b} Trophy" style="background:#3a2a10;color:#e8c86a;border-color:#c98a3a;">🏆 ${b}</span>`).join("")}
             <span data-act="view-profile" data-id="${h.id}" class="small" style="color:var(--accent);cursor:pointer;">🔗 Profile Page</span>
           </div>
           <div class="small">${h.breed} · Age ${h.age} (${h.stage})${h.gender?` · ${h.gender}`:""}</div>
@@ -814,6 +986,12 @@ function renderRoster(){
   wrap.querySelectorAll('[data-act="edit-profile"]').forEach(b=>b.onclick=()=>showProfileModal(b.dataset.id));
   wrap.querySelectorAll('[data-act="edit-worth"]').forEach(b=>b.onclick=()=>showNetWorthModal(b.dataset.id));
   wrap.querySelectorAll('[data-act="view-profile"]').forEach(b=>b.onclick=()=>goToProfile(b.dataset.id));
+  wrap.querySelectorAll('[data-act="delete-artlog"]').forEach(b=>b.onclick=()=>{
+    const h=state.horses.find(x=>x.id===b.dataset.id);
+    if(!h) return;
+    if(!confirm('Delete this log entry? This will reverse its EXP and stat gains.')) return;
+    deleteArtLogEntry(h, b.dataset.entry);
+  });
 
   return wrap;
 }
@@ -1089,17 +1267,19 @@ function renderTraining(){
   const wrap=el('div');
   if(!state.horses.length){ wrap.innerHTML='<div class="card small">Add a horse on the Stable Roster tab first.</div>'; return wrap; }
 
-  const trainingOpts = TRAININGS.map(t=>`<option value="${t.id}">${t.name}</option>`).join("");
   let combinedMode=false;
   let selectedBonuses=new Set();
   let uploadedImage=null;
+
+  function currentHorse(){ return state.horses.find(x=>x.id===card.querySelector('#tr_horse').value); }
+  function buildTrainingOpts(h){ return trainingOptionsFor(h).map(t=>`<option value="${t.id}">${t.name}</option>`).join(""); }
 
   const card=el('div','card');
   card.innerHTML=`
     <h3>Log Training</h3>
     <div class="row">
       <div><label>Horse</label>
-        <select id="tr_horse">${state.horses.map(h=>`<option value="${h.id}">${h.name}</option>`).join("")}</select>
+        <select id="tr_horse">${state.horses.map(h=>`<option value="${h.id}">${h.name} (${h.stage})</option>`).join("")}</select>
       </div>
       <div style="flex:none;">
         <label>Mode</label>
@@ -1110,9 +1290,10 @@ function renderTraining(){
       </div>
     </div>
     <div class="row" style="margin-top:8px;">
-      <div><label id="tr_lbl1">Training Type</label><select id="tr_type">${trainingOpts}</select></div>
-      <div id="tr_type2_wrap" style="display:none;"><label>Second Training</label><select id="tr_type2">${trainingOpts}</select></div>
+      <div><label id="tr_lbl1">Training Type</label><select id="tr_type">${buildTrainingOpts(state.horses[0])}</select></div>
+      <div id="tr_type2_wrap" style="display:none;"><label>Second Training</label><select id="tr_type2">${buildTrainingOpts(state.horses[0])}</select></div>
     </div>
+    <div id="tr_milestone_status"></div>
     <div id="tr_prompt"></div>
     <div style="margin-top:12px;">
       <label>Art Image <span class="required">* Required</span></label>
@@ -1147,8 +1328,10 @@ function renderTraining(){
   wrap.appendChild(card);
 
   function refreshPrompt(){
-    const t=TRAININGS.find(x=>x.id===card.querySelector('#tr_type').value);
-    const t2=combinedMode?TRAININGS.find(x=>x.id===card.querySelector('#tr_type2').value):null;
+    const h=currentHorse();
+    const opts=trainingOptionsFor(h);
+    const t=opts.find(x=>x.id===card.querySelector('#tr_type').value);
+    const t2=combinedMode?opts.find(x=>x.id===card.querySelector('#tr_type2').value):null;
     if(!t) return;
     const allStats={...t.stats};
     if(t2) Object.entries(t2.stats).forEach(([s,v])=>allStats[s]=(allStats[s]||0)+v);
@@ -1159,9 +1342,38 @@ function renderTraining(){
       <span class="small">Stats: ${statsStr}</span>
     </div>`;
   }
+
+  function refreshMilestoneStatus(){
+    const h=currentHorse();
+    const m=MILESTONES[h.stage];
+    const box=card.querySelector('#tr_milestone_status');
+    if(!m){ box.innerHTML=''; return; }
+    const done=new Set(h.completedMilestones||[]);
+    const doneCount=m.options.filter(o=>done.has(o.id)).length;
+    const ready=doneCount>=m.required;
+    box.innerHTML=`<div class="prompt-box" style="border-color:${ready?'#7a9b6e':'#4a392a'};">
+      <b>${h.name}</b> is a <b>${h.stage}</b> — ${doneCount}/${m.required} age-up milestone${m.required>1?'s':''} completed
+      ${ready?` · <button id="tr_ageup" style="margin-left:6px;">🎂 Age Up to ${m.next}</button>`:''}
+    </div>`;
+    const btn=box.querySelector('#tr_ageup');
+    if(btn) btn.onclick=()=>{
+      h.stage=m.next;
+      addLog(`🎂 ${h.name} aged up to ${m.next}!`);
+      saveHorse(h); save(); render();
+    };
+  }
+
   refreshPrompt();
+  refreshMilestoneStatus();
   card.querySelector('#tr_type').onchange=refreshPrompt;
   card.querySelector('#tr_type2').onchange=refreshPrompt;
+  card.querySelector('#tr_horse').onchange=()=>{
+    const h=currentHorse();
+    card.querySelector('#tr_type').innerHTML=buildTrainingOpts(h);
+    card.querySelector('#tr_type2').innerHTML=buildTrainingOpts(h);
+    refreshPrompt();
+    refreshMilestoneStatus();
+  };
 
   card.querySelector('#tr_mode_single').onclick=()=>{
     combinedMode=false;
@@ -1216,12 +1428,25 @@ function renderTraining(){
     if(!artType){ res.innerHTML='<div class="result fail">Please select an art type.</div>'; return; }
     if(combinedMode && tId===tId2){ res.innerHTML='<div class="result fail">Please choose two different training types.</div>'; return; }
 
-    const t=TRAININGS.find(x=>x.id===tId);
-    const t2=tId2?TRAININGS.find(x=>x.id===tId2):null;
+    const t=trainingOptionsFor(h).find(x=>x.id===tId);
+    const t2=tId2?trainingOptionsFor(h).find(x=>x.id===tId2):null;
     const label=t2?`${t.name} + ${t2.name}`:t.name;
     const allStats={...t.stats};
     if(t2) Object.entries(t2.stats).forEach(([s,v])=>allStats[s]=(allStats[s]||0)+v);
     Object.entries(allStats).forEach(([s,v])=>h.stats[s]=(h.stats[s]||0)+v);
+
+    // Track age-up milestone completion for young horses
+    const m=MILESTONES[h.stage];
+    const milestoneIds=[];
+    if(m){
+      if(!Array.isArray(h.completedMilestones)) h.completedMilestones=[];
+      [t,t2].filter(Boolean).forEach(tr=>{
+        if(m.options.some(o=>o.id===tr.id)){
+          milestoneIds.push(tr.id);
+          if(!h.completedMilestones.includes(tr.id)) h.completedMilestones.push(tr.id);
+        }
+      });
+    }
 
     let expGain=ART_EXP[artType]||0;
     const sources=[`${artType} (+${ART_EXP[artType]})`];
@@ -1231,7 +1456,7 @@ function renderTraining(){
     h.exp+=expGain;
     checkLevelUp(h);
 
-    const trainEntry={day:state.log.length+1,type:"training",label,art:artType,lit:litWords?`${litWords} words`:null,bonuses:[...selectedBonuses],exp:expGain,link:link||null,image:uploadedImage};
+    const trainEntry={id:uid2(),day:state.log.length+1,type:"training",label,art:artType,lit:litWords?`${litWords} words`:null,bonuses:[...selectedBonuses],exp:expGain,link:link||null,image:uploadedImage,statsDelta:allStats,milestoneIds};
     h.artLog.unshift(trainEntry);
     const statsStr=Object.entries(allStats).map(([s,v])=>`+${v} ${STAT_LABELS[s]}`).join(", ");
     addLog(`🎨 ${h.name} — ${label} (${statsStr}) · +${expGain} EXP`);
@@ -1248,6 +1473,7 @@ function renderTraining(){
     card.querySelector('#tr_link').value='';
     selectedBonuses.clear();
     card.querySelectorAll('[data-bonus]').forEach(p=>p.classList.remove('active'));
+    refreshMilestoneStatus();
   };
 
   return wrap;
@@ -1295,13 +1521,19 @@ function buildShowLogForm(){
 
   const card=el('div','card');
   const discOpts=Object.keys(DISCIPLINES).map(d=>`<option value="${d}">${d}</option>`).join("");
+  const eligible=state.horses.filter(h=>h.stage==="adult");
+  if(!eligible.length){
+    card.innerHTML=`<h3>📜 Log a Show</h3><p class="small">No horses are old/broke enough to compete yet — horses must reach the <b>adult</b> stage (complete their age-up milestones on the Training tab) before entering competitions.</p>`;
+    wrap.appendChild(card);
+    return wrap;
+  }
   card.innerHTML=`
     <h3>📜 Log a Show</h3>
     <p class="small" style="margin-top:0;color:#b5a392;">Record any competition — past or present. Add ribbons, trophies, and prizes as photos.</p>
 
     <div class="row">
       <div><label>Horse</label>
-        <select id="cs_horse">${state.horses.map(h=>`<option value="${h.id}">${h.name}</option>`).join("")}</select>
+        <select id="cs_horse">${eligible.map(h=>`<option value="${h.id}">${h.name}</option>`).join("")}</select>
       </div>
       <div><label>Discipline</label><select id="cs_disc">${discOpts}</select></div>
     </div>
@@ -1460,24 +1692,32 @@ function buildShowLogForm(){
 
     // EXP (only if art type selected)
     let expGain=0;
+    let nonPlacementExp=0;
     const sources=[];
+    const discStats={};
     if(artType && ART_EXP[artType]){
       expGain+=ART_EXP[artType]; sources.push(`${artType} (+${ART_EXP[artType]})`);
       const litExp=calcLitExp(litWords);
       if(litExp>0){expGain+=litExp; sources.push(`Lit ${litWords}w (+${litExp})`);}
+      // Show bonuses: +1 EXP flat for entering, plus a placement bonus on top
+      expGain+=1; sources.push(`Show Entry (+1)`);
+      selectedBonuses.forEach(k=>{if(BONUS_EXP[k]){expGain+=BONUS_EXP[k]; sources.push(`${k} (+${BONUS_EXP[k]})`);}});
+      nonPlacementExp=expGain;
       const placeExp={1:4,2:3,3:2}[placement]||1;
       if(placement){expGain+=placeExp; sources.push(`Placement (+${placeExp})`);}
-      selectedBonuses.forEach(k=>{if(BONUS_EXP[k]){expGain+=BONUS_EXP[k]; sources.push(`${k} (+${BONUS_EXP[k]})`);}});
       h.exp+=expGain;
       checkLevelUp(h);
-      if(disc && DISCIPLINES[disc]?.stats) DISCIPLINES[disc].stats.forEach(s=>h.stats[s]=(h.stats[s]||0)+1);
+      if(disc && DISCIPLINES[disc]?.stats) DISCIPLINES[disc].stats.forEach(s=>{ h.stats[s]=(h.stats[s]||0)+1; discStats[s]=(discStats[s]||0)+1; });
     }
 
     // Save art log entry if art was provided
+    let artLogId=null;
     if(artImage && artType){
-      const artEntry={day:state.log.length+1,type:"competition",label:`${disc}${venue?" — "+venue:""}`,
+      artLogId=uid2();
+      const artEntry={id:artLogId,day:state.log.length+1,type:"competition",label:`${disc}${venue?" — "+venue:""}`,
         placement,art:artType,lit:litWords?`${litWords} words`:null,
-        bonuses:[...selectedBonuses],exp:expGain,link:link||null,image:artImage};
+        bonuses:[...selectedBonuses],exp:expGain,link:link||null,image:artImage,
+        statsDelta:discStats,nonPlacementExp,discipline:disc};
       h.artLog.unshift(artEntry);
       saveArtEntry(h, artEntry);
     }
@@ -1487,7 +1727,7 @@ function buildShowLogForm(){
     const rec={
       id:uid2(), discipline:disc, difficulty:className, venue, date,
       placement, note, image:artImage||null, link:link||null,
-      prizes:[...prizeImages],
+      prizes:[...prizeImages], artLogId,
     };
     h.compHistory.unshift(rec);
 
@@ -1571,6 +1811,7 @@ function buildShowHistory(){
                     ${p.label?`<div style="font-size:.65em;opacity:.6;max-width:44px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${p.label}</div>`:""}
                   </div>`).join("")}
                 </div>`:""}
+                <button data-act="edit-show" data-hid="${h.id}" data-cid="${c.id}" class="secondary" style="font-size:.7em;padding:2px 7px;margin-top:6px;">✏️ Edit Placement / Prizes</button>
                 <button data-act="del-show" data-hid="${h.id}" data-cid="${c.id}" class="secondary" style="font-size:.7em;padding:2px 7px;margin-top:6px;">✕ Remove</button>
               </div>
             </div>
@@ -1586,12 +1827,75 @@ function buildShowHistory(){
   }
 
   wrap.querySelectorAll('[data-act="del-show"]').forEach(b=>b.onclick=()=>{
-    if(!confirm('Remove this show record?')) return;
+    if(!confirm('Remove this show record? This will reverse its EXP and stat gains.')) return;
     const h=state.horses.find(x=>x.id===b.dataset.hid);
-    if(h){ h.compHistory=(h.compHistory||[]).filter(c=>c.id!==b.dataset.cid); saveHorse(h); save(); render(); }
+    if(h) deleteCompRecord(h, b.dataset.cid);
+  });
+  wrap.querySelectorAll('[data-act="edit-show"]').forEach(b=>b.onclick=()=>{
+    const h=state.horses.find(x=>x.id===b.dataset.hid);
+    if(h) showEditCompModal(h, b.dataset.cid);
   });
 
   return wrap;
+}
+
+// Lets you add/change a show's placement and add prize photos after the
+// fact — for when art is logged before a show is judged. If art/EXP was
+// logged for this show, its placement-based EXP is recalculated and the
+// horse's stats/level are recomputed to match.
+function showEditCompModal(h, recId){
+  const rec=(h.compHistory||[]).find(r=>r.id===recId);
+  if(!rec) return;
+  const newPrizes=[];
+
+  const overlay=document.createElement('div');
+  overlay.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:9999;display:flex;align-items:flex-start;justify-content:center;padding:16px;overflow-y:auto;';
+  overlay.innerHTML=`<div style="background:#2c1f16;border:2px solid #c98a3a;border-radius:10px;padding:24px;max-width:480px;width:100%;color:#f1e6d8;font-family:Georgia,serif;margin:auto;">
+    <h3 style="margin-top:0;color:#c98a3a;">✏️ Edit Show — ${rec.discipline}${rec.venue?` (${rec.venue})`:""}</h3>
+    <label>Placement</label>
+    <select id="ec_place" style="width:100%;padding:7px;background:#15100c;border:1px solid #4a392a;color:#f1e6d8;border-radius:5px;box-sizing:border-box;margin-bottom:10px;">
+      <option value="">— Not yet judged / no placement —</option>
+      ${["1st","2nd","3rd","4th","5th","6th"].map((l,i)=>`<option value="${i+1}" ${rec.placement===i+1?"selected":""}>${l}</option>`).join("")}
+    </select>
+    <label>Add Prize Photo(s)</label>
+    <input type="file" id="ec_prize_file" accept="image/*" multiple style="margin-bottom:6px;" />
+    <div id="ec_prize_preview" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;"></div>
+    ${rec.artLogId?`<p class="small" style="color:#b5a392;">This show has art logged — changing the placement will recalculate its EXP and your horse's stats/level.</p>`:`<p class="small" style="color:#b5a392;">No art was logged for this show, so there's no EXP to recalculate — this just updates the record.</p>`}
+    <button id="ec_save" style="margin-top:8px;width:100%;background:#c98a3a;color:#241a14;border:none;padding:10px;border-radius:6px;font-weight:bold;cursor:pointer;">💾 Save</button>
+    <button id="ec_cancel" style="margin-top:8px;width:100%;background:#2c2118;color:#f1e6d8;border:1px solid #4a392a;padding:10px;border-radius:6px;cursor:pointer;">Cancel</button>
+  </div>`;
+  document.body.appendChild(overlay);
+
+  overlay.querySelector('#ec_prize_file').onchange=async e=>{
+    for(const f of e.target.files){
+      try{
+        const dataUrl=await resizeImageFile(f);
+        newPrizes.push({dataUrl,label:""});
+      }catch(err){}
+    }
+    overlay.querySelector('#ec_prize_preview').innerHTML=newPrizes.map(p=>`<img src="${p.dataUrl}" style="width:44px;height:44px;object-fit:cover;border-radius:5px;border:1px solid #4a392a;" />`).join("");
+  };
+
+  overlay.querySelector('#ec_cancel').onclick=()=>overlay.remove();
+  overlay.querySelector('#ec_save').onclick=()=>{
+    const newPlacement=Number(overlay.querySelector('#ec_place').value)||null;
+    rec.placement=newPlacement;
+    if(newPrizes.length) rec.prizes=[...(rec.prizes||[]), ...newPrizes];
+
+    if(rec.artLogId){
+      const entry=(h.artLog||[]).find(x=>x.id===rec.artLogId);
+      if(entry && entry.nonPlacementExp!==undefined){
+        entry.placement=newPlacement;
+        const placeExp = newPlacement ? ({1:4,2:3,3:2}[newPlacement]||1) : 0;
+        entry.exp = entry.nonPlacementExp + placeExp;
+      }
+    }
+    recomputeHorse(h);
+    addLog(`✏️ Updated show record for ${h.name} — ${rec.discipline}.`);
+    saveHorse(h); save();
+    overlay.remove();
+    render();
+  };
 }
 
 
@@ -1613,6 +1917,7 @@ function renderArtLog(){
               <b>${e.label}</b>
               ${placeLabel?`<span class="tag">${placeLabel}</span>`:""}
               <span class="tag" style="background:rgba(122,155,110,.15);color:#7a9b6e;border-color:#7a9b6e;">+${e.exp} EXP</span>
+              <span data-act="delete-artlog" data-id="${h.id}" data-entry="${e.id}" style="cursor:pointer;color:#c96a3a;font-size:.85em;margin-left:6px;" title="Delete this entry (reverses its EXP/stats)">🗑️</span>
               ${e.link?`<a href="${e.link}" target="_blank" class="artlog-link" style="font-size:.8em;margin-left:4px;">🔗</a>`:""}
               <div class="small" style="margin-top:2px;">${[e.art,e.lit,...(e.bonuses||[])].filter(Boolean).join(" · ")}</div>
             </div>
@@ -1629,6 +1934,12 @@ function renderArtLog(){
 
   wrap.querySelectorAll('[data-lightbox]').forEach(img=>{
     img.onclick=e=>{ e.stopPropagation(); openLightbox(img.dataset.lightbox, img.dataset.caption); };
+  });
+  wrap.querySelectorAll('[data-act="delete-artlog"]').forEach(b=>b.onclick=()=>{
+    const h=state.horses.find(x=>x.id===b.dataset.id);
+    if(!h) return;
+    if(!confirm('Delete this log entry? This will reverse its EXP and stat gains.')) return;
+    deleteArtLogEntry(h, b.dataset.entry);
   });
 
   return wrap;
@@ -1739,42 +2050,10 @@ const GENO_BASE_PRICES = [
   {label:"Chestnut", value:700},
 ];
 
+// Special/fictitious extras not covered by real coat genetics — added on
+// top via the Net Worth modal. Breed-specific fictitious genes/mutations
+// with their own Buxx prices can be slotted in here as that catalog grows.
 const GENO_MODIFIERS = {
-  "Dilutions": [
-    {label:"Dun", value:100},
-    {label:"Single Cream", value:100},
-    {label:"Double Cream", value:500},
-    {label:"Champagne", value:700},
-  ],
-  "Coat Modifiers": [
-    {label:"Sooty", value:100},
-    {label:"Pangare", value:100},
-    {label:"Silver / Flaxen", value:150},
-    {label:"Bend Or Spots", value:100},
-    {label:"Gulastra Plume (nSb)", value:200},
-  ],
-  "White Markings": [
-    {label:"Roan", value:100},
-    {label:"Rabicano", value:150},
-    {label:"Tobiano", value:200},
-    {label:"Sabino", value:200},
-    {label:"Splash", value:200},
-    {label:"Overo", value:200},
-    {label:"Manchado", value:350},
-  ],
-  "Appaloosa Markings": [
-    {label:"Snowcap Appaloosa (LpLp PATN2PATN2)", value:500},
-    {label:"Fewspot Appaloosa (LpLp PATN1)", value:500},
-    {label:"Leopard Appaloosa (nLp PATN1)", value:700},
-    {label:"Spotted Blanket Appaloosa (nLp PATN2)", value:700},
-    {label:"SemiLeopard Appaloosa (nLp PATN1PATN2)", value:700},
-    {label:"Varnish Appaloosa (LpLp)", value:900},
-    {label:"Snowflake Appaloosa (nLp)", value:900},
-  ],
-  "Grey": [
-    {label:"Fleabitten Grey (Gg)", value:150},
-    {label:"Dappled Grey (GG)", value:200},
-  ],
   "Rare Markings": [
     {label:"Fairylock", value:600},
     {label:"Bloodmark", value:600},
@@ -1809,8 +2088,236 @@ const GENO_MODIFIERS = {
   ],
 };
 
-const SHOW_EARNING_VALUES = {1:1000, 2:500, 3:250};
-const SHOW_EARNING_OTHER = 100;
+// ============================================
+// GENETICS ENGINE — allele-level coat color genetics
+// ============================================
+// Each locus lists its possible genotype states (zygosity) with the
+// phenotype it produces and its price contribution. `requiresAny` gates a
+// locus so it only applies when another locus resolved to one of the
+// listed genotypes (e.g. Silver only shows on black-based horses).
+// Extension/Agouti together determine the 3-tier base price
+// (Bay/Black, Wild Bay/Seal Brown, Chestnut) instead of having their own
+// flat price — everything else adds on top.
+const GENETIC_LOCI = [
+  { key:"extension", label:"Extension (E) — base pigment", base:true,
+    options:[
+      {code:"EE", desc:"Black-based"},
+      {code:"Ee", desc:"Black-based (carries red)"},
+      {code:"ee", desc:"Red-based / Chestnut"},
+    ]},
+  { key:"agouti", label:"Agouti (A) — distributes black", base:true, requiresAny:{extension:["EE","Ee"]},
+    options:[
+      {code:"AA",   desc:"Bay"},
+      {code:"AAt",  desc:"Bay (carries Wild Bay)"},
+      {code:"Aa",   desc:"Bay (carries Black)"},
+      {code:"AtAt", desc:"Wild Bay / Seal Brown"},
+      {code:"Ata",  desc:"Wild Bay / Seal Brown (carrier)"},
+      {code:"aa",   desc:"Black"},
+    ]},
+  { key:"cream", label:"Cream (Cr)",
+    options:[
+      {code:"crcr", desc:"No Cream", price:0},
+      {code:"Crcr", desc:"Single Cream (Palomino / Buckskin / Smoky Black)", price:100},
+      {code:"CrCr", desc:"Double Cream (Cremello / Perlino / Smoky Cream)", price:500},
+    ]},
+  { key:"dun", label:"Dun (D)",
+    options:[
+      {code:"dd", desc:"No Dun", price:0},
+      {code:"Dd", desc:"Dun", price:100},
+      {code:"DD", desc:"Dun (homozygous)", price:100},
+    ]},
+  { key:"champagne", label:"Champagne (Ch)",
+    options:[
+      {code:"chch", desc:"No Champagne", price:0},
+      {code:"Chch", desc:"Champagne", price:700},
+      {code:"ChCh", desc:"Champagne (homozygous)", price:700},
+    ]},
+  { key:"silver", label:"Silver / Flaxen (Z)", requiresAny:{agouti:["aa","AtAt","Ata"]},
+    options:[
+      {code:"zz", desc:"No Silver", price:0},
+      {code:"Zz", desc:"Silver / Flaxen", price:150},
+      {code:"ZZ", desc:"Silver / Flaxen (homozygous)", price:150},
+    ]},
+  { key:"grey", label:"Grey (G)",
+    options:[
+      {code:"gg", desc:"No Grey", price:0},
+      {code:"Gg", desc:"Fleabitten Grey", price:150},
+      {code:"GG", desc:"Dappled Grey", price:200},
+    ]},
+  { key:"roan", label:"Roan (Rn)",
+    options:[
+      {code:"rnrn", desc:"No Roan", price:0},
+      {code:"Rnrn", desc:"Roan", price:100},
+    ]},
+  { key:"rabicano", label:"Rabicano (Rb)",
+    options:[
+      {code:"rbrb", desc:"No Rabicano", price:0},
+      {code:"Rbrb", desc:"Rabicano", price:150},
+    ]},
+  { key:"tobiano", label:"Tobiano (TO)",
+    options:[
+      {code:"toto", desc:"No Tobiano", price:0},
+      {code:"TOto", desc:"Tobiano", price:200},
+      {code:"TOTO", desc:"Tobiano (homozygous)", price:200},
+    ]},
+  { key:"sabino1", label:"Sabino1 (SB1)",
+    options:[
+      {code:"sb1sb1", desc:"No Sabino1", price:0},
+      {code:"SB1sb1", desc:"Sabino", price:200},
+      {code:"SB1SB1", desc:"Sabino-White (mostly/all white)", price:350},
+    ]},
+  { key:"splash", label:"Splash White (SW1)",
+    options:[
+      {code:"sw1sw1", desc:"No Splash", price:0},
+      {code:"SW1sw1", desc:"Splash White", price:200},
+      {code:"SW1SW1", desc:"Splash White (homozygous)", price:200},
+    ]},
+  { key:"frame", label:"Frame Overo (O)",
+    options:[
+      {code:"oo", desc:"No Frame", price:0},
+      {code:"Oo", desc:"Frame Overo (OO is lethal white — never pair two carriers)", price:200},
+    ]},
+  { key:"manchado", label:"Manchado (Ma)",
+    options:[
+      {code:"mama", desc:"No Manchado", price:0},
+      {code:"Mama", desc:"Manchado", price:350},
+    ]},
+  { key:"leopard", label:"Leopard Complex (LP)",
+    options:[
+      {code:"lplp", desc:"No Leopard Complex", price:0},
+      {code:"LPlp", desc:"Heterozygous Leopard Complex", price:0},
+      {code:"LPLP", desc:"Homozygous Leopard Complex", price:0},
+    ]},
+  { key:"patn1", label:"Pattern-1 (PATN1)", requiresAny:{leopard:["LPlp","LPLP"]},
+    options:[
+      {code:"patn1patn1", desc:"No Pattern-1", price:0},
+      {code:"PATN1patn1", desc:"Carries Pattern-1", price:0},
+      {code:"PATN1PATN1", desc:"Homozygous Pattern-1", price:0},
+    ]},
+  { key:"patn2", label:"Pattern-2 (PATN2)", requiresAny:{leopard:["LPlp","LPLP"]},
+    options:[
+      {code:"patn2patn2", desc:"No Pattern-2", price:0},
+      {code:"PATN2patn2", desc:"Carries Pattern-2", price:0},
+      {code:"PATN2PATN2", desc:"Homozygous Pattern-2", price:0},
+    ]},
+];
+
+// Leopard Complex's visible pattern depends on the *combination* of LP +
+// PATN1/PATN2 zygosity, not each locus independently — matches the named
+// Appaloosa Markings tiers from the pricing guide exactly.
+function computeAppaloosaPattern(lp, patn1, patn2){
+  const hasP1 = patn1 && patn1!=="patn1patn1";
+  const hasP2 = patn2 && patn2!=="patn2patn2";
+  if(!lp || lp==="lplp") return null;
+  if(lp==="LPLP"){
+    if(hasP2) return {label:"Snowcap Appaloosa", price:500};
+    if(hasP1) return {label:"Fewspot Appaloosa", price:500};
+    return {label:"Varnish Appaloosa", price:900};
+  }
+  // LPlp (heterozygous)
+  if(hasP1 && hasP2) return {label:"SemiLeopard Appaloosa", price:700};
+  if(hasP1) return {label:"Leopard Appaloosa", price:700};
+  if(hasP2) return {label:"Spotted Blanket Appaloosa", price:700};
+  return {label:"Snowflake Appaloosa", price:900};
+}
+
+// Computes the 3-tier base color + price from Extension/Agouti.
+function computeBaseColor(extension, agouti){
+  if(extension==="ee") return {label:"Chestnut", price:700};
+  if(!agouti) return {label:"Black-based (Agouti unset)", price:500};
+  if(agouti==="aa") return {label:"Black", price:500};
+  if(agouti==="AtAt"||agouti==="Ata") return {label:"Wild Bay / Seal Brown", price:600};
+  return {label:"Bay", price:500};
+}
+
+// Which genetics loci are realistically available per breed (beyond the
+// universal Extension/Agouti base). This is a starter reference — extend
+// it breed by breed, and this is also where breed-specific fictitious
+// genes/mutations can be slotted in as we build that out further.
+const BREED_GENETICS = {
+  "thoroughbred":    ["grey","roan","sabino1"],
+  "quarter horse":   ["cream","dun","tobiano","sabino1","splash","frame","roan","grey"],
+  "paint":           ["cream","tobiano","sabino1","splash","frame","roan","grey"],
+  "appaloosa":       ["cream","leopard","patn1","patn2","roan","sabino1","grey"],
+  "knabstrupper":    ["leopard","patn1","patn2","grey"],
+  "arabian":         ["grey","sabino1"],
+  "friesian":        [],
+  "andalusian":      ["grey","dun"],
+  "pre":             ["grey","dun"],
+  "lipizzaner":      ["grey"],
+  "clydesdale":      ["roan","tobiano","sabino1"],
+  "percheron":       ["grey","roan"],
+  "shetland pony":   ["cream","dun","tobiano","splash","sabino1","roan","grey"],
+  "welsh pony":      ["cream","dun","tobiano","splash","sabino1","roan","grey"],
+  "mustang":         ["cream","dun","roan","tobiano","sabino1","splash","frame","leopard","patn1","patn2","grey"],
+  "akhal-teke":      ["cream","dun"],
+  "icelandic":       ["dun","silver","roan","tobiano"],
+  "gypsy vanner":    ["tobiano","sabino1","splash","roan"],
+  "dutch warmblood": ["grey","roan"],
+  "hanoverian":      ["grey","roan"],
+  "warmblood":       ["grey","roan"],
+};
+
+// Returns the list of GENETIC_LOCI keys available to a given breed.
+// Unrecognized/blank breeds fall back to showing every locus, so this
+// never blocks a horse whose breed isn't in the reference list yet.
+function getAllowedLoci(breed){
+  const key=(breed||"").trim().toLowerCase();
+  const restricted=BREED_GENETICS[key];
+  const optionalKeys=GENETIC_LOCI.filter(l=>!l.base).map(l=>l.key);
+  if(!restricted) return optionalKeys;
+  return optionalKeys.filter(k=>restricted.includes(k));
+}
+
+// Given a {locusKey: genotypeCode} map, returns the computed genotype
+// string, phenotype description, total price, and a genoModifiers-style
+// array (kept compatible with the existing Net Worth modal/calc logic).
+function computeGenoResult(selections, breed){
+  const allowed = new Set(["extension","agouti", ...getAllowedLoci(breed)]);
+  const base = computeBaseColor(selections.extension, selections.agouti);
+  const phenoParts = [base.label];
+  const modifiers = [];
+  const genoParts = [];
+  if(selections.extension) genoParts.push(selections.extension);
+  if(selections.agouti && selections.extension!=="ee") genoParts.push(selections.agouti);
+
+  GENETIC_LOCI.filter(l=>!l.base).forEach(locus=>{
+    if(!allowed.has(locus.key)) return;
+    const code = selections[locus.key];
+    if(!code) return;
+    if(locus.requiresAny){
+      const [reqKey, reqCodes] = Object.entries(locus.requiresAny)[0];
+      if(!reqCodes.includes(selections[reqKey])) return; // gating locus not satisfied — ignore
+    }
+    if(["leopard","patn1","patn2"].includes(locus.key)) return; // handled combined below
+    const opt = locus.options.find(o=>o.code===code);
+    if(!opt) return;
+    genoParts.push(code);
+    if(opt.price>0){
+      phenoParts.push(opt.desc);
+      modifiers.push({label:opt.desc, value:opt.price});
+    }
+  });
+
+  if(allowed.has("leopard")){
+    const appy = computeAppaloosaPattern(selections.leopard, selections.patn1, selections.patn2);
+    if(selections.leopard) genoParts.push(selections.leopard);
+    if(selections.patn1 && selections.patn1!=="patn1patn1") genoParts.push(selections.patn1);
+    if(selections.patn2 && selections.patn2!=="patn2patn2") genoParts.push(selections.patn2);
+    if(appy){
+      phenoParts.push(appy.label);
+      modifiers.push({label:appy.label, value:appy.price});
+    }
+  }
+
+  return {
+    genotype: genoParts.join(" "),
+    phenotype: phenoParts.join(", "),
+    genoBasePrice: base.price,
+    genoModifiers: modifiers,
+    totalPrice: base.price + modifiers.reduce((s,m)=>s+m.value,0),
+  };
+}
 
 function calcShowEarnings(h){
   return (h.compHistory||[]).reduce((sum, c)=>{
@@ -1949,6 +2456,12 @@ function renderHorseProfilePage(app, h){
        <img src="${h.referenceImage}" onclick="openLightbox('${h.referenceImage}','${h.name} — Reference Sheet')" style="max-width:100%;max-height:220px;border-radius:8px;border:1px solid #4a392a;object-fit:contain;cursor:zoom-in;" />
        ${h.referenceLink?`<div class="small" style="margin-top:4px;"><a href="${h.referenceLink}" target="_blank" style="color:#c98a3a;">🔗 View on site</a></div>`:""}</div>`
     : "";
+  const refUploadHtml = bankAccount.linked
+    ? `<div style="margin-top:8px;">
+        <input type="file" accept="image/*" id="pp_ref_input" style="display:none;" />
+        <button class="secondary" id="pp_ref_btn" style="font-size:.75em;">${h.referenceImage?"📋 Replace Reference Sheet":"📋 Upload Reference Sheet"}</button>
+      </div>`
+    : "";
 
   app.innerHTML=`
     <style>
@@ -1981,12 +2494,17 @@ function renderHorseProfilePage(app, h){
       <div class="pcard" style="display:flex;gap:20px;flex-wrap:wrap;align-items:flex-start;">
         <div style="display:flex;flex-direction:column;gap:8px;align-items:center;">
           ${photoHtml}
+          ${bankAccount.linked?`
+            <input type="file" accept="image/*" id="pp_photo_input" style="display:none;" />
+            <button class="secondary" id="pp_photo_btn" style="font-size:.72em;padding:3px 7px;margin-top:0;">📷 Change Photo</button>
+          `:""}
           ${h.ownerName?`<div class="small" style="text-align:center;">Owner: ${h.ownerLink?`<a href="${h.ownerLink}" target="_blank">${h.ownerName}</a>`:h.ownerName}</div>`:""}
           ${h.riderName?`<div class="small" style="text-align:center;">Rider: ${h.riderName}</div>`:""}
           ${h.stableName?`<div class="small" style="text-align:center;">Stable: ${h.stableLink?`<a href="${h.stableLink}" target="_blank">${h.stableName}</a>`:h.stableName}</div>`:""}
         </div>
         <div style="flex:1;min-width:220px;">
           <h1 style="margin:0 0 4px;color:#c98a3a;font-size:1.9em;">${h.name}</h1>
+          ${(h.badges||[]).length?`<div style="margin-bottom:6px;">${h.badges.map(b=>`<span class="tag" style="background:#3a2a10;color:#e8c86a;border-color:#c98a3a;">🏆 ${b}</span>`).join(" ")}</div>`:""}
           <div class="small" style="font-size:.95em;">${h.breed}${h.gender?` · ${h.gender}`:""} · Age ${h.age} (${h.stage})</div>
           ${h.phenotype?`<div class="small">Phenotype: ${h.phenotype}</div>`:""}
           ${h.genotype?`<div class="small">Genotype: ${h.genotype}</div>`:""}
@@ -2003,7 +2521,7 @@ function renderHorseProfilePage(app, h){
       </div>` : ""}
 
       <!-- REFERENCE -->
-      ${refHtml ? `<div class="pcard">${refHtml}</div>` : ""}
+      ${(refHtml || refUploadHtml) ? `<div class="pcard">${refHtml}${refUploadHtml}</div>` : ""}
 
       <!-- STATS -->
       <div class="pcard">
@@ -2063,6 +2581,43 @@ function renderHorseProfilePage(app, h){
 
   const backLink = app.querySelector('[data-act="back-to-roster"]');
   if(backLink) backLink.onclick = goToRoster;
+
+  const photoBtn = app.querySelector('#pp_photo_btn');
+  if(photoBtn){
+    photoBtn.onclick = ()=>app.querySelector('#pp_photo_input').click();
+    app.querySelector('#pp_photo_input').onchange = async e=>{
+      const f=e.target.files[0]; if(!f) return;
+      try{
+        h.profileImage = await resizeImageFile(f);
+        render();
+        const ok = await saveHorse(h);
+        if(!ok) alert(`${h.name}'s photo was updated here, but saving it to the Stable Data sheet failed. Try again, or check your Stable Data URL in Admin settings.`);
+      }catch(err){ alert('Could not process that image: '+err.message); }
+    };
+  }
+
+  const refBtn = app.querySelector('#pp_ref_btn');
+  if(refBtn){
+    refBtn.onclick = ()=>app.querySelector('#pp_ref_input').click();
+    app.querySelector('#pp_ref_input').onchange = async e=>{
+      const f=e.target.files[0]; if(!f) return;
+      try{
+        h.referenceImage = await resizeImageFile(f);
+        let bonusMsg = "";
+        if(!h.refBonusGiven){
+          h.refBonusGiven = true;
+          h.exp += REF_SHEET_EXP;
+          checkLevelUp(h);
+          addLog(`📋 ${h.name} — Reference sheet submitted · +${REF_SHEET_EXP} EXP`);
+          bonusMsg = ` +${REF_SHEET_EXP} EXP awarded for first reference sheet submission!`;
+        }
+        render();
+        const ok = await saveHorse(h);
+        if(!ok) alert(`${h.name}'s reference sheet was updated here, but saving it to the Stable Data sheet failed. Try again, or check your Stable Data URL in Admin settings.`);
+        else if(bonusMsg) alert(`📋 Reference sheet saved for ${h.name}.${bonusMsg}`);
+      }catch(err){ alert('Could not process that image: '+err.message); }
+    };
+  }
 }
 
 
@@ -2132,6 +2687,9 @@ function showNetWorthModal(horseId){
     <optgroup label="— ${group} —">
       ${items.map(m=>`<option value="${m.value}|${m.label}">${m.label} (+฿${m.value})</option>`).join("")}
     </optgroup>`).join("");
+  const genoNote = h.genotype
+    ? `<p class="small" style="color:#7a9b6e;margin:4px 0 10px;">🧬 Base genetics: <b>${h.genotype}</b> (${h.phenotype||""}) — set on the Roster tab. This section is for extra fictitious/rare markings and mane types on top of that.</p>`
+    : `<p class="small" style="color:#b5a392;margin:4px 0 10px;">🧬 No structured genetics set yet — use "Set Genetics" on the roster card to pick real coat color alleles. This section is for extra fictitious/rare markings and mane types.</p>`;
 
   const existingMods = h.genoModifiers.map((m,i)=>`
     <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
@@ -2154,6 +2712,7 @@ function showNetWorthModal(horseId){
     </select>
 
     <label style="font-size:.78em;color:#b5a392;text-transform:uppercase;display:block;margin-bottom:3px;">Add Modifier</label>
+    ${genoNote}
     <div style="display:flex;gap:6px;margin-bottom:10px;">
       <select id="nw_mod_pick" style="flex:1;padding:7px;background:#15100c;border:1px solid #4a392a;color:#f1e6d8;border-radius:5px;">
         <option value="">— Pick modifier —</option>
