@@ -335,6 +335,56 @@ async function saveHorseImageChunked(userId, horseId, imageKey, imageData){
   return true;
 }
 
+// FIX: profileImage/referenceImage were the only fields that ever got
+// chunked before saving — everything else (show art in compHistory, prize/
+// ribbon photos, art log entry images) rode along as raw base64 inside the
+// same GET/JSONP request as the rest of the horse or entry data. That
+// request has to fit in a URL, so any real photo attached to a show or an
+// art log entry made the whole save silently fail (or time out, looking
+// "stuck"). And since the entry/record never actually reached the sheet,
+// there was nothing for a later load to bring back — which is why logged
+// art never showed up on the profile after a refresh.
+//
+// Fix: route every embedded image through the same chunked-upload path
+// already used for profile/reference images, keyed uniquely per entry/
+// prize, and swap in a small "@img:<key>" placeholder for the request that
+// actually carries the JSON. The real image data stays in the in-memory
+// object so it still displays immediately in this session. On load,
+// resolveImageRefs() swaps the placeholders back out using the flat
+// imageKey map the backend already merges onto the horse object.
+
+async function uploadImageRef(horseId, key, dataUri){
+  if(!dataUri || !dataUri.startsWith('data:')) return false;
+  return await saveHorseImageChunked(bankAccount.userId, horseId, key, dataUri);
+}
+
+function resolveImageRefs(horse){
+  if(!horse) return;
+  const usedKeys=new Set();
+  (horse.artLog||[]).forEach(e=>{
+    if(typeof e.image==='string' && e.image.startsWith('@img:')){
+      const key=e.image.slice(5);
+      e.image = horse[key] || null;
+      usedKeys.add(key);
+    }
+  });
+  (horse.compHistory||[]).forEach(r=>{
+    if(typeof r.image==='string' && r.image.startsWith('@img:')){
+      const key=r.image.slice(5);
+      r.image = horse[key] || null;
+      usedKeys.add(key);
+    }
+    (r.prizes||[]).forEach(p=>{
+      if(p && typeof p.dataUrl==='string' && p.dataUrl.startsWith('@img:')){
+        const key=p.dataUrl.slice(5);
+        p.dataUrl = horse[key] || null;
+        usedKeys.add(key);
+      }
+    });
+  });
+  usedKeys.forEach(k=>{ delete horse[k]; });
+}
+
 async function saveHorse(horse){
   if(!bankAccount.linked || !STABLE_URL) return false;
   const {artLog,...horseData}=horse;
@@ -346,6 +396,45 @@ async function saveHorse(horse){
       if(!ok) allOk = false;
     }
   }
+  // Chunk show art + prize photos out of compHistory before it ever gets
+  // stringified into the saveHorse request. `_imgUploaded` is cached on the
+  // real (in-memory) record so unchanged past shows aren't re-uploaded on
+  // every autosave — only newly added images get chunked again.
+  if(Array.isArray(horse.compHistory)){
+    const cleanHistory=[];
+    for(const rec of horse.compHistory){
+      const clean={...rec};
+      if(clean.image && clean.image.startsWith('data:')){
+        const key='show_'+rec.id+'_image';
+        if(!rec._imgUploaded){
+          const ok=await uploadImageRef(horse.id, key, clean.image);
+          if(ok) rec._imgUploaded=true; else allOk=false;
+        }
+        clean.image='@img:'+key;
+      }
+      if(Array.isArray(clean.prizes)){
+        const cleanPrizes=[];
+        for(let i=0;i<clean.prizes.length;i++){
+          const p=clean.prizes[i];
+          const cleanP={...p};
+          if(cleanP.dataUrl && cleanP.dataUrl.startsWith('data:')){
+            const key='show_'+rec.id+'_prize_'+i;
+            const uploadedFlags = rec._prizeUploaded || (rec._prizeUploaded={});
+            if(!uploadedFlags[i]){
+              const ok=await uploadImageRef(horse.id, key, cleanP.dataUrl);
+              if(ok) uploadedFlags[i]=true; else allOk=false;
+            }
+            cleanP.dataUrl='@img:'+key;
+          }
+          cleanPrizes.push(cleanP);
+        }
+        clean.prizes=cleanPrizes;
+      }
+      delete clean._imgUploaded; delete clean._prizeUploaded;
+      cleanHistory.push(clean);
+    }
+    horseData.compHistory=cleanHistory;
+  }
   const res = await stableGas({ action:'saveHorse', userId:bankAccount.userId, horseId:horse.id, horseJson:JSON.stringify(horseData) });
   if(!res?.success) allOk = false;
   return allOk;
@@ -353,7 +442,18 @@ async function saveHorse(horse){
 
 async function saveArtEntry(horse, entry){
   if(!bankAccount.linked || !STABLE_URL) return false;
-  const res = await stableGas({ action:'saveArtLogEntry', userId:bankAccount.userId, horseId:horse.id, entryJson:JSON.stringify(entry) });
+  let wireEntry = entry;
+  if(entry.image && entry.image.startsWith('data:')){
+    const key='art_'+entry.id;
+    if(!entry._imgUploaded){
+      const ok=await uploadImageRef(horse.id, key, entry.image);
+      if(!ok) return false;
+      entry._imgUploaded=true;
+    }
+    wireEntry = {...entry, image:'@img:'+key};
+    delete wireEntry._imgUploaded;
+  }
+  const res = await stableGas({ action:'saveArtLogEntry', userId:bankAccount.userId, horseId:horse.id, entryJson:JSON.stringify(wireEntry) });
   return !!res?.success;
 }
 
@@ -376,6 +476,7 @@ async function loadFromSheets(){
   }
   state.horses = horsesRes?.success ? (horsesRes.data||[]) : [];
   state.horses.forEach(h=>{
+    resolveImageRefs(h);
     if(h.referenceImage && h.refBonusGiven===undefined) h.refBonusGiven=true;
     if(!Array.isArray(h.completedMilestones)) h.completedMilestones=[];
     if(!Array.isArray(h.badges)) h.badges=[];
@@ -566,7 +667,7 @@ function render(){
     const stableOverride = params.get('stable');
     if(stableOverride && !STABLE_URL) STABLE_URL = stableOverride;
     loadPublicHorse(profileId, stableOverride).then(res=>{
-      if(res?.success && res.data){ renderHorseProfilePage(app, res.data); return; }
+      if(res?.success && res.data){ resolveImageRefs(res.data); renderHorseProfilePage(app, res.data); return; }
       // Diagnostic detail so we can tell apart: link missing the stable
       // param entirely, request never reaching the server (network/CORS/
       // timeout), vs. the Google Apps Script backend itself responding
@@ -1856,17 +1957,22 @@ function showEditCompModal(h, recId){
     rec.placement=newPlacement;
     if(newPrizes.length) rec.prizes=[...(rec.prizes||[]), ...newPrizes];
 
+    let entryOk = true;
     if(rec.artLogId){
       const entry=(h.artLog||[]).find(x=>x.id===rec.artLogId);
       if(entry && entry.nonPlacementExp!==undefined){
         entry.placement=newPlacement;
         const placeExp = newPlacement ? ({1:4,2:3,3:2}[newPlacement]||1) : 0;
         entry.exp = entry.nonPlacementExp + placeExp;
+        // FIX: this updated the in-memory art log entry, but saveHorse()
+        // never touches the ArtLog sheet — without resaving the entry
+        // itself, the new EXP/placement only lived until the next reload.
+        entryOk = await saveArtEntry(h, entry);
       }
     }
     recomputeHorse(h);
     addLog(`✏️ Updated show record for ${h.name} — ${rec.discipline}.`);
-    const ok = await saveHorse(h);
+    const ok = await saveHorse(h) && entryOk;
     await save();
     overlay.remove();
     render();
