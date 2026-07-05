@@ -2065,11 +2065,26 @@ const GENETIC_LOCI = [
       {code:"Chch", desc:"Champagne", price:700},
       {code:"ChCh", desc:"Champagne (homozygous)", price:700},
     ]},
-  { key:"silver", label:"Silver / Flaxen (Z)", requiresAny:{extension:["EE","Ee"], agouti:["aa","AtAt","Ata"]},
+  // Silver and Flaxen are two different genes that act on the SAME red
+  // extension/agouti split, but were previously coded as one locus gated
+  // by BOTH extension AND agouti — which meant the whole thing vanished
+  // on chestnut (killing Flaxen along with Silver). Split into two
+  // independent loci so each shows under the right base color: Silver
+  // acts on black pigment (Bay, Black, Seal Bay, Wild Bay — any agouti,
+  // as long as the horse is black-based), Flaxen acts on chestnut's
+  // mane/tail (Chestnut, Liver Chestnut, Black Chestnut — any agouti,
+  // as long as the horse is red-based / ee).
+  { key:"silver", label:"Silver Dapple (Z)", requiresAny:{extension:["EE","Ee"], agouti:["AA","Aa","aa","AtA","Ata","AtAt","Atat"]},
     options:[
       {code:"zz", desc:"No Silver", price:0},
-      {code:"Zz", desc:"Silver / Flaxen", price:150},
-      {code:"ZZ", desc:"Silver / Flaxen (homozygous)", price:150},
+      {code:"Zz", desc:"Silver Dapple", price:150},
+      {code:"ZZ", desc:"Silver Dapple (homozygous)", price:150},
+    ]},
+  { key:"flaxen", label:"Flaxen (F)", requiresAny:{extension:["ee"], agouti:["AA","Aa","aa","AtA","Ata","AtAt","Atat"]},
+    options:[
+      {code:"ff", desc:"No Flaxen", price:0},
+      {code:"nF", desc:"Flaxen", price:150},
+      {code:"FF", desc:"Flaxen (homozygous)", price:150},
     ]},
   { key:"grey", label:"Grey (G)",
     options:[
@@ -2196,7 +2211,15 @@ function getAllowedLoci(breed){
   const restricted=BREED_GENETICS[key];
   const optionalKeys=GENETIC_LOCI.filter(l=>!l.base).map(l=>l.key);
   if(!restricted) return optionalKeys;
-  return optionalKeys.filter(k=>restricted.includes(k));
+  // Silver and Flaxen are the same underlying trait complex, just visible
+  // on opposite base colors (Silver on black-based, Flaxen on chestnut).
+  // Breed lists were only ever written with "silver" in mind, so carry
+  // "flaxen" along automatically rather than requiring every breed entry
+  // to be edited by hand.
+  const list = restricted.includes("silver") && !restricted.includes("flaxen")
+    ? [...restricted, "flaxen"]
+    : restricted;
+  return optionalKeys.filter(k=>list.includes(k));
 }
 
 function computeGenoResult(selections, breed){
