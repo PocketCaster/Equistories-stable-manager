@@ -106,13 +106,8 @@ const BONUS_EXP = {
   "Simple Animation":2, "Complex Animation":5,
 };
 
-// One-time EXP bonus for uploading a horse's reference/registration sheet
-// for the first time. Only granted once per horse (tracked via refBonusGiven).
-// Matches the "Reference: +4 Exp" entry in the EquiStories-RPG ruleset.
 const REF_SHEET_EXP = 4;
 
-// Adult training options — names and stat values match the EquiStories-RPG
-// "Horse Stat System and Training" ruleset exactly.
 const TRAININGS = [
   {id:"bonding",     name:"Bonding / Misc. Art",             stats:{harmony:3},                                    prompt:"Any quiet moment between horse and handler/rider — grooming, feeding, hand-grazing — or any other miscellaneous/extra artwork of your horse that isn't tied to a specific training."},
   {id:"light_hack",  name:"Light Hack",                     stats:{balance:2,gaits:2,harmony:2},                  prompt:"Show a warmup, cool-down, or casual hack under saddle."},
@@ -131,9 +126,6 @@ const TRAININGS = [
   {id:"equibreak",   name:"Equibreak",                        stats:{harmony:3},                                    prompt:"Depict a breaking milestone for a young or not-yet-broke horse — first halter, first tack, first rider, or first solo work under saddle.", youngOnly:true},
 ];
 
-// Age-up milestones for young horses. Each stage requires completing a set
-// number of DISTINCT prompts from its list of options before the horse can
-// advance to the next stage (foal → yearling → two-year-old → adult).
 const MILESTONES = {
   foal: {
     next: "yearling",
@@ -155,7 +147,7 @@ const MILESTONES = {
   },
   "two-year-old": {
     next: "adult",
-    required: 3, // all of them
+    required: 3,
     options: [
       {id:"2yo_backing",    name:"Backing a Rider / Doll",             stats:{balance:2,harmony:2}, prompt:"Depict your two-year-old backing a rider or doll for the first time. One full body of the adult."},
       {id:"2yo_aids",       name:"Training Aids & Objects",            stats:{harmony:3},           prompt:"Depict your two-year-old experiencing training aids and objects — cones, ground poles, flower boxes, jumps, etc. One full body of the adult."},
@@ -164,9 +156,6 @@ const MILESTONES = {
   },
 };
 
-// Returns the list of training options a horse can currently log, based on
-// its stage: milestone prompts (+ Equibreak) for young horses, or the full
-// adult training list once they're broke.
 function trainingOptionsFor(h){
   const m = MILESTONES[h.stage];
   if(m){
@@ -199,8 +188,6 @@ const DISCIPLINES = {
   "Reining":                       {stats:["balance","gaits","strength"],                                                difficulties:GENERIC_DIFFICULTIES},
 };
 
-// Literature EXP per the ruleset: +2 EXP for reaching the 200-word minimum,
-// plus +5 EXP for every 750 words on top of that.
 function calcLitExp(wc){
   if(!wc || wc < 200) return 0;
   return 2 + Math.floor(wc/750)*5;
@@ -236,9 +223,6 @@ function openLightbox(src, caption){
   lb.onclick = ()=>lb.remove();
   document.body.appendChild(lb);
 }
-// Exposed on window because it's called from onclick="..." attributes inside
-// dynamically-injected innerHTML, which resolve against global scope — not
-// the closure of this IIFE.
 window.openLightbox = openLightbox;
 
 // Downscale + compress an uploaded image file before turning it into a
@@ -247,6 +231,10 @@ window.openLightbox = openLightbox;
 // phone photos (often 1-5MB) blow past the URL length limit and the sync
 // silently fails, so the image looks fine locally but never actually saves.
 // Keeping images small and compressed keeps them reliably under that limit.
+//
+// EVERY image upload in this app (profile photo, reference sheet, training
+// art, competition art, prize/ribbon photos, tack images) MUST go through
+// this before being stored, or it will silently fail to persist.
 function resizeImageFile(file, maxDim=900, quality=0.75){
   return new Promise((resolve,reject)=>{
     const reader = new FileReader();
@@ -275,7 +263,6 @@ function resizeImageFile(file, maxDim=900, quality=0.75){
 // GOOGLE SHEETS BACKEND
 // ============================================
 
-// JSONP transport — same approach as full sim to bypass CORS
 function stableGas(payload){
   return new Promise(resolve=>{
     if(!STABLE_URL){ resolve({success:false,error:'No Stable Data URL configured.'}); return; }
@@ -321,15 +308,6 @@ function saveBankAccount(){
   try{ localStorage.setItem('equi-lite-bank', JSON.stringify(bankAccount)); }catch(e){}
 }
 
-// Save full stable to Google Sheets
-// IMPORTANT: this used to re-send every horse's *full* base64 profileImage
-// and referenceImage on every single call — and save() runs after nearly
-// every action (training, tack changes, adding a horse, etc.), not just
-// photo uploads. A real photo is way too big for the GET-request transport
-// this app uses, so those requests were silently failing constantly, which
-// is the main reason horses/photos kept vanishing or failing to sync.
-// Images are uploaded separately (via saveHorse/saveHorseImageChunked) —
-// so here we just strip them out and send the lightweight rest of the data.
 async function save(){
   if(!bankAccount.linked || !STABLE_URL) return;
   const userId = bankAccount.userId;
@@ -344,12 +322,6 @@ async function save(){
   await Promise.all(tasks);
 }
 
-// Upload a base64 image in small pieces instead of one request. A full-size
-// photo's base64 string is tens of thousands of characters, which is far
-// past what a GET request's URL can reliably carry — that request just
-// silently fails, which is why photos/reference sheets used to disappear
-// the moment the app re-loaded from the sheet. Splitting it into small
-// chunks keeps every request safely within URL length limits.
 const IMAGE_CHUNK_SIZE = 3000;
 async function saveHorseImageChunked(userId, horseId, imageKey, imageData){
   const totalChunks = Math.ceil(imageData.length / IMAGE_CHUNK_SIZE) || 1;
@@ -362,15 +334,10 @@ async function saveHorseImageChunked(userId, horseId, imageKey, imageData){
   return true;
 }
 
-// Save a single horse (faster — called after training/comp)
-// Automatically strips base64 images and saves them separately.
-// Returns true only if every request involved actually succeeded, so
-// callers can warn the user instead of assuming data was saved.
 async function saveHorse(horse){
   if(!bankAccount.linked || !STABLE_URL) return false;
   const {artLog,...horseData}=horse;
   let allOk = true;
-  // Save images separately before stripping them
   const IMAGE_KEYS = ['profileImage','referenceImage'];
   for(const key of IMAGE_KEYS){
     if(horseData[key] && horseData[key].startsWith('data:')){
@@ -383,13 +350,12 @@ async function saveHorse(horse){
   return allOk;
 }
 
-// Save a new art log entry
 async function saveArtEntry(horse, entry){
-  if(!bankAccount.linked || !STABLE_URL) return;
-  await stableGas({ action:'saveArtLogEntry', userId:bankAccount.userId, horseId:horse.id, entryJson:JSON.stringify(entry) });
+  if(!bankAccount.linked || !STABLE_URL) return false;
+  const res = await stableGas({ action:'saveArtLogEntry', userId:bankAccount.userId, horseId:horse.id, entryJson:JSON.stringify(entry) });
+  return !!res?.success;
 }
 
-// Delete a horse from sheets
 async function deleteHorseFromSheets(horseId){
   if(!bankAccount.linked || !STABLE_URL) return;
   await stableGas({ action:'deleteHorse', userId:bankAccount.userId, horseId });
@@ -408,9 +374,6 @@ async function loadFromSheets(){
     state.log=[]; state.tackInventory=[];
   }
   state.horses = horsesRes?.success ? (horsesRes.data||[]) : [];
-  // Backfill: horses saved before the reference-sheet bonus existed may
-  // already have a reference sheet uploaded. Don't let a later re-upload
-  // retroactively award the "first submission" bonus for those.
   state.horses.forEach(h=>{
     if(h.referenceImage && h.refBonusGiven===undefined) h.refBonusGiven=true;
     if(!Array.isArray(h.completedMilestones)) h.completedMilestones=[];
@@ -421,22 +384,17 @@ async function loadFromSheets(){
   state.loaded = true;
 }
 
-// Load a single horse by ID without login (for public profile pages)
 async function loadPublicHorse(horseId){
   const res = await stableGas({ action:'loadPublicHorse', horseId });
   return res?.success ? res.data : null;
 }
 
 async function load(){
-  // Load bank credentials
   try{
     const b=localStorage.getItem('equi-lite-bank');
     if(b){ const bd=JSON.parse(b); bankAccount={userId:bd.userId||'',password:bd.password||'',linked:bd.linked||false}; }
   }catch(e){}
 
-  // If we land directly on a shared profile URL (no prior session in this tab),
-  // still load the full stable in the background if we're logged in, so that
-  // navigating "back" to the roster doesn't show a blank/incomplete state.
   if(bankAccount.linked && STABLE_URL){
     await loadFromSheets();
   } else {
@@ -449,10 +407,6 @@ async function load(){
 // ============================================
 // CLIENT-SIDE ROUTING (no full page reloads)
 // ============================================
-// Real navigation (<a href="?horse=...">) reloads the whole page, which
-// (a) wipes in-memory state and (b) can abort in-flight saves to Google
-// Sheets mid-request, causing data loss. These helpers update the URL
-// with pushState and re-render in place instead.
 
 function goToProfile(horseId){
   const url = new URL(window.location.href);
@@ -493,16 +447,11 @@ function newHorse(data){
     profileImage:null, referenceImage:null, referenceLink:null, refBonusGiven:false,
     artLog:[], completedMilestones:[], badges:[],
     gender:data.gender||"", phenotype:data.phenotype||"", genotype:data.genotype||"",
-    // Pedigree — 3 generations. Each ancestor: {name, link, inRosterId}
-    // Slot keys: sire, dam, ss, sd, ds, dd, sss, ssd, sds, sdd, dss, dsd, dds, ddd
     pedigree: data.pedigree || {},
-    // Keep legacy fields for backwards compat
     sireId:null, sireName:"", sireOwner:"", damId:null, damName:"", damOwner:"",
-    tackOwned:[],       // [{id,name,image,stats:{stat:val},category}]
-    tackEquipped:[],    // array of tackOwned ids currently equipped
-    breedingRecords:[], // [{id, slotIndex, partnerName, partnerOwner, role:"sire"|"dam", date, foalId, foalName, note}]
-    compHistory:[],     // [{id, date, discipline, difficulty, placement, venue, note, image}]
-    // Profile page public fields
+    tackOwned:[], tackEquipped:[],
+    breedingRecords:[],
+    compHistory:[],
     ownerName: data.ownerName||"",
     ownerLink: data.ownerLink||"",
     riderName: data.riderName||"",
@@ -510,10 +459,9 @@ function newHorse(data){
     stableLink: data.stableLink||"",
     personality: data.personality||"",
     horseHistory: data.horseHistory||"",
-    // Net worth (Lightblood pricing)
     genoBasePrice: data.genoBasePrice||0,
-    genoModifiers: data.genoModifiers||[],  // [{label, value}]
-    customNetWorth: data.customNetWorth||null, // override if set manually
+    genoModifiers: data.genoModifiers||[],
+    customNetWorth: data.customNetWorth||null,
   };
 }
 
@@ -548,22 +496,16 @@ function applyLevelsFromExp(h, silent){
 }
 function checkLevelUp(h){ applyLevelsFromExp(h, false); }
 
-// Rebuilds a horse's exp/stats/level/breedingSlots/badges/completedMilestones
-// entirely from scratch by replaying its remaining art log entries in order.
-// This is what makes deleting or editing a training/competition entry safe —
-// rather than trying to subtract one entry's effects back out (error-prone
-// once several level-ups and milestones have layered on top of each other),
-// we just recompute the whole horse from what's left.
 function recomputeHorse(h){
   const baseStats={}; STATS.forEach(s=>baseStats[s]=BASE_STAT_VALUE);
   h.stats = baseStats;
   h.level = 1;
-  h.breedingSlots = BASE_BREEDING_SLOTS + (h.breedingFilled||0)*0; // slots unaffected by fills
+  h.breedingSlots = BASE_BREEDING_SLOTS + (h.breedingFilled||0)*0;
   h.badges = [];
   h.completedMilestones = [];
   h.exp = 0;
 
-  const chronological = [...(h.artLog||[])].reverse(); // artLog is newest-first
+  const chronological = [...(h.artLog||[])].reverse();
   chronological.forEach(entry=>{
     h.exp += entry.exp||0;
     if(entry.statsDelta) Object.entries(entry.statsDelta).forEach(([s,v])=>{ h.stats[s]=(h.stats[s]||0)+v; });
@@ -572,9 +514,6 @@ function recomputeHorse(h){
   applyLevelsFromExp(h, true);
 }
 
-// Deletes a single art log entry (training or competition) and recomputes
-// the horse's exp/stats/level/badges/milestones from what's left. If a
-// competition record referenced this entry, that record is removed too.
 function deleteArtLogEntry(h, entryId){
   const idx=(h.artLog||[]).findIndex(e=>e.id===entryId);
   if(idx===-1) return;
@@ -585,8 +524,6 @@ function deleteArtLogEntry(h, entryId){
   saveHorse(h); save(); render();
 }
 
-// Deletes a competition history record and its linked art log entry (if any),
-// reversing EXP/stats the same way.
 function deleteCompRecord(h, recId){
   const rec=(h.compHistory||[]).find(r=>r.id===recId);
   if(!rec) return;
@@ -605,14 +542,11 @@ function render(){
   const app = document.getElementById('app');
   if(!state.loaded){ app.innerHTML='<div style="padding:30px;color:#b5a392;">Loading…</div>'; return; }
 
-  // Check for horse profile URL (?horse=ID) — public, no login needed
   const params = new URLSearchParams(window.location.search);
   const profileId = params.get('horse');
   if(profileId){
-    // First check if horse is in local state
     const localHorse = state.horses.find(x=>x.id===profileId);
     if(localHorse){ renderHorseProfilePage(app, localHorse); return; }
-    // Otherwise load from sheets publicly
     app.innerHTML='<div style="padding:40px;text-align:center;color:#b5a392;font-family:Georgia,serif;">🐴 Loading horse profile…</div>';
     loadPublicHorse(profileId).then(h=>{
       if(h){ renderHorseProfilePage(app, h); }
@@ -621,7 +555,6 @@ function render(){
     return;
   }
 
-  // Show login screen if not linked
   if(!bankAccount.linked){
     renderLoginScreen(app);
     return;
@@ -719,7 +652,6 @@ function renderLoginScreen(app){
     const adminInp=app.querySelector('#li_admin_pass');
     if(!url){ res.innerHTML='<span style="color:#e08080;">Please paste a URL first.</span>'; return; }
     if(!url.includes('script.google.com')){ res.innerHTML='<span style="color:#e08080;">That does not look like a Google Apps Script URL.</span>'; return; }
-    // If URL already set, require passcode
     if(STABLE_URL && adminInp){
       if(adminInp.value !== 'Eqistories123'){ res.innerHTML='<span style="color:#e08080;">Incorrect admin passcode.</span>'; return; }
     }
@@ -737,7 +669,6 @@ function renderLoginScreen(app){
 function renderRoster(){
   const wrap = el('div');
 
-  // Add horse form
   const form = el('div','card',`
     <h3>Add a Horse</h3>
     <div class="row">
@@ -770,13 +701,10 @@ function renderRoster(){
     const wrapEl=form.querySelector('#nh_genetics_wrap');
     wrapEl.innerHTML=`<div class="row" style="flex-wrap:wrap;gap:8px;">
       ${loci.map(locus=>{
-        // Gated loci (Silver, PATN1/2) only show once ALL their prerequisites are satisfied
         if(locus.requiresAny){
           const satisfiesAll=Object.entries(locus.requiresAny).every(([reqKey,reqCodes])=>reqCodes.includes(genoSelections[reqKey]));
           if(!satisfiesAll) return "";
         }
-        // Agouti always applies now — it determines Chestnut/Liver Chestnut/
-        // Black Chestnut on ee, and Black/Bay/Seal Bay on E_.
         const current=genoSelections[locus.key]||locus.options[0].code;
         genoSelections[locus.key]=current;
         return `<div style="min-width:180px;"><label class="small">${locus.label}</label>
@@ -814,7 +742,6 @@ function renderRoster(){
     save(); render();
   };
 
-  // Horse cards
   state.horses.forEach(h=>{
     const open = expandedLogs.has(h.id);
     const pct = h.level>=10?100:Math.min(100,((h.exp-LEVEL_TABLE[h.level].exp)/(LEVEL_TABLE[h.level+1].exp-LEVEL_TABLE[h.level].exp))*100);
@@ -856,7 +783,6 @@ function renderRoster(){
         </div>`
       : `<div class="small" style="margin-top:6px;color:#5a4a3a;">📋 No reference sheet uploaded.</div>`;
 
-    // Tack equip section
     const inv = state.tackInventory||[];
     const equippedHtml = (h.tackEquipped||[]).length
       ? (h.tackEquipped||[]).map(tid=>{
@@ -920,7 +846,6 @@ function renderRoster(){
 
   if(!state.horses.length) wrap.appendChild(el('div','small','<div style="padding:12px;color:#5a4a3a;">No horses yet — add one above!</div>'));
 
-  // Event handlers
   wrap.querySelectorAll('[data-act="toggle-log"]').forEach(b=>b.onclick=()=>{
     if(expandedLogs.has(b.dataset.id)) expandedLogs.delete(b.dataset.id);
     else expandedLogs.add(b.dataset.id);
@@ -1090,7 +1015,6 @@ function showBreedingSlotModal(horseId, slotIndex){
 // PEDIGREE HELPERS
 // ============================================
 
-// Slot definitions — key, label, column (1=horse, 2=parents, 3=grandparents, 4=great-grandparents)
 const PED_SLOTS = [
   {key:"sire",  label:"Sire",  col:2, parent:null,   side:"top"},
   {key:"dam",   label:"Dam",   col:2, parent:null,   side:"bot"},
@@ -1124,7 +1048,6 @@ function pedLink(entry, label){
   return `<span style="color:${name==="Unknown"?"#4a392a":"#f1e6d8"};font-weight:${name!=="Unknown"?"bold":"normal"};">${name}</span>`;
 }
 
-// Render the visual pedigree chart (matches the layout in the screenshot)
 function renderPedigreeChart(h){
   const p = h.pedigree || {};
 
@@ -1141,7 +1064,6 @@ function renderPedigreeChart(h){
     <div style="font-size:.78em;color:#b5a392;margin-bottom:8px;font-family:Georgia,serif;">Bloodline:</div>
 
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0;">
-      <!-- Column layout matching screenshot -->
       <div>
         <div style="font-size:.85em;padding:2px 0;"><b style="color:#c98a3a;">Sire:</b> ${pedLink(pedEntry(h,'sire'),'Sire')}</div>
         <div style="font-size:.85em;padding:2px 0;margin-top:4px;"><b style="color:#c98a3a;">Dam:</b> ${pedLink(pedEntry(h,'dam'),'Dam')}</div>
@@ -1149,7 +1071,6 @@ function renderPedigreeChart(h){
     </div>
 
     <div style="margin-top:10px;border-left:2px solid #4a392a;padding-left:10px;">
-      <!-- Sire side -->
       <div style="margin-bottom:2px;">${row('ss','SS',0)}</div>
       <div style="margin-bottom:8px;padding-left:20px;">
         ${row('sss','SSS',0)}
@@ -1163,7 +1084,6 @@ function renderPedigreeChart(h){
     </div>
 
     <div style="margin-top:6px;border-left:2px solid #4a392a;padding-left:10px;">
-      <!-- Dam side -->
       <div style="margin-bottom:2px;">${row('ds','DS',0)}</div>
       <div style="margin-bottom:8px;padding-left:20px;">
         ${row('dss','DSS',0)}
@@ -1187,7 +1107,6 @@ function showLineageModal(horseId){
   if(!h) return;
   if(!h.pedigree) h.pedigree={};
 
-  // Migrate legacy fields
   if(h.sireName && !h.pedigree.sire) h.pedigree.sire={name:h.sireName, link:"", inRosterId:h.sireId||""};
   if(h.damName && !h.pedigree.dam)   h.pedigree.dam ={name:h.damName,  link:"", inRosterId:h.damId||""};
 
@@ -1249,7 +1168,6 @@ function showLineageModal(horseId){
       if(!h.pedigree[key]) h.pedigree[key]={name:"",link:"",inRosterId:""};
       h.pedigree[key][field]=inp.value.trim();
     });
-    // Update legacy fields for backwards compat
     h.sireId=h.pedigree.sire?.inRosterId||null;
     h.sireName=h.pedigree.sire?.name||"";
     h.damId=h.pedigree.dam?.inRosterId||null;
@@ -1258,7 +1176,6 @@ function showLineageModal(horseId){
     save(); overlay.remove(); render();
   };
 }
-
 
 // ============================================
 // TRAINING TAB
@@ -1407,15 +1324,22 @@ function renderTraining(){
     prev.style.color=wc<200&&wc>0?"#c9a23a":"#7a9b6e";
   };
 
-  card.querySelector('#tr_image_file').onchange=e=>{
+  // FIX (was the training-entry save bug): this used to read the file with
+  // plain FileReader.readAsDataURL(f), storing a full-resolution image.
+  // That produces a base64 string far too long for the GET/JSONP request
+  // this app uses to sync to Google Sheets, so the save silently failed
+  // and the training entry vanished on refresh. Now routed through
+  // resizeImageFile(), the same compression already used for profile and
+  // reference photos.
+  card.querySelector('#tr_image_file').onchange=async e=>{
     const f=e.target.files[0]; if(!f) return;
-    const r=new FileReader(); r.onload=()=>{
-      uploadedImage=r.result;
+    try{
+      uploadedImage = await resizeImageFile(f);
       card.querySelector('#tr_image_preview').innerHTML=`<img src="${uploadedImage}" style="max-height:120px;border-radius:6px;border:1px solid #4a392a;object-fit:contain;" />`;
-    }; r.readAsDataURL(f);
+    }catch(err){ alert('Could not process that image: '+err.message); }
   };
 
-  card.querySelector('#tr_go').onclick=()=>{
+  card.querySelector('#tr_go').onclick=async()=>{
     const hId=card.querySelector('#tr_horse').value;
     const h=state.horses.find(x=>x.id===hId);
     const tId=card.querySelector('#tr_type').value;
@@ -1436,7 +1360,6 @@ function renderTraining(){
     if(t2) Object.entries(t2.stats).forEach(([s,v])=>allStats[s]=(allStats[s]||0)+v);
     Object.entries(allStats).forEach(([s,v])=>h.stats[s]=(h.stats[s]||0)+v);
 
-    // Track age-up milestone completion for young horses
     const m=MILESTONES[h.stage];
     const milestoneIds=[];
     if(m){
@@ -1461,11 +1384,21 @@ function renderTraining(){
     h.artLog.unshift(trainEntry);
     const statsStr=Object.entries(allStats).map(([s,v])=>`+${v} ${STAT_LABELS[s]}`).join(", ");
     addLog(`🎨 ${h.name} — ${label} (${statsStr}) · +${expGain} EXP`);
-    saveHorse(h);
-    saveArtEntry(h, trainEntry);
-    save();
 
-    res.innerHTML=`<div class="result success">✅ Training logged! ${statsStr} · +${expGain} EXP (${sources.join(", ")})</div>`;
+    res.innerHTML=`<div class="result">⏳ Saving…</div>`;
+    // FIX: previously these calls were fired without awaiting or checking
+    // their result, so a failed save (still-too-large image, network
+    // hiccup) gave no feedback at all — the entry just silently vanished
+    // on reload with no error shown.
+    const [hOk, entryOk] = await Promise.all([ saveHorse(h), saveArtEntry(h, trainEntry) ]);
+    await save();
+
+    if(hOk && entryOk){
+      res.innerHTML=`<div class="result success">✅ Training logged & saved! ${statsStr} · +${expGain} EXP (${sources.join(", ")})</div>`;
+    } else {
+      res.innerHTML=`<div class="result fail">⚠️ Training was recorded here, but saving it to the Stable Data sheet failed. Try again, or check your Stable Data URL in Admin settings.</div>`;
+    }
+
     uploadedImage=null;
     card.querySelector('#tr_image_preview').innerHTML='';
     card.querySelector('#tr_image_file').value='';
@@ -1517,7 +1450,7 @@ function renderCompete(){
 
 function buildShowLogForm(){
   const wrap=el('div');
-  const prizeImages=[]; // array of {dataUrl, label}
+  const prizeImages=[];
   let artImage=null;
 
   const card=el('div','card');
@@ -1608,13 +1541,11 @@ function buildShowLogForm(){
   `;
   wrap.appendChild(card);
 
-  // Discipline → updates class placeholder
   card.querySelector('#cs_disc').onchange=()=>{
     const disc=card.querySelector('#cs_disc').value;
     card.querySelector('#cs_class').placeholder=`e.g. ${DISCIPLINES[disc]?.difficulties?.[0]||'Open'}`;
   };
 
-  // Lit preview
   if(card.querySelector('#cs_lit')){
     card.querySelector('#cs_lit').oninput=()=>{
       const wc=parseInt(card.querySelector('#cs_lit').value)||0;
@@ -1624,7 +1555,6 @@ function buildShowLogForm(){
     };
   }
 
-  // Bonus pills
   const selectedBonuses=new Set();
   card.querySelectorAll('[data-bonus]').forEach(p=>p.onclick=()=>{
     const k=p.dataset.bonus;
@@ -1632,16 +1562,19 @@ function buildShowLogForm(){
     else{selectedBonuses.add(k);p.classList.add('active');}
   });
 
-  // Show art upload
-  card.querySelector('#cs_art_file').onchange=e=>{
+  // FIX (this was the show-art part of the bug): previously raw
+  // FileReader.readAsDataURL — full-res show art photos were too large for
+  // the GET/JSONP sync, so the whole show record (placement, notes, etc,
+  // all bundled into the same request as the image) failed to save
+  // silently. Now compressed via resizeImageFile() first.
+  card.querySelector('#cs_art_file').onchange=async e=>{
     const f=e.target.files[0]; if(!f) return;
-    const r=new FileReader(); r.onload=()=>{
-      artImage=r.result;
+    try{
+      artImage = await resizeImageFile(f);
       card.querySelector('#cs_art_preview').innerHTML=`<img src="${artImage}" style="max-height:120px;border-radius:6px;border:1px solid #4a392a;object-fit:contain;cursor:zoom-in;" onclick="openLightbox('${artImage}','Show Art')" />`;
-    }; r.readAsDataURL(f);
+    }catch(err){ alert('Could not process that image: '+err.message); }
   };
 
-  // Prize upload area
   function refreshPrizeArea(){
     const area=card.querySelector('#cs_prize_area');
     area.innerHTML=prizeImages.length ? prizeImages.map((p,i)=>`
@@ -1663,21 +1596,26 @@ function buildShowLogForm(){
   }
   refreshPrizeArea();
 
+  // FIX (this was the prize/ribbon part of the bug): same raw-FileReader
+  // problem as above — ribbon/trophy/prize photos are almost always
+  // full-res phone photos, and they were never compressed, so any show
+  // with a prize photo attached would blow the request size and fail to
+  // persist. Now goes through resizeImageFile() too.
   card.querySelector('#cs_add_prize').onclick=()=>{
     const inp=document.createElement('input');
     inp.type='file'; inp.accept='image/*';
-    inp.onchange=e=>{
+    inp.onchange=async e=>{
       const f=e.target.files[0]; if(!f) return;
-      const r=new FileReader(); r.onload=()=>{
-        prizeImages.push({dataUrl:r.result, label:""});
+      try{
+        const dataUrl = await resizeImageFile(f);
+        prizeImages.push({dataUrl, label:""});
         refreshPrizeArea();
-      }; r.readAsDataURL(f);
+      }catch(err){ alert('Could not process that image: '+err.message); }
     };
     inp.click();
   };
 
-  // Save handler
-  card.querySelector('#cs_go').onclick=()=>{
+  card.querySelector('#cs_go').onclick=async()=>{
     const hId=card.querySelector('#cs_horse').value;
     const h=state.horses.find(x=>x.id===hId);
     const disc=card.querySelector('#cs_disc').value;
@@ -1691,7 +1629,6 @@ function buildShowLogForm(){
     const link=card.querySelector('#cs_link')?.value.trim()||"";
     const res=card.querySelector('#cs_result');
 
-    // EXP (only if art type selected)
     let expGain=0;
     let nonPlacementExp=0;
     const sources=[];
@@ -1700,7 +1637,6 @@ function buildShowLogForm(){
       expGain+=ART_EXP[artType]; sources.push(`${artType} (+${ART_EXP[artType]})`);
       const litExp=calcLitExp(litWords);
       if(litExp>0){expGain+=litExp; sources.push(`Lit ${litWords}w (+${litExp})`);}
-      // Show bonuses: +1 EXP flat for entering, plus a placement bonus on top
       expGain+=1; sources.push(`Show Entry (+1)`);
       selectedBonuses.forEach(k=>{if(BONUS_EXP[k]){expGain+=BONUS_EXP[k]; sources.push(`${k} (+${BONUS_EXP[k]})`);}});
       nonPlacementExp=expGain;
@@ -1711,8 +1647,8 @@ function buildShowLogForm(){
       if(disc && DISCIPLINES[disc]?.stats) DISCIPLINES[disc].stats.forEach(s=>{ h.stats[s]=(h.stats[s]||0)+1; discStats[s]=(discStats[s]||0)+1; });
     }
 
-    // Save art log entry if art was provided
     let artLogId=null;
+    let entryOk=true;
     if(artImage && artType){
       artLogId=uid2();
       const artEntry={id:artLogId,day:state.log.length+1,type:"competition",label:`${disc}${venue?" — "+venue:""}`,
@@ -1720,10 +1656,9 @@ function buildShowLogForm(){
         bonuses:[...selectedBonuses],exp:expGain,link:link||null,image:artImage,
         statsDelta:discStats,nonPlacementExp,discipline:disc};
       h.artLog.unshift(artEntry);
-      saveArtEntry(h, artEntry);
+      entryOk = await saveArtEntry(h, artEntry);
     }
 
-    // Save comp history record
     if(!h.compHistory) h.compHistory=[];
     const rec={
       id:uid2(), discipline:disc, difficulty:className, venue, date,
@@ -1734,12 +1669,20 @@ function buildShowLogForm(){
 
     const placeLabel=placement?["1st","2nd","3rd","4th","5th","6th"][placement-1]||placement+"th":"Participant";
     addLog(`🏆 ${h.name} — ${disc}${venue?" at "+venue:""} · ${placeLabel}${expGain?` · +${expGain} EXP`:""}`);
-    saveHorse(h);
-    save();
 
-    res.innerHTML=`<div class="result success">✅ Show logged!${expGain?` +${expGain} EXP (${sources.join(", ")})`:""} ${prizeImages.length?`🎀 ${prizeImages.length} prize(s) saved.`:""}</div>`;
+    res.innerHTML=`<div class="result">⏳ Saving…</div>`;
+    // FIX: previously fired without awaiting/checking, so a failed save
+    // (oversized payload, network hiccup) never surfaced to the user —
+    // the whole show record just quietly failed to persist.
+    const hOk = await saveHorse(h);
+    await save();
 
-    // Reset
+    if(hOk && entryOk){
+      res.innerHTML=`<div class="result success">✅ Show logged & saved!${expGain?` +${expGain} EXP (${sources.join(", ")})`:""} ${prizeImages.length?`🎀 ${prizeImages.length} prize(s) saved.`:""}</div>`;
+    } else {
+      res.innerHTML=`<div class="result fail">⚠️ Show was recorded here, but saving it to the Stable Data sheet failed. Try again, or check your Stable Data URL in Admin settings.</div>`;
+    }
+
     artImage=null; prizeImages.length=0;
     card.querySelector('#cs_art_preview').innerHTML='';
     card.querySelector('#cs_art_file').value='';
@@ -1763,7 +1706,6 @@ function buildShowHistory(){
     const trophies=history.filter(c=>c.placement>=1&&c.placement<=3);
     const card=el('div','card');
 
-    // Ribbon wall — includes prize photos too
     const ribbonWallHtml=trophies.length?`
       <div style="margin-bottom:14px;">
         <div class="small" style="margin-bottom:6px;color:#b5a392;">🏆 Ribbon Wall</div>
@@ -1772,7 +1714,6 @@ function buildShowHistory(){
             const icon=c.placement===1?"🥇":c.placement===2?"🥈":"🥉";
             const placeStr=["1st","2nd","3rd"][c.placement-1];
             const prizes=c.prizes||[];
-            // Show main image if exists, otherwise first prize image, otherwise emoji
             const mainImg=c.image||( prizes[0]?.dataUrl||null);
             return `<div style="background:#15100c;border:1px solid #4a392a;border-radius:8px;padding:8px;text-align:center;min-width:80px;max-width:110px;">
               ${mainImg?`<img src="${mainImg}" style="width:70px;height:70px;object-fit:cover;border-radius:5px;display:block;margin:0 auto 4px;cursor:zoom-in;" onclick="openLightbox('${mainImg}','${c.discipline} — ${placeStr}')" />`:`<div style="font-size:2.2em;margin-bottom:4px;">${icon}</div>`}
@@ -1801,7 +1742,7 @@ function buildShowHistory(){
           const prizes=c.prizes||[];
           return `<div class="artlog-entry">
             <div style="display:flex;gap:8px;align-items:flex-start;">
-              ${c.image?`<img src="${c.image}" class="artlog-thumb" style="flex:none;cursor:zoom-in;" onclick="openLightbox('${c.image}','${c.discipline}')" />`:""}
+              ${c.image?`<img src="${c.image}" class="artlog-thumb" style="cursor:zoom-in;" onclick="openLightbox('${c.image}','${c.discipline}')" />`:""}
               <div style="flex:1;">
                 ${icon} <b>${c.discipline}</b>${c.difficulty?` — ${c.difficulty}`:""} <span class="tag">${placeLabel}</span>
                 ${c.venue?`<div class="small">${c.venue}${c.date?` · ${c.date}`:""}</div>`:(c.date?`<div class="small">${c.date}</div>`:"")}
@@ -1840,10 +1781,6 @@ function buildShowHistory(){
   return wrap;
 }
 
-// Lets you add/change a show's placement and add prize photos after the
-// fact — for when art is logged before a show is judged. If art/EXP was
-// logged for this show, its placement-based EXP is recalculated and the
-// horse's stats/level are recomputed to match.
 function showEditCompModal(h, recId){
   const rec=(h.compHistory||[]).find(r=>r.id===recId);
   if(!rec) return;
@@ -1878,7 +1815,7 @@ function showEditCompModal(h, recId){
   };
 
   overlay.querySelector('#ec_cancel').onclick=()=>overlay.remove();
-  overlay.querySelector('#ec_save').onclick=()=>{
+  overlay.querySelector('#ec_save').onclick=async()=>{
     const newPlacement=Number(overlay.querySelector('#ec_place').value)||null;
     rec.placement=newPlacement;
     if(newPrizes.length) rec.prizes=[...(rec.prizes||[]), ...newPrizes];
@@ -1893,9 +1830,11 @@ function showEditCompModal(h, recId){
     }
     recomputeHorse(h);
     addLog(`✏️ Updated show record for ${h.name} — ${rec.discipline}.`);
-    saveHorse(h); save();
+    const ok = await saveHorse(h);
+    await save();
     overlay.remove();
     render();
+    if(!ok) alert(`The edit was applied here, but saving it to the Stable Data sheet failed. Try again, or check your Stable Data URL in Admin settings.`);
   };
 }
 
@@ -1981,15 +1920,18 @@ function renderTackInventory(){
   wrap.appendChild(form);
 
   let tackImage=null;
-  form.querySelector('#tk_image_file').onchange=e=>{
+  // FIX: also switched to resizeImageFile — tack item photos are saved as
+  // part of state.tackInventory in the same synced payload, so an
+  // uncompressed image here could push that whole save over the limit too.
+  form.querySelector('#tk_image_file').onchange=async e=>{
     const f=e.target.files[0]; if(!f) return;
-    const r=new FileReader(); r.onload=()=>{
-      tackImage=r.result;
+    try{
+      tackImage = await resizeImageFile(f);
       form.querySelector('#tk_image_preview').innerHTML=`<img src="${tackImage}" style="max-height:100px;border-radius:6px;border:1px solid #4a392a;" />`;
-    }; r.readAsDataURL(f);
+    }catch(err){ alert('Could not process that image: '+err.message); }
   };
 
-  form.querySelector('#tk_add').onclick=()=>{
+  form.querySelector('#tk_add').onclick=async()=>{
     const name=form.querySelector('#tk_name').value.trim();
     if(!name){ alert("Give the tack item a name first!"); return; }
     const cat=form.querySelector('#tk_cat').value;
@@ -2002,10 +1944,9 @@ function renderTackInventory(){
     if(!state.tackInventory) state.tackInventory=[];
     state.tackInventory.push(item);
     addLog(`🏇 Added "${name}" (${cat}) to the tack inventory.`);
-    save(); render();
+    await save(); render();
   };
 
-  // Inventory display
   const inv = state.tackInventory||[];
   const invCard=el('div','card');
   invCard.innerHTML=`<h3>Owned Tack (${inv.length})</h3>`;
@@ -2054,9 +1995,6 @@ const GENO_BASE_PRICES = [
   {label:"Chestnut", value:700},
 ];
 
-// Special/fictitious extras not covered by real coat genetics — added on
-// top via the Net Worth modal. Breed-specific fictitious genes/mutations
-// with their own Buxx prices can be slotted in here as that catalog grows.
 const GENO_MODIFIERS = {
   "Rare Markings": [
     {label:"Fairylock", value:600},
@@ -2092,16 +2030,6 @@ const GENO_MODIFIERS = {
   ],
 };
 
-// ============================================
-// GENETICS ENGINE — allele-level coat color genetics
-// ============================================
-// Each locus lists its possible genotype states (zygosity) with the
-// phenotype it produces and its price contribution. `requiresAny` gates a
-// locus so it only applies when another locus resolved to one of the
-// listed genotypes (e.g. Silver only shows on black-based horses).
-// Extension/Agouti together determine the 3-tier base price
-// (Bay/Black, Wild Bay/Seal Brown, Chestnut) instead of having their own
-// flat price — everything else adds on top.
 const GENETIC_LOCI = [
   { key:"extension", label:"Extension (E) — base pigment", base:true,
     options:[
@@ -2209,15 +2137,6 @@ const GENETIC_LOCI = [
     ]},
 ];
 
-// Leopard Complex's visible pattern depends on the *combination* of Lp +
-// PATN1/PATN2, per the exact tiers specified:
-//   Snowcap        = LpLp + PATN2PATN2 (homozygous P2, regardless of P1)
-//   Fewspot        = LpLp + PATN1 (alone, or together with any PATN2)
-//   Varnish        = LpLp with no patterns
-//   Leopard        = nLp  + PATN1 only
-//   Spotted Blanket= nLp  + PATN2 only
-//   SemiLeopard    = nLp  + PATN1 and PATN2
-//   Snowflake      = nLp  with no patterns
 function computeAppaloosaPattern(lp, patn1, patn2){
   const hasP1  = patn1 && patn1!=="patn1patn1";
   const hasP2  = patn2 && patn2!=="patn2patn2";
@@ -2228,36 +2147,26 @@ function computeAppaloosaPattern(lp, patn1, patn2){
     if(hasP1)  return {label:"Fewspot Appaloosa", price:500};
     return {label:"Varnish Appaloosa", price:900};
   }
-  // nLp (heterozygous)
   if(hasP1 && hasP2) return {label:"SemiLeopard Appaloosa", price:700};
   if(hasP1) return {label:"Leopard Appaloosa", price:700};
   if(hasP2) return {label:"Spotted Blanket Appaloosa", price:700};
   return {label:"Snowflake Appaloosa", price:900};
 }
 
-// Computes the 3-tier base color + price from Extension/Agouti.
-// Computes the base color + price from Extension/Agouti, per house rules:
-// ee (red-based) branch is what Agouti determines Chestnut/Liver Chestnut/
-// Black Chestnut on, while E_ (black-based) branch is what Agouti determines
-// Black/Bay/Seal Bay on.
 function computeBaseColor(extension, agouti){
   const blackBased = extension==="EE" || extension==="Ee";
-  const a = agouti==="AAt" ? "AA" : agouti; // A masks At when paired with plain A
+  const a = agouti==="AAt" ? "AA" : agouti;
 
   if(!blackBased){
     if(a==="AtAt") return {label:"Black Chestnut", price:600};
     if(a==="Ata")  return {label:"Liver Chestnut", price:600};
-    return {label:"Chestnut", price:700}; // aa, AA, Aa
+    return {label:"Chestnut", price:700};
   }
   if(a==="AtAt" || a==="Ata") return {label:"Seal Bay", price:600};
   if(a==="aa") return {label:"Black", price:500};
-  return {label:"Bay", price:500}; // AA, Aa
+  return {label:"Bay", price:500};
 }
 
-// Which genetics loci are realistically available per breed (beyond the
-// universal Extension/Agouti base). This is a starter reference — extend
-// it breed by breed, and this is also where breed-specific fictitious
-// genes/mutations can be slotted in as we build that out further.
 const BREED_GENETICS = {
   "thoroughbred":    ["grey","roan","sabino1"],
   "quarter horse":   ["cream","dun","tobiano","sabino1","splash","frame","roan","grey"],
@@ -2282,9 +2191,6 @@ const BREED_GENETICS = {
   "warmblood":       ["grey","roan"],
 };
 
-// Returns the list of GENETIC_LOCI keys available to a given breed.
-// Unrecognized/blank breeds fall back to showing every locus, so this
-// never blocks a horse whose breed isn't in the reference list yet.
 function getAllowedLoci(breed){
   const key=(breed||"").trim().toLowerCase();
   const restricted=BREED_GENETICS[key];
@@ -2293,9 +2199,6 @@ function getAllowedLoci(breed){
   return optionalKeys.filter(k=>restricted.includes(k));
 }
 
-// Given a {locusKey: genotypeCode} map, returns the computed genotype
-// string, phenotype description, total price, and a genoModifiers-style
-// array (kept compatible with the existing Net Worth modal/calc logic).
 function computeGenoResult(selections, breed){
   const allowed = new Set(["extension","agouti", ...getAllowedLoci(breed)]);
   const base = computeBaseColor(selections.extension, selections.agouti);
@@ -2311,9 +2214,9 @@ function computeGenoResult(selections, breed){
     if(!code) return;
     if(locus.requiresAny){
       const satisfiesAll=Object.entries(locus.requiresAny).every(([reqKey,reqCodes])=>reqCodes.includes(selections[reqKey]));
-      if(!satisfiesAll) return; // gating not satisfied — ignore
+      if(!satisfiesAll) return;
     }
-    if(["leopard","patn1","patn2"].includes(locus.key)) return; // handled combined below
+    if(["leopard","patn1","patn2"].includes(locus.key)) return;
     const opt = locus.options.find(o=>o.code===code);
     if(!opt) return;
     genoParts.push(code);
@@ -2367,7 +2270,6 @@ function calcSlotPrice(h){
   return Math.round(calcNetWorth(h) * 0.05);
 }
 
-
 // ============================================
 // HORSE PROFILE PAGE (deep-linkable)
 // ============================================
@@ -2377,13 +2279,11 @@ function renderHorseProfilePage(app, h){
 
   const pct = h.level>=10?100:Math.min(100,((h.exp-(LEVEL_TABLE[h.level]?.exp||0))/((LEVEL_TABLE[h.level+1]?.exp||1)-(LEVEL_TABLE[h.level]?.exp||0)))*100);
 
-  // Net worth calc
   const genoPrice    = calcGenoPrice(h);
   const showEarnings = calcShowEarnings(h);
   const netWorth     = calcNetWorth(h);
   const slotPrice    = calcSlotPrice(h);
 
-  // Stat bars
   const statBars = STATS.map(s=>{
     const base=h.stats[s]||0, bonus=getEquippedStatBonus(h,s), eff=base+bonus;
     return `<div class="statbar-wrap">
@@ -2393,7 +2293,6 @@ function renderHorseProfilePage(app, h){
     </div>`;
   }).join("");
 
-  // Breeding slots
   let slotsHtml="";
   for(let i=0;i<h.breedingSlots;i++){
     const rec=(h.breedingRecords||[]).find(r=>r.slotIndex===i);
@@ -2407,7 +2306,6 @@ function renderHorseProfilePage(app, h){
       ${r.note?`<br><i style="opacity:.7;">${r.note}</i>`:""}
     </div>`).join("")) : `<div class="small" style="opacity:.6;">No breeding records.</div>`;
 
-  // Tack
   const inv=state.tackInventory||[];
   const tackEquippedHtml=(h.tackEquipped||[]).map(tid=>{
     const item=inv.find(t=>t.id===tid);
@@ -2416,7 +2314,6 @@ function renderHorseProfilePage(app, h){
     return `<span class="tag" style="background:#1a3a2a;color:#a0e8c0;border-color:#3a7a5a;">${item.name}${s?` (${s})`:""}</span>`;
   }).join(" ")||`<span class="small">Nothing equipped.</span>`;
 
-  // Ribbon wall — shows main image + prize thumbnails
   const trophies=(h.compHistory||[]).filter(c=>c.placement>=1&&c.placement<=3);
   const ribbonWall=trophies.length?`<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px;">
     ${trophies.map(c=>{
@@ -2437,7 +2334,6 @@ function renderHorseProfilePage(app, h){
     }).join("")}
   </div>`:null;
 
-  // Competition history
   const compHistoryHtml=(h.compHistory||[]).length?`<div class="artlog-panel" style="max-height:280px;">${(h.compHistory||[]).map(c=>{
     const pl=c.placement;
     const icon=pl===1?"🥇":pl===2?"🥈":pl===3?"🥉":pl?"🏅":"";
@@ -2459,7 +2355,6 @@ function renderHorseProfilePage(app, h){
     </div>`;
   }).join("")}</div>` : `<div class="small" style="opacity:.6;">No competition history.</div>`;
 
-  // Art log
   const artLogHtml=h.artLog.length?`<div class="artlog-panel" style="max-height:300px;">${h.artLog.map(e=>`
     <div class="artlog-entry" style="display:flex;gap:8px;align-items:flex-start;">
       ${e.image?`<img src="${e.image}" class="artlog-thumb" style="flex:none;cursor:zoom-in;" onclick="openLightbox('${e.image}','${e.label}')" />`:""}
@@ -2470,7 +2365,6 @@ function renderHorseProfilePage(app, h){
     </div>`).join("")}</div>`:
     `<div class="small" style="opacity:.6;">No art logged yet.</div>`;
 
-  // Profile photo — clickable
   const photoHtml = h.profileImage
     ? `<img src="${h.profileImage}" onclick="openLightbox('${h.profileImage}','${h.name}')" style="width:150px;height:150px;border-radius:10px;object-fit:cover;border:3px solid #c98a3a;cursor:zoom-in;" />`
     : `<div style="width:150px;height:150px;border-radius:10px;border:3px solid #4a392a;display:flex;align-items:center;justify-content:center;font-size:3.5em;background:#15100c;">🐴</div>`;
@@ -2514,7 +2408,6 @@ function renderHorseProfilePage(app, h){
     <div style="max-width:900px;margin:0 auto;padding:16px;">
       <div style="margin-bottom:12px;"><span data-act="back-to-roster" style="color:#c98a3a;text-decoration:none;cursor:pointer;">← Back to Stable Manager</span></div>
 
-      <!-- HERO -->
       <div class="pcard" style="display:flex;gap:20px;flex-wrap:wrap;align-items:flex-start;">
         <div style="display:flex;flex-direction:column;gap:8px;align-items:center;">
           ${photoHtml}
@@ -2538,22 +2431,18 @@ function renderHorseProfilePage(app, h){
         </div>
       </div>
 
-      <!-- PERSONALITY & HISTORY -->
       ${h.personality||h.horseHistory ? `<div class="pcard">
         ${h.personality?`<h3>🐴 Personality</h3><p style="font-size:.9em;line-height:1.7;white-space:pre-wrap;">${h.personality}</p>`:""}
         ${h.horseHistory?`<h3>📜 History</h3><p style="font-size:.9em;line-height:1.7;white-space:pre-wrap;">${h.horseHistory}</p>`:""}
       </div>` : ""}
 
-      <!-- REFERENCE -->
       ${(refHtml || refUploadHtml) ? `<div class="pcard">${refHtml}${refUploadHtml}</div>` : ""}
 
-      <!-- STATS -->
       <div class="pcard">
         <h3>📊 Stats</h3>
         <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:4px;">${statBars}</div>
       </div>
 
-      <!-- PEDIGREE & BREEDING -->
       <div class="pcard">
         <h3>🧬 Pedigree</h3>
         ${renderPedigreeChart(h)}
@@ -2562,7 +2451,6 @@ function renderHorseProfilePage(app, h){
         <div style="margin-top:10px;">${breedingRecHtml}</div>
       </div>
 
-      <!-- NET WORTH BREAKDOWN -->
       <div class="pcard">
         <h3>💰 Net Worth Breakdown</h3>
         <div class="small" style="margin-bottom:8px;">Based on Lightblood Pricing Guide. Breeding slot price = Net Worth × 5%.</div>
@@ -2575,13 +2463,11 @@ function renderHorseProfilePage(app, h){
         <div class="worth-row"><span>🏇 Breeding Slot Price (5%)</span><span>฿${slotPrice.toLocaleString()}</span></div>
       </div>
 
-      <!-- TACK -->
       <div class="pcard">
         <h3>🏇 Equipped Tack</h3>
         <div>${tackEquippedHtml}</div>
       </div>
 
-      <!-- RIBBON WALL -->
       <div class="pcard">
         <h3>🏆 Ribbon Wall</h3>
         ${ribbonWall || '<div class="small" style="opacity:.6;">No placements yet.</div>'}
@@ -2589,13 +2475,11 @@ function renderHorseProfilePage(app, h){
         ${compHistoryHtml}
       </div>
 
-      <!-- ART LOG -->
       <div class="pcard">
         <h3>🎨 Art Log</h3>
         ${artLogHtml}
       </div>
 
-      <!-- SHARE LINK -->
       <div style="text-align:center;margin:20px 0;">
         <div class="small" style="margin-bottom:6px;">📎 Shareable link to this profile:</div>
         <input readonly value="${window.location.origin}${window.location.pathname}?horse=${h.id}" onclick="this.select()" style="max-width:480px;width:100%;text-align:center;padding:8px;background:#15100c;border:1px solid #4a392a;color:#f1e6d8;border-radius:6px;font-family:monospace;" />
@@ -2678,7 +2562,7 @@ function showProfileModal(horseId){
   document.body.appendChild(overlay);
 
   overlay.querySelector('#pm_cancel').onclick=()=>overlay.remove();
-  overlay.querySelector('#pm_save').onclick=()=>{
+  overlay.querySelector('#pm_save').onclick=async()=>{
     h.ownerName  = overlay.querySelector('#pm_owner').value.trim();
     h.ownerLink  = overlay.querySelector('#pm_ownerlink').value.trim();
     h.riderName  = overlay.querySelector('#pm_rider').value.trim();
@@ -2686,7 +2570,10 @@ function showProfileModal(horseId){
     h.stableLink = overlay.querySelector('#pm_stablelink').value.trim();
     h.personality  = overlay.querySelector('#pm_personality').value.trim();
     h.horseHistory = overlay.querySelector('#pm_history').value.trim();
-    saveHorse(h); save(); overlay.remove(); render();
+    const ok = await saveHorse(h);
+    await save();
+    overlay.remove(); render();
+    if(!ok) alert(`Profile was updated here, but saving it to the Stable Data sheet failed. Try again, or check your Stable Data URL in Admin settings.`);
   };
 }
 
@@ -2810,11 +2697,14 @@ function showNetWorthModal(horseId){
   }
   refreshModList();
 
-  overlay.querySelector('#nw_save').onclick=()=>{
+  overlay.querySelector('#nw_save').onclick=async()=>{
     h.genoBasePrice=Number(overlay.querySelector('#nw_base').value)||0;
     const custom=overlay.querySelector('#nw_custom').value.trim();
     h.customNetWorth=custom!==""?Number(custom):null;
-    saveHorse(h); save(); overlay.remove(); render();
+    const ok = await saveHorse(h);
+    await save();
+    overlay.remove(); render();
+    if(!ok) alert(`Net worth was updated here, but saving it to the Stable Data sheet failed. Try again, or check your Stable Data URL in Admin settings.`);
   };
 }
 
@@ -2825,6 +2715,7 @@ function showNetWorthModal(horseId){
 load();
 
 })();
+
 </script>
 </body>
 </html>
