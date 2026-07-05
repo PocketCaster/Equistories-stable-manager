@@ -235,28 +235,56 @@ window.openLightbox = openLightbox;
 // EVERY image upload in this app (profile photo, reference sheet, training
 // art, competition art, prize/ribbon photos, tack images) MUST go through
 // this before being stored, or it will silently fail to persist.
-function resizeImageFile(file, maxDim=900, quality=0.75){
-  return new Promise((resolve,reject)=>{
-    const reader = new FileReader();
-    reader.onerror = ()=>reject(new Error('Could not read file.'));
-    reader.onload = ()=>{
-      const img = new Image();
-      img.onerror = ()=>reject(new Error('Could not decode image.'));
-      img.onload = ()=>{
-        let {width,height} = img;
-        if(width>maxDim || height>maxDim){
-          if(width>=height){ height=Math.round(height*(maxDim/width)); width=maxDim; }
-          else { width=Math.round(width*(maxDim/height)); height=maxDim; }
-        }
-        const canvas=document.createElement('canvas');
-        canvas.width=width; canvas.height=height;
-        canvas.getContext('2d').drawImage(img,0,0,width,height);
-        resolve(canvas.toDataURL('image/jpeg', quality));
+// FIX: this used one fixed quality/dimension for every image. That's fine
+// for simple photos, but a busy/detailed reference sheet can still encode
+// to well over Google Sheets' 50,000-character-per-cell limit even at
+// 900px/.75 quality — and every image eventually gets reassembled into a
+// single HorseImages cell server-side, so anything over that limit fails
+// to save with no obvious reason why. Now it renders once, and if the
+// result is still too big, keeps stepping quality down and then dimensions
+// down until it comfortably fits (or hits a sane floor).
+function resizeImageFile(file, maxDim=900, quality=0.75, opts={}){
+  const maxChars   = opts.maxChars   || 45000; // margin below the 50k cell cap
+  const minDim     = opts.minDim     || 250;
+  const minQuality = opts.minQuality || 0.35;
+
+  function renderAt(dim, q){
+    return new Promise((resolve,reject)=>{
+      const reader = new FileReader();
+      reader.onerror = ()=>reject(new Error('Could not read file.'));
+      reader.onload = ()=>{
+        const img = new Image();
+        img.onerror = ()=>reject(new Error('Could not decode image.'));
+        img.onload = ()=>{
+          let {width,height} = img;
+          if(width>dim || height>dim){
+            if(width>=height){ height=Math.round(height*(dim/width)); width=dim; }
+            else { width=Math.round(width*(dim/height)); height=dim; }
+          }
+          const canvas=document.createElement('canvas');
+          canvas.width=width; canvas.height=height;
+          canvas.getContext('2d').drawImage(img,0,0,width,height);
+          resolve(canvas.toDataURL('image/jpeg', q));
+        };
+        img.src = reader.result;
       };
-      img.src = reader.result;
-    };
-    reader.readAsDataURL(file);
-  });
+      reader.readAsDataURL(file);
+    });
+  }
+
+  return (async ()=>{
+    let dim=maxDim, q=quality;
+    let dataUrl = await renderAt(dim, q);
+    let attempts=0;
+    while(dataUrl.length > maxChars && attempts < 12){
+      if(q > minQuality) q = Math.max(minQuality, +(q-0.1).toFixed(2));
+      else if(dim > minDim) dim = Math.max(minDim, Math.round(dim*0.85));
+      else break;
+      dataUrl = await renderAt(dim, q);
+      attempts++;
+    }
+    return dataUrl;
+  })();
 }
 
 // ============================================
