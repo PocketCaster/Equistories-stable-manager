@@ -770,12 +770,13 @@ function renderRoster(){
     const wrapEl=form.querySelector('#nh_genetics_wrap');
     wrapEl.innerHTML=`<div class="row" style="flex-wrap:wrap;gap:8px;">
       ${loci.map(locus=>{
-        // Gated loci (Silver, PATN1/2) only show once their prerequisite is satisfied
+        // Gated loci (Silver, PATN1/2) only show once ALL their prerequisites are satisfied
         if(locus.requiresAny){
-          const [reqKey, reqCodes]=Object.entries(locus.requiresAny)[0];
-          if(!reqCodes.includes(genoSelections[reqKey])) return "";
+          const satisfiesAll=Object.entries(locus.requiresAny).every(([reqKey,reqCodes])=>reqCodes.includes(genoSelections[reqKey]));
+          if(!satisfiesAll) return "";
         }
-        if(locus.key==="agouti" && genoSelections.extension==="ee") return ""; // agouti invisible on chestnut
+        // Agouti always applies now — it determines Chestnut/Liver Chestnut/
+        // Black Chestnut on ee, and Black/Bay/Seal Bay on E_.
         const current=genoSelections[locus.key]||locus.options[0].code;
         genoSelections[locus.key]=current;
         return `<div style="min-width:180px;"><label class="small">${locus.label}</label>
@@ -2045,8 +2046,11 @@ function renderTackInventory(){
 // ============================================
 
 const GENO_BASE_PRICES = [
-  {label:"Bay / Black", value:500},
-  {label:"Wild Bay / Seal Bay / Liver Chestnut", value:600},
+  {label:"Bay", value:500},
+  {label:"Black", value:500},
+  {label:"Seal Bay", value:600},
+  {label:"Liver Chestnut", value:600},
+  {label:"Black Chestnut", value:600},
   {label:"Chestnut", value:700},
 ];
 
@@ -2132,7 +2136,7 @@ const GENETIC_LOCI = [
       {code:"Chch", desc:"Champagne", price:700},
       {code:"ChCh", desc:"Champagne (homozygous)", price:700},
     ]},
-  { key:"silver", label:"Silver / Flaxen (Z)", requiresAny:{agouti:["aa","AtAt","Ata"]},
+  { key:"silver", label:"Silver / Flaxen (Z)", requiresAny:{extension:["EE","Ee"], agouti:["aa","AtAt","Ata"]},
     options:[
       {code:"zz", desc:"No Silver", price:0},
       {code:"Zz", desc:"Silver / Flaxen", price:150},
@@ -2160,17 +2164,17 @@ const GENETIC_LOCI = [
       {code:"TOto", desc:"Tobiano", price:200},
       {code:"TOTO", desc:"Tobiano (homozygous)", price:200},
     ]},
-  { key:"sabino1", label:"Sabino1 (SB1)",
+  { key:"sabino1", label:"Sabino (Sb)",
     options:[
-      {code:"sb1sb1", desc:"No Sabino1", price:0},
-      {code:"SB1sb1", desc:"Sabino", price:200},
-      {code:"SB1SB1", desc:"Sabino-White (mostly/all white)", price:350},
+      {code:"sbsb", desc:"No Sabino", price:0},
+      {code:"nSb",  desc:"Sabino", price:200},
+      {code:"SbSb", desc:"Sabino-White (mostly/all white)", price:350},
     ]},
-  { key:"splash", label:"Splash White (SW1)",
+  { key:"splash", label:"Splash White (Spl)",
     options:[
-      {code:"sw1sw1", desc:"No Splash", price:0},
-      {code:"SW1sw1", desc:"Splash White", price:200},
-      {code:"SW1SW1", desc:"Splash White (homozygous)", price:200},
+      {code:"splspl", desc:"No Splash", price:0},
+      {code:"nSpl",   desc:"Splash White", price:200},
+      {code:"SplSpl", desc:"Splash White (homozygous)", price:200},
     ]},
   { key:"frame", label:"Frame Overo (O)",
     options:[
@@ -2182,19 +2186,19 @@ const GENETIC_LOCI = [
       {code:"mama", desc:"No Manchado", price:0},
       {code:"Mama", desc:"Manchado", price:350},
     ]},
-  { key:"leopard", label:"Leopard Complex (LP)",
+  { key:"leopard", label:"Leopard Complex (Lp)",
     options:[
       {code:"lplp", desc:"No Leopard Complex", price:0},
-      {code:"LPlp", desc:"Heterozygous Leopard Complex", price:0},
-      {code:"LPLP", desc:"Homozygous Leopard Complex", price:0},
+      {code:"nLp",  desc:"Heterozygous Leopard Complex", price:0},
+      {code:"LpLp", desc:"Homozygous Leopard Complex", price:0},
     ]},
-  { key:"patn1", label:"Pattern-1 (PATN1)", requiresAny:{leopard:["LPlp","LPLP"]},
+  { key:"patn1", label:"Pattern-1 (PATN1)", requiresAny:{leopard:["nLp","LpLp"]},
     options:[
       {code:"patn1patn1", desc:"No Pattern-1", price:0},
       {code:"PATN1patn1", desc:"Carries Pattern-1", price:0},
       {code:"PATN1PATN1", desc:"Homozygous Pattern-1", price:0},
     ]},
-  { key:"patn2", label:"Pattern-2 (PATN2)", requiresAny:{leopard:["LPlp","LPLP"]},
+  { key:"patn2", label:"Pattern-2 (PATN2)", requiresAny:{leopard:["nLp","LpLp"]},
     options:[
       {code:"patn2patn2", desc:"No Pattern-2", price:0},
       {code:"PATN2patn2", desc:"Carries Pattern-2", price:0},
@@ -2202,19 +2206,26 @@ const GENETIC_LOCI = [
     ]},
 ];
 
-// Leopard Complex's visible pattern depends on the *combination* of LP +
-// PATN1/PATN2 zygosity, not each locus independently — matches the named
-// Appaloosa Markings tiers from the pricing guide exactly.
+// Leopard Complex's visible pattern depends on the *combination* of Lp +
+// PATN1/PATN2, per the exact tiers specified:
+//   Snowcap        = LpLp + PATN2PATN2 (homozygous P2, regardless of P1)
+//   Fewspot        = LpLp + PATN1 (alone, or together with any PATN2)
+//   Varnish        = LpLp with no patterns
+//   Leopard        = nLp  + PATN1 only
+//   Spotted Blanket= nLp  + PATN2 only
+//   SemiLeopard    = nLp  + PATN1 and PATN2
+//   Snowflake      = nLp  with no patterns
 function computeAppaloosaPattern(lp, patn1, patn2){
-  const hasP1 = patn1 && patn1!=="patn1patn1";
-  const hasP2 = patn2 && patn2!=="patn2patn2";
+  const hasP1  = patn1 && patn1!=="patn1patn1";
+  const hasP2  = patn2 && patn2!=="patn2patn2";
+  const p2Homo = patn2==="PATN2PATN2";
   if(!lp || lp==="lplp") return null;
-  if(lp==="LPLP"){
-    if(hasP2) return {label:"Snowcap Appaloosa", price:500};
-    if(hasP1) return {label:"Fewspot Appaloosa", price:500};
+  if(lp==="LpLp"){
+    if(p2Homo) return {label:"Snowcap Appaloosa", price:500};
+    if(hasP1)  return {label:"Fewspot Appaloosa", price:500};
     return {label:"Varnish Appaloosa", price:900};
   }
-  // LPlp (heterozygous)
+  // nLp (heterozygous)
   if(hasP1 && hasP2) return {label:"SemiLeopard Appaloosa", price:700};
   if(hasP1) return {label:"Leopard Appaloosa", price:700};
   if(hasP2) return {label:"Spotted Blanket Appaloosa", price:700};
@@ -2222,12 +2233,22 @@ function computeAppaloosaPattern(lp, patn1, patn2){
 }
 
 // Computes the 3-tier base color + price from Extension/Agouti.
+// Computes the base color + price from Extension/Agouti, per house rules:
+// ee (red-based) branch is what Agouti determines Chestnut/Liver Chestnut/
+// Black Chestnut on, while E_ (black-based) branch is what Agouti determines
+// Black/Bay/Seal Bay on.
 function computeBaseColor(extension, agouti){
-  if(extension==="ee") return {label:"Chestnut", price:700};
-  if(!agouti) return {label:"Black-based (Agouti unset)", price:500};
-  if(agouti==="aa") return {label:"Black", price:500};
-  if(agouti==="AtAt"||agouti==="Ata") return {label:"Wild Bay / Seal Brown", price:600};
-  return {label:"Bay", price:500};
+  const blackBased = extension==="EE" || extension==="Ee";
+  const a = agouti==="AAt" ? "AA" : agouti; // A masks At when paired with plain A
+
+  if(!blackBased){
+    if(a==="AtAt") return {label:"Black Chestnut", price:600};
+    if(a==="Ata")  return {label:"Liver Chestnut", price:600};
+    return {label:"Chestnut", price:700}; // aa, AA, Aa
+  }
+  if(a==="AtAt" || a==="Ata") return {label:"Seal Bay", price:600};
+  if(a==="aa") return {label:"Black", price:500};
+  return {label:"Bay", price:500}; // AA, Aa
 }
 
 // Which genetics loci are realistically available per breed (beyond the
@@ -2286,8 +2307,8 @@ function computeGenoResult(selections, breed){
     const code = selections[locus.key];
     if(!code) return;
     if(locus.requiresAny){
-      const [reqKey, reqCodes] = Object.entries(locus.requiresAny)[0];
-      if(!reqCodes.includes(selections[reqKey])) return; // gating locus not satisfied — ignore
+      const satisfiesAll=Object.entries(locus.requiresAny).every(([reqKey,reqCodes])=>reqCodes.includes(selections[reqKey]));
+      if(!satisfiesAll) return; // gating not satisfied — ignore
     }
     if(["leopard","patn1","patn2"].includes(locus.key)) return; // handled combined below
     const opt = locus.options.find(o=>o.code===code);
