@@ -2109,14 +2109,15 @@ const GENETIC_LOCI = [
       {code:"Ee", desc:"Black-based (carries red)"},
       {code:"ee", desc:"Red-based / Chestnut"},
     ]},
-  { key:"agouti", label:"Agouti (A) — distributes black", base:true, requiresAny:{extension:["EE","Ee"]},
+  { key:"agouti", label:"Agouti (A) — distributes black", base:true, requiresAny:{extension:["EE","Ee","ee"]},
     options:[
-      {code:"AA",   desc:"Bay"},
-      {code:"AAt",  desc:"Bay (carries Wild Bay)"},
-      {code:"Aa",   desc:"Bay (carries Black)"},
-      {code:"AtAt", desc:"Wild Bay / Seal Brown"},
-      {code:"Ata",  desc:"Wild Bay / Seal Brown (carrier)"},
-      {code:"aa",   desc:"Black"},
+      {code:"AA", desc:"Chestnut / Bay"},
+      {code:"Aa", desc:"Chestnut / Bay"},
+      {code:"aa", desc:"Black"},
+      {code:"AtA", desc:"Liver Chestnut / Wild bay"},
+      {code:"Ata", desc:"Liver Chestnut / Wild bay"},
+      {code:"AtAt", desc:"Black Chestnut / Seal Bay"},
+      {code:"Atat", desc:"Liver Chestnut / Seal Bay"},           
     ]},
   { key:"cream", label:"Cream (Cr)",
     options:[
@@ -2152,11 +2153,13 @@ const GENETIC_LOCI = [
     options:[
       {code:"rnrn", desc:"No Roan", price:0},
       {code:"Rnrn", desc:"Roan", price:100},
+      {code:"RnRn", desc:"Roan (homozygous)", price:100},
     ]},
   { key:"rabicano", label:"Rabicano (Rb)",
     options:[
       {code:"rbrb", desc:"No Rabicano", price:0},
       {code:"Rbrb", desc:"Rabicano", price:150},
+       {code:"RbRb", desc:"Rabicano (homozygous)", price:150},
     ]},
   { key:"tobiano", label:"Tobiano (TO)",
     options:[
