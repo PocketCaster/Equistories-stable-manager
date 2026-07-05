@@ -429,52 +429,77 @@ async function saveHorse(horse){
   if(!bankAccount.linked || !STABLE_URL) return false;
   const {artLog,...horseData}=horse;
   let allOk = true;
+  // FIX: this used to upload every image one at a time — profile pic, then
+  // reference sheet, then each show's art, then each prize photo — awaiting
+  // each one before starting the next. A single show with several prize
+  // photos meant dozens of sequential chunked round trips before the save
+  // ever reported back, which for a show with a handful of ribbon/trophy
+  // photos could take minutes and just looked stuck. Now every image this
+  // horse needs uploaded is gathered up front and sent at once — the wait
+  // is however long the slowest single image takes, not the sum of all of
+  // them.
+  const uploadTasks = [];
+
   const IMAGE_KEYS = ['profileImage','referenceImage'];
-  for(const key of IMAGE_KEYS){
+  IMAGE_KEYS.forEach(key=>{
     if(horseData[key] && horseData[key].startsWith('data:')){
-      const ok = await saveHorseImageChunked(bankAccount.userId, horse.id, key, horseData[key]);
-      if(!ok) allOk = false;
+      uploadTasks.push(
+        saveHorseImageChunked(bankAccount.userId, horse.id, key, horseData[key])
+          .then(ok=>{ if(!ok) allOk=false; })
+      );
     }
-  }
-  // Chunk show art + prize photos out of compHistory before it ever gets
-  // stringified into the saveHorse request. `_imgUploaded` is cached on the
-  // real (in-memory) record so unchanged past shows aren't re-uploaded on
-  // every autosave — only newly added images get chunked again.
+  });
+
   if(Array.isArray(horse.compHistory)){
-    const cleanHistory=[];
-    for(const rec of horse.compHistory){
+    horse.compHistory.forEach(rec=>{
+      if(rec.image && rec.image.startsWith('data:') && !rec._imgUploaded){
+        const key='show_'+rec.id+'_image';
+        uploadTasks.push(
+          uploadImageRef(horse.id, key, rec.image)
+            .then(ok=>{ if(ok) rec._imgUploaded=true; else allOk=false; })
+        );
+      }
+      if(Array.isArray(rec.prizes)){
+        rec.prizes.forEach((p,i)=>{
+          if(p?.dataUrl && p.dataUrl.startsWith('data:')){
+            if(!rec._prizeUploaded) rec._prizeUploaded={};
+            if(!rec._prizeUploaded[i]){
+              const key='show_'+rec.id+'_prize_'+i;
+              uploadTasks.push(
+                uploadImageRef(horse.id, key, p.dataUrl)
+                  .then(ok=>{ if(ok) rec._prizeUploaded[i]=true; else allOk=false; })
+              );
+            }
+          }
+        });
+      }
+    });
+  }
+
+  await Promise.all(uploadTasks);
+
+  // Now that uploads (and their _imgUploaded/_prizeUploaded flags) have
+  // settled, build the slim version of compHistory with placeholders swapped
+  // in for anything that has a corresponding uploaded image.
+  if(Array.isArray(horse.compHistory)){
+    horseData.compHistory = horse.compHistory.map(rec=>{
       const clean={...rec};
       if(clean.image && clean.image.startsWith('data:')){
-        const key='show_'+rec.id+'_image';
-        if(!rec._imgUploaded){
-          const ok=await uploadImageRef(horse.id, key, clean.image);
-          if(ok) rec._imgUploaded=true; else allOk=false;
-        }
-        clean.image='@img:'+key;
+        clean.image='@img:show_'+rec.id+'_image';
       }
       if(Array.isArray(clean.prizes)){
-        const cleanPrizes=[];
-        for(let i=0;i<clean.prizes.length;i++){
-          const p=clean.prizes[i];
-          const cleanP={...p};
-          if(cleanP.dataUrl && cleanP.dataUrl.startsWith('data:')){
-            const key='show_'+rec.id+'_prize_'+i;
-            const uploadedFlags = rec._prizeUploaded || (rec._prizeUploaded={});
-            if(!uploadedFlags[i]){
-              const ok=await uploadImageRef(horse.id, key, cleanP.dataUrl);
-              if(ok) uploadedFlags[i]=true; else allOk=false;
-            }
-            cleanP.dataUrl='@img:'+key;
+        clean.prizes = clean.prizes.map((p,i)=>{
+          if(p?.dataUrl && p.dataUrl.startsWith('data:')){
+            return {...p, dataUrl:'@img:show_'+rec.id+'_prize_'+i};
           }
-          cleanPrizes.push(cleanP);
-        }
-        clean.prizes=cleanPrizes;
+          return p;
+        });
       }
       delete clean._imgUploaded; delete clean._prizeUploaded;
-      cleanHistory.push(clean);
-    }
-    horseData.compHistory=cleanHistory;
+      return clean;
+    });
   }
+
   const res = await stableGas({ action:'saveHorse', userId:bankAccount.userId, horseId:horse.id, horseJson:JSON.stringify(horseData) });
   if(!res?.success) allOk = false;
   return allOk;
@@ -1826,7 +1851,7 @@ function buildShowLogForm(){
     }
 
     let artLogId=null;
-    let entryOk=true;
+    let artSavePromise=Promise.resolve(true);
     if(artImage && artType){
       artLogId=uid2();
       const artEntry={id:artLogId,day:state.log.length+1,type:"competition",label:`${disc}${venue?" — "+venue:""}`,
@@ -1834,7 +1859,7 @@ function buildShowLogForm(){
         bonuses:[...selectedBonuses],exp:expGain,link:link||null,image:artImage,
         statsDelta:discStats,nonPlacementExp,discipline:disc};
       h.artLog.unshift(artEntry);
-      entryOk = await saveArtEntry(h, artEntry);
+      artSavePromise = saveArtEntry(h, artEntry); // don't await yet — runs alongside saveHorse below
     }
 
     if(!h.compHistory) h.compHistory=[];
@@ -1850,8 +1875,9 @@ function buildShowLogForm(){
 
     // FIX: previously fired without awaiting/checking, so a failed save
     // (oversized payload, network hiccup) never surfaced to the user —
-    // the whole show record just quietly failed to persist.
-    const hOk = await saveHorse(h);
+    // the whole show record just quietly failed to persist. Also now runs
+    // alongside the art log entry's save (above) instead of after it.
+    const [entryOk, hOk] = await Promise.all([artSavePromise, saveHorse(h)]);
     await save();
 
     if(hOk && entryOk){
