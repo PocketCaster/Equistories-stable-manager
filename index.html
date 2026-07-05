@@ -386,8 +386,13 @@ async function loadFromSheets(){
 }
 
 async function loadPublicHorse(horseId, urlOverride){
+  // Return the full response instead of null — collapsing every failure
+  // mode (no URL, network error, timeout, or the backend genuinely
+  // returning success:false) into the same null made it impossible to
+  // tell "the link is broken" apart from "the backend can't find this
+  // horse" apart from "the request never reached the server at all".
   const res = await stableGas({ action:'loadPublicHorse', horseId }, urlOverride);
-  return res?.success ? res.data : null;
+  return res;
 }
 
 async function load(){
@@ -560,9 +565,28 @@ function render(){
     // so it won't override anything they configure themselves later).
     const stableOverride = params.get('stable');
     if(stableOverride && !STABLE_URL) STABLE_URL = stableOverride;
-    loadPublicHorse(profileId, stableOverride).then(h=>{
-      if(h){ renderHorseProfilePage(app, h); }
-      else { app.innerHTML='<div style="padding:40px;text-align:center;color:#b5a392;font-family:Georgia,serif;">Horse not found. <a href="'+window.location.pathname+'" style="color:#c98a3a;">← Back</a></div>'; }
+    loadPublicHorse(profileId, stableOverride).then(res=>{
+      if(res?.success && res.data){ renderHorseProfilePage(app, res.data); return; }
+      // Diagnostic detail so we can tell apart: link missing the stable
+      // param entirely, request never reaching the server (network/CORS/
+      // timeout), vs. the Google Apps Script backend itself responding
+      // with success:false (e.g. its loadPublicHorse action doesn't
+      // exist, or genuinely can't find a horse with this id).
+      let reason;
+      if(!stableOverride && !STABLE_URL){
+        reason = 'This link is missing the Stable Data URL (older link, generated before this was fixed). Re-copy the "Shareable link" from the horse\'s profile page and send that one instead.';
+      } else if(!res){
+        reason = 'No response at all from the Stable Data server — check the URL is correct and the Apps Script is deployed with "Anyone" access.';
+      } else if(res.error){
+        reason = `Server said: "${res.error}"`;
+      } else {
+        reason = 'The server responded, but did not return this horse. Check that your Apps Script\'s "loadPublicHorse" action exists and looks up horses by id across all users, not just the current one.';
+      }
+      app.innerHTML=`<div style="padding:40px;text-align:center;color:#b5a392;font-family:Georgia,serif;max-width:500px;margin:0 auto;">
+        🐴 Horse not found.<br>
+        <div style="font-size:.8em;opacity:.8;margin-top:10px;background:#15100c;border:1px solid #4a392a;border-radius:6px;padding:10px;">${reason}</div>
+        <br><a href="${window.location.pathname}" style="color:#c98a3a;">← Back</a>
+      </div>`;
     });
     return;
   }
