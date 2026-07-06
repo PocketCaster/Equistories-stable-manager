@@ -223,6 +223,18 @@ function addLog(msg){ state.log.unshift({day:Date.now(),msg}); if(state.log.leng
 // give a live preview and a clear fallback if someone pastes the artwork's
 // page link instead of the actual image file link.
 
+// FIX: horse names, venues, and prize labels are free text and can contain
+// apostrophes (e.g. "D'Artagnan", "Judge's Choice", "St. Mary's Fairgrounds").
+// Several onclick="openLightbox('...','...')" strings interpolated this text
+// directly into a single-quoted JS argument with no escaping — an apostrophe
+// there breaks out of the string early, corrupting the surrounding HTML and
+// (since these live inside one big innerHTML template) can take the rest of
+// that render pass down with it, leaving buttons unclickable. jsStr() makes
+// text safe to drop into a single-quoted onclick argument; escAttr() makes
+// text safe to drop into a double-quoted HTML attribute like title="...".
+function jsStr(s){ return String(s==null?'':s).replace(/\\/g,'\\\\').replace(/'/g,"\\'"); }
+function escAttr(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;'); }
+
 function imgUrlLoadError(img){
   const div=document.createElement('div');
   div.className='small';
@@ -1921,7 +1933,7 @@ function buildShowHistory(){
             const prizes=c.prizes||[];
             const mainImg=c.image||( prizes[0]?.dataUrl||null);
             return `<div style="background:#15100c;border:1px solid #4a392a;border-radius:8px;padding:8px;text-align:center;min-width:80px;max-width:110px;">
-              ${mainImg?`<img src="${mainImg}" style="width:70px;height:70px;object-fit:cover;border-radius:5px;display:block;margin:0 auto 4px;cursor:zoom-in;" onclick="openLightbox('${mainImg}','${c.discipline} — ${placeStr}')" onerror="this.style.display='none'" />`:`<div style="font-size:2.2em;margin-bottom:4px;">${icon}</div>`}
+              ${mainImg?`<img src="${mainImg}" style="width:70px;height:70px;object-fit:cover;border-radius:5px;display:block;margin:0 auto 4px;cursor:zoom-in;" onclick="openLightbox('${jsStr(mainImg)}','${jsStr(c.discipline+' — '+placeStr)}')" onerror="this.style.display='none'" />`:`<div style="font-size:2.2em;margin-bottom:4px;">${icon}</div>`}
               <div style="font-size:.78em;">${icon} ${placeStr}</div>
               <div style="font-size:.72em;opacity:.7;">${c.discipline}</div>
               ${c.venue?`<div style="font-size:.68em;opacity:.5;">${c.venue}</div>`:""}
@@ -1947,14 +1959,14 @@ function buildShowHistory(){
           const prizes=c.prizes||[];
           return `<div class="artlog-entry">
             <div style="display:flex;gap:8px;align-items:flex-start;">
-              ${c.image?`<img src="${c.image}" class="artlog-thumb" style="cursor:zoom-in;" onclick="openLightbox('${c.image}','${c.discipline}')" onerror="this.style.display='none'" />`:""}
+              ${c.image?`<img src="${c.image}" class="artlog-thumb" style="cursor:zoom-in;" onclick="openLightbox('${jsStr(c.image)}','${jsStr(c.discipline)}')" onerror="this.style.display='none'" />`:""}
               <div style="flex:1;">
                 ${icon} <b>${c.discipline}</b>${c.difficulty?` — ${c.difficulty}`:""} <span class="tag">${placeLabel}</span>
                 ${c.venue?`<div class="small">${c.venue}${c.date?` · ${c.date}`:""}</div>`:(c.date?`<div class="small">${c.date}</div>`:"")}
                 ${c.note?`<div class="small" style="opacity:.8;">${c.note}</div>`:""}
                 ${prizes.length?`<div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px;">
                   ${prizes.map(p=>`<div style="text-align:center;">
-                    <img src="${p.dataUrl}" style="width:40px;height:40px;object-fit:cover;border-radius:4px;border:1px solid #4a392a;cursor:zoom-in;display:block;" onclick="openLightbox('${p.dataUrl}','${p.label||"Prize"}')" onerror="this.style.display='none'" />
+                    <img src="${p.dataUrl}" style="width:40px;height:40px;object-fit:cover;border-radius:4px;border:1px solid #4a392a;cursor:zoom-in;display:block;" onclick="openLightbox('${jsStr(p.dataUrl)}','${jsStr(p.label||'Prize')}')" onerror="this.style.display='none'" />
                     ${p.label?`<div style="font-size:.65em;opacity:.6;max-width:44px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${p.label}</div>`:""}
                   </div>`).join("")}
                 </div>`:""}
@@ -2587,13 +2599,13 @@ function renderHorseProfilePage(app, h){
       const prizes=c.prizes||[];
       const mainImg=c.image||(prizes[0]?.dataUrl||null);
       return `<div style="background:#15100c;border:1px solid #4a392a;border-radius:8px;padding:8px;text-align:center;min-width:80px;max-width:120px;">
-        ${mainImg?`<img src="${mainImg}" style="width:70px;height:70px;object-fit:cover;border-radius:5px;display:block;margin:0 auto 4px;cursor:zoom-in;" onclick="openLightbox('${mainImg}','${c.discipline} — ${placeStr}')" onerror="this.style.display='none'" />`:`<div style="font-size:2.2em;margin-bottom:4px;">${icon}</div>`}
+        ${mainImg?`<img src="${mainImg}" style="width:70px;height:70px;object-fit:cover;border-radius:5px;display:block;margin:0 auto 4px;cursor:zoom-in;" onclick="openLightbox('${jsStr(mainImg)}','${jsStr(c.discipline+' — '+placeStr)}')" onerror="this.style.display='none'" />`:`<div style="font-size:2.2em;margin-bottom:4px;">${icon}</div>`}
         <div style="font-size:.78em;">${icon} ${placeStr}</div>
         <div style="font-size:.72em;opacity:.7;">${c.discipline}</div>
         ${c.venue?`<div style="font-size:.68em;opacity:.5;">${c.venue}</div>`:""}
         ${c.date?`<div style="font-size:.65em;opacity:.4;">${c.date}</div>`:""}
         ${prizes.length>1?`<div style="display:flex;gap:2px;justify-content:center;margin-top:4px;flex-wrap:wrap;">
-          ${prizes.slice(0,4).map(p=>`<img src="${p.dataUrl}" style="width:20px;height:20px;object-fit:cover;border-radius:2px;cursor:zoom-in;" onclick="openLightbox('${p.dataUrl}','${p.label||'Prize'}')" title="${p.label||'Prize'}" onerror="this.style.display='none'" />`).join("")}
+          ${prizes.slice(0,4).map(p=>`<img src="${p.dataUrl}" style="width:20px;height:20px;object-fit:cover;border-radius:2px;cursor:zoom-in;" onclick="openLightbox('${jsStr(p.dataUrl)}','${jsStr(p.label||'Prize')}')" title="${escAttr(p.label||'Prize')}" onerror="this.style.display='none'" />`).join("")}
         </div>`:""}
       </div>`;
     }).join("")}
@@ -2605,14 +2617,14 @@ function renderHorseProfilePage(app, h){
     const label=pl?["1st","2nd","3rd","4th","5th","6th"][pl-1]||pl+"th":"Participant";
     const prizes=c.prizes||[];
     return `<div class="artlog-entry" style="display:flex;gap:8px;align-items:flex-start;">
-      ${c.image?`<img src="${c.image}" class="artlog-thumb" style="flex:none;cursor:zoom-in;" onclick="openLightbox('${c.image}','${c.discipline}')" onerror="this.style.display='none'" />`:""}
+      ${c.image?`<img src="${c.image}" class="artlog-thumb" style="flex:none;cursor:zoom-in;" onclick="openLightbox('${jsStr(c.image)}','${jsStr(c.discipline)}')" onerror="this.style.display='none'" />`:""}
       <div style="flex:1;">
         ${icon} <b>${c.discipline}</b>${c.difficulty?" — "+c.difficulty:""} <span class="tag">${label}</span>
         ${c.venue?`<div class="small">${c.venue}${c.date?" · "+c.date:""}</div>`:(c.date?`<div class="small">${c.date}</div>`:"")}
         ${c.note?`<div class="small" style="opacity:.8;">${c.note}</div>`:""}
         ${prizes.length?`<div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px;">
           ${prizes.map(p=>`<div style="text-align:center;">
-            <img src="${p.dataUrl}" style="width:36px;height:36px;object-fit:cover;border-radius:4px;border:1px solid #4a392a;cursor:zoom-in;display:block;" onclick="openLightbox('${p.dataUrl}','${p.label||'Prize'}')" onerror="this.style.display='none'" />
+            <img src="${p.dataUrl}" style="width:36px;height:36px;object-fit:cover;border-radius:4px;border:1px solid #4a392a;cursor:zoom-in;display:block;" onclick="openLightbox('${jsStr(p.dataUrl)}','${jsStr(p.label||'Prize')}')" onerror="this.style.display='none'" />
             ${p.label?`<div style="font-size:.62em;opacity:.6;max-width:40px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${p.label}</div>`:""}
           </div>`).join("")}
         </div>`:""}
@@ -2622,7 +2634,7 @@ function renderHorseProfilePage(app, h){
 
   const artLogHtml=h.artLog.length?`<div class="artlog-panel" style="max-height:300px;">${h.artLog.map(e=>`
     <div class="artlog-entry" style="display:flex;gap:8px;align-items:flex-start;">
-      ${e.image?`<img src="${e.image}" class="artlog-thumb" style="flex:none;cursor:zoom-in;" onclick="openLightbox('${e.image}','${e.label}')" />`:""}
+      ${e.image?`<img src="${e.image}" class="artlog-thumb" style="flex:none;cursor:zoom-in;" onclick="openLightbox('${jsStr(e.image)}','${jsStr(e.label)}')" />`:""}
       <div><b>${e.label}</b> <span class="tag">+${e.exp} EXP</span>
         ${e.link?`<a href="${e.link}" target="_blank" style="color:#c98a3a;font-size:.8em;margin-left:4px;">🔗</a>`:""}
         <div class="small">${e.art||""}${e.lit?` · ${e.lit}`:""}</div>
@@ -2631,12 +2643,12 @@ function renderHorseProfilePage(app, h){
     `<div class="small" style="opacity:.6;">No art logged yet.</div>`;
 
   const photoHtml = h.profileImage
-    ? `<img src="${h.profileImage}" onclick="openLightbox('${h.profileImage}','${h.name}')" style="width:150px;height:150px;border-radius:10px;object-fit:cover;border:3px solid #c98a3a;cursor:zoom-in;" />`
+    ? `<img src="${h.profileImage}" onclick="openLightbox('${jsStr(h.profileImage)}','${jsStr(h.name)}')" style="width:150px;height:150px;border-radius:10px;object-fit:cover;border:3px solid #c98a3a;cursor:zoom-in;" />`
     : `<div style="width:150px;height:150px;border-radius:10px;border:3px solid #4a392a;display:flex;align-items:center;justify-content:center;font-size:3.5em;background:#15100c;">🐴</div>`;
 
   const refHtml = h.referenceImage
     ? `<div style="margin-top:10px;"><div class="small" style="margin-bottom:4px;">📋 Reference / Registration</div>
-       <img src="${h.referenceImage}" onclick="openLightbox('${h.referenceImage}','${h.name} — Reference Sheet')" style="max-width:100%;max-height:220px;border-radius:8px;border:1px solid #4a392a;object-fit:contain;cursor:zoom-in;" />
+       <img src="${h.referenceImage}" onclick="openLightbox('${jsStr(h.referenceImage)}','${jsStr(h.name+' — Reference Sheet')}')" style="max-width:100%;max-height:220px;border-radius:8px;border:1px solid #4a392a;object-fit:contain;cursor:zoom-in;" />
        ${h.referenceLink?`<div class="small" style="margin-top:4px;"><a href="${h.referenceLink}" target="_blank" style="color:#c98a3a;">🔗 View on site</a></div>`:""}</div>`
     : "";
   const refUploadHtml = bankAccount.linked
