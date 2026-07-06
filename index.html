@@ -2928,15 +2928,21 @@ function showProfileModal(horseId){
     ${field('pm_history','History',h.horseHistory,'Background story, significant events, journey so far…','textarea')}
     <button id="pm_save" style="width:100%;background:#c98a3a;color:#241a14;border:none;padding:10px;border-radius:6px;font-weight:bold;cursor:pointer;font-size:1.1em;">Save</button>
     <button id="pm_cancel" style="margin-top:8px;width:100%;background:#2c2118;color:#f1e6d8;border:1px solid #4a392a;padding:10px;border-radius:6px;cursor:pointer;font-size:1.1em;">Cancel</button>
+    <div id="pm_status" style="margin-top:8px;font-size:.92em;color:#b5a392;text-align:center;min-height:1.2em;"></div>
   </div>`;
   document.body.appendChild(overlay);
 
   overlay.querySelector('#pm_cancel').onclick=()=>overlay.remove();
   overlay.querySelector('#pm_save').onclick=async()=>{
     const saveBtn = overlay.querySelector('#pm_save');
+    const statusEl = overlay.querySelector('#pm_status');
     saveBtn.disabled = true;
     const origLabel = saveBtn.textContent;
     saveBtn.textContent = 'Saving…';
+    statusEl.textContent = 'Saving to your Stable Data sheet — this can take up to 15 seconds…';
+    const slowNotice = setTimeout(()=>{
+      statusEl.textContent = "Still working — slow connections or a busy sheet can take a bit longer. Don't close this window.";
+    }, 6000);
     try{
       h.breed = overlay.querySelector('#pm_breed').value.trim() || h.breed;
       const newAge = Number(overlay.querySelector('#pm_age').value);
@@ -2948,14 +2954,20 @@ function showProfileModal(horseId){
       h.stableLink = overlay.querySelector('#pm_stablelink').value.trim();
       h.personality  = overlay.querySelector('#pm_personality').value.trim();
       h.horseHistory = overlay.querySelector('#pm_history').value.trim();
-      const ok = await saveHorse(h);
-      await save();
+      // Save the horse record and the shared stable state in parallel —
+      // they're independent writes, so there's no need to wait on one
+      // before starting the other. Roughly halves the worst-case wait
+      // compared to running them one after another.
+      const [ok] = await Promise.all([ saveHorse(h), save() ]);
+      clearTimeout(slowNotice);
       overlay.remove(); render();
       if(!ok) alert(`Profile was updated here, but saving it to the Stable Data sheet failed. Try again, or check your Stable Data URL in Admin settings.`);
     }catch(err){
+      clearTimeout(slowNotice);
       console.error('[EquiStories] Edit Profile save failed:', err);
       saveBtn.disabled = false;
       saveBtn.textContent = origLabel;
+      statusEl.textContent = '';
       alert(`Something went wrong while saving this profile. Try again, or check your Stable Data URL in Admin settings.\n(Open your browser's console — F12 or right-click → Inspect → Console — for the technical error.)`);
     }
   };
