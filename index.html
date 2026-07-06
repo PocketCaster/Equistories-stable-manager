@@ -402,13 +402,31 @@ function saveBankAccount(){
   try{ localStorage.setItem('equi-lite-bank', JSON.stringify(bankAccount)); }catch(e){}
 }
 
-async function save(){
+// FIX (the "takes forever then fails" bug): save() used to unconditionally
+// re-chunk-upload EVERY horse's full JSON on EVERY single action — equipping
+// a piece of tack, adding a training entry, logging a show — even when that
+// action already called saveHorse() for the one horse that actually changed.
+// That meant a single show-record save fired one full chunked upload for the
+// horse you were editing (via saveHorse) AND then a second full chunked
+// upload of that same horse PLUS every other horse in the stable (via this
+// function's old forEach). As a stable accumulates horses and show/training
+// history, that "resave literally everyone" cost grows without bound, so
+// saves that used to be instant start taking longer and longer and
+// eventually start timing out / failing outright.
+// Now save() only re-uploads the specific horse(s) named in horseIds (via
+// their id). Callers that already persisted a horse with saveHorse() pass
+// nothing (the global log/tackInventory still get saved). Callers that
+// mutate a horse's data without a separate saveHorse() call pass that
+// horse's id (or ids) so only the horse(s) that actually changed get
+// re-uploaded — not the whole roster.
+async function save(horseIds){
   if(!bankAccount.linked || !STABLE_URL) return;
   const userId = bankAccount.userId;
+  const ids = horseIds===undefined ? [] : (Array.isArray(horseIds) ? horseIds : [horseIds]);
   const tasks = [
     sendTextChunked(userId, 'stateJson', 'stable',
       JSON.stringify({ log:state.log, tackInventory:state.tackInventory })),
-    ...state.horses.map(h=>{
+    ...state.horses.filter(h=>ids.includes(h.id)).map(h=>{
       const {artLog, profileImage, referenceImage, ...horseData}=h;
       return sendTextChunked(userId, 'horseJson', h.id, JSON.stringify(horseData));
     }),
@@ -987,7 +1005,7 @@ function renderRoster(){
       genoBasePrice:geno.genoBasePrice, genoModifiers:geno.genoModifiers});
     state.horses.push(h);
     addLog(`🐎 ${h.name} (${breed}) joined the stable.`);
-    save(); render();
+    saveHorse(h); save(); render();
   };
 
   state.horses.forEach(h=>{
@@ -1146,12 +1164,12 @@ function renderRoster(){
     if(h && sel.value){
       h.tackEquipped=h.tackEquipped||[];
       h.tackEquipped.push(sel.value);
-      save(); render();
+      saveHorse(h); save(); render();
     }
   });
   wrap.querySelectorAll('[data-act="unequip-tack"]').forEach(span=>span.onclick=()=>{
     const h=state.horses.find(x=>x.id===span.dataset.id);
-    if(h){ h.tackEquipped=(h.tackEquipped||[]).filter(id=>id!==span.dataset.tack); save(); render(); }
+    if(h){ h.tackEquipped=(h.tackEquipped||[]).filter(id=>id!==span.dataset.tack); saveHorse(h); save(); render(); }
   });
   wrap.querySelectorAll('[data-act="slot-click"]').forEach(slot=>slot.onclick=()=>{
     showBreedingSlotModal(slot.dataset.id, Number(slot.dataset.slot));
@@ -1235,14 +1253,14 @@ function showBreedingSlotModal(horseId, slotIndex){
     h.breedingRecords.push({ id:uid2(), slotIndex, role, partnerName, partnerOwner, date, note, foalId:null, foalName:"" });
     h.breedingFilled=(h.breedingFilled||0)+1;
     addLog(`🐴 ${h.name}'s breeding slot ${slotIndex+1} marked as used (${role==="sire"?"sired":"bred"} with ${partnerName}).`);
-    save(); overlay.remove(); render();
+    saveHorse(h); save(); overlay.remove(); render();
   };
 
   const clearBtn=overlay.querySelector('#bs_clear');
   if(clearBtn) clearBtn.onclick=()=>{
     if(!confirm('Clear this breeding record? This cannot be undone.')) return;
     h.breedingRecords=(h.breedingRecords||[]).filter(r=>r.slotIndex!==slotIndex);
-    save(); overlay.remove(); render();
+    saveHorse(h); save(); overlay.remove(); render();
   };
 
   const linkBtn=overlay.querySelector('#bs_link_foal');
@@ -1254,7 +1272,7 @@ function showBreedingSlotModal(horseId, slotIndex){
     if(rec && foal){
       rec.foalId=foal.id; rec.foalName=foal.name;
       addLog(`🔗 Linked ${h.name}'s breeding record to foal ${foal.name}.`);
-      save(); overlay.remove(); render();
+      saveHorse(h); save(); overlay.remove(); render();
     }
   };
 }
@@ -1421,7 +1439,7 @@ function showLineageModal(horseId){
     h.damId=h.pedigree.dam?.inRosterId||null;
     h.damName=h.pedigree.dam?.name||"";
     addLog(`🧬 Updated pedigree for ${h.name}.`);
-    save(); overlay.remove(); render();
+    saveHorse(h); save(); overlay.remove(); render();
   };
 }
 
@@ -2233,8 +2251,12 @@ function renderTackInventory(){
   invCard.querySelectorAll('[data-act="del-tack"]').forEach(b=>b.onclick=()=>{
     if(!confirm('Remove this tack item from inventory? It will be unequipped from any horses wearing it.')) return;
     state.tackInventory=(state.tackInventory||[]).filter(t=>t.id!==b.dataset.id);
-    state.horses.forEach(h=>{ h.tackEquipped=(h.tackEquipped||[]).filter(id=>id!==b.dataset.id); });
-    save(); render();
+    const affectedIds=[];
+    state.horses.forEach(h=>{
+      if((h.tackEquipped||[]).includes(b.dataset.id)) affectedIds.push(h.id);
+      h.tackEquipped=(h.tackEquipped||[]).filter(id=>id!==b.dataset.id);
+    });
+    save(affectedIds); render();
   });
 
   return wrap;
