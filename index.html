@@ -8,92 +8,96 @@
 <body>
 <div id="app"></div>
 <style>
-  /* Base type scale: grows gently with viewport width/resolution so the whole
-     app (nearly everything below is sized in em, so this cascades globally)
-     reads comfortably on everything from a phone to a wide desktop monitor. */
-  html { font-size: clamp(17px, 0.55vw + 15px, 20px); -webkit-text-size-adjust:100%; }
+  /* Base type scale: significantly larger baseline for readability/accessibility,
+     and keeps growing with viewport width so text reads comfortably on a phone
+     all the way up to a large desktop monitor instead of capping out early. */
+  html { font-size: clamp(19px, 0.7vw + 17px, 27px); -webkit-text-size-adjust:100%; }
   html, body { background:#1b1410; margin:0; padding:0; }
   #app {
     --bg:#1b1410; --panel:#241a14; --panel2:#2c2118;
     --accent:#c98a3a; --accent2:#7a9b6e;
     --text:#f1e6d8; --dim:#b5a392; --danger:#b1473f; --warn:#c9a23a; --good:#7a9b6e;
-    font-family:'Georgia','Garamond',serif; color:var(--text); line-height:1.5;
-    background:var(--bg); padding:clamp(14px,3vw,28px); max-width:1000px; margin:0 auto;
+    font-family:'Georgia','Garamond',serif; color:var(--text); line-height:1.65;
+    background:var(--bg); padding:clamp(20px,3vw,48px); max-width:min(1800px,92vw); margin:0 auto;
     box-sizing:border-box;
   }
   #app *, #app *::before, #app *::after { box-sizing:border-box; }
-  #app h1,#app h2,#app h3 { font-family:'Palatino Linotype',Georgia,serif; margin:.2em 0; line-height:1.3; }
-  #app h1 { color:var(--accent); border-bottom:2px solid var(--accent); padding-bottom:6px; font-size:1.6em; }
-  #app h3 { color:var(--accent); font-size:1.15em; margin-bottom:8px; }
-  #app .card { background:var(--panel); border:1px solid #4a392a; border-radius:8px; padding:clamp(12px,2.5vw,18px); margin-bottom:14px; }
-  #app .tabs { display:flex; gap:6px; margin:12px 0 16px; flex-wrap:wrap; }
-  #app .tab { padding:9px 16px; background:var(--panel2); border:1px solid #4a392a; border-radius:6px 6px 0 0; cursor:pointer; color:var(--dim); font-size:.95em; min-height:40px; display:inline-flex; align-items:center; }
+  #app h1,#app h2,#app h3 { font-family:'Palatino Linotype',Georgia,serif; margin:.3em 0; line-height:1.3; }
+  #app h1 { color:var(--accent); border-bottom:2px solid var(--accent); padding-bottom:10px; font-size:1.75em; }
+  #app h3 { color:var(--accent); font-size:1.3em; margin-bottom:12px; }
+  #app .card { background:var(--panel); border:1px solid #4a392a; border-radius:10px; padding:clamp(18px,3.2vw,28px); margin-bottom:22px; }
+  #app .tabs { display:flex; gap:10px; margin:18px 0 24px; flex-wrap:wrap; }
+  #app .tab { padding:12px 20px; background:var(--panel2); border:1px solid #4a392a; border-radius:8px 8px 0 0; cursor:pointer; color:var(--dim); font-size:1.02em; min-height:48px; display:inline-flex; align-items:center; }
   #app .tab.active { background:var(--accent); color:#241a14; font-weight:bold; border-color:var(--accent); }
-  #app .row { display:flex; gap:10px; flex-wrap:wrap; }
-  #app .row > div { flex:1; min-width:min(140px,100%); }
-  #app label { font-size:.82em; color:var(--dim); display:block; margin-bottom:4px; text-transform:uppercase; letter-spacing:.5px; }
+  #app .row { display:flex; gap:16px; flex-wrap:wrap; }
+  #app .row > div { flex:1; min-width:min(160px,100%); }
+  #app label { font-size:.92em; color:var(--dim); display:block; margin-bottom:6px; text-transform:uppercase; letter-spacing:.5px; }
   #app input, #app select, #app textarea {
-    width:100%; padding:9px 10px; background:#15100c; border:1px solid #4a392a;
-    color:var(--text); border-radius:5px; font-family:inherit; font-size:1em; box-sizing:border-box; min-height:40px;
+    width:100%; padding:12px 14px; background:#15100c; border:1px solid #4a392a;
+    color:var(--text); border-radius:6px; font-family:inherit; font-size:1.05em; box-sizing:border-box; min-height:46px;
   }
-  #app textarea { min-height:80px; }
+  #app textarea { min-height:100px; }
   #app button {
-    background:var(--accent); color:#231a12; border:none; padding:10px 16px;
-    border-radius:6px; cursor:pointer; font-weight:bold; font-family:inherit; font-size:.95em; margin-top:6px;
-    min-height:40px;
+    background:var(--accent); color:#231a12; border:none; padding:13px 20px;
+    border-radius:7px; cursor:pointer; font-weight:bold; font-family:inherit; font-size:1.02em; margin-top:8px;
+    min-height:46px;
   }
   #app button.secondary { background:var(--panel2); color:var(--text) !important; border:1px solid var(--accent); }
   #app button.danger { background:var(--danger); color:#fff !important; }
   #app button:hover { opacity:.88; }
-  #app .small { font-size:.8em; color:var(--dim); }
-  #app .tag { display:inline-block; font-size:.72em; padding:2px 8px; border-radius:10px; margin-left:4px; background:#15100c; color:var(--dim); border:1px solid #4a392a; }
-  #app .result { padding:10px; border-radius:6px; margin-top:8px; font-weight:bold; }
+  #app .small { font-size:.92em; color:var(--dim); }
+  #app .tag { display:inline-block; font-size:1.04em; padding:4px 10px; border-radius:10px; margin-left:6px; background:#15100c; color:var(--dim); border:1px solid #4a392a; }
+  #app .result { padding:14px; border-radius:6px; margin-top:10px; font-weight:bold; }
   #app .result.success { background:rgba(122,155,110,.15); border:1px solid var(--good); color:var(--good); }
   #app .result.fail { background:rgba(177,71,63,.15); border:1px solid var(--danger); color:var(--danger); }
-  #app .pill-select { display:flex; gap:6px; flex-wrap:wrap; margin-top:6px; }
-  #app .pill { padding:5px 11px; background:#15100c; border:1px solid #4a392a; border-radius:14px; font-size:.82em; cursor:pointer; color:var(--dim); }
+  #app .pill-select { display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; }
+  #app .pill { padding:8px 14px; background:#15100c; border:1px solid #4a392a; border-radius:14px; font-size:1.1em; cursor:pointer; color:var(--dim); min-height:40px; display:inline-flex; align-items:center; }
   #app .pill.active { background:var(--accent); color:#241a14; border-color:var(--accent); }
-  #app .prompt-box { background:#15100c; border:1px dashed var(--accent); border-radius:6px; padding:10px; margin-top:8px; font-style:italic; color:var(--text); font-size:.9em; }
+  #app .prompt-box { background:#15100c; border:1px dashed var(--accent); border-radius:6px; padding:14px; margin-top:10px; font-style:italic; color:var(--text); font-size:1em; }
   /* Horse cards */
-  #app .horse-card { background:var(--panel2); border:1px solid #4a392a; border-radius:8px; padding:12px; margin-bottom:10px; }
-  #app .horse-photo { width:64px; height:64px; border-radius:8px; object-fit:cover; border:2px solid var(--accent); }
-  #app .horse-photo-placeholder { width:64px; height:64px; border-radius:8px; border:2px solid #4a392a; display:flex; align-items:center; justify-content:center; font-size:1.8em; background:#15100c; }
+  #app .horse-card { background:var(--panel2); border:1px solid #4a392a; border-radius:10px; padding:18px; margin-bottom:16px; }
+  #app .horse-photo { width:76px; height:76px; border-radius:8px; object-fit:cover; border:2px solid var(--accent); }
+  #app .horse-photo-placeholder { width:76px; height:76px; border-radius:8px; border:2px solid #4a392a; display:flex; align-items:center; justify-content:center; font-size:1.8em; background:#15100c; }
   /* Lightbox */
   #lightbox-overlay { position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:99999;display:flex;align-items:center;justify-content:center;cursor:zoom-out;padding:20px; }
   #lightbox-overlay img { max-width:100%;max-height:90vh;border-radius:8px;box-shadow:0 0 40px rgba(0,0,0,.8);object-fit:contain; }
-  #lightbox-overlay .lb-caption { position:fixed;bottom:20px;left:50%;transform:translateX(-50%);color:#f1e6d8;background:rgba(0,0,0,.7);padding:6px 16px;border-radius:20px;font-size:.85em; }
+  #lightbox-overlay .lb-caption { position:fixed;bottom:20px;left:50%;transform:translateX(-50%);color:#f1e6d8;background:rgba(0,0,0,.7);padding:8px 18px;border-radius:20px;font-size:1em; }
   /* Art log */
-  #app .artlog-panel { margin-top:10px; background:#15100c; border:1px solid #4a392a; border-radius:6px; padding:8px; max-height:280px; overflow-y:auto; }
-  #app .artlog-entry { padding:7px 0; border-bottom:1px dashed #2c2118; font-size:.85em; }
+  #app .artlog-panel { margin-top:14px; background:#15100c; border:1px solid #4a392a; border-radius:6px; padding:12px; max-height:320px; overflow-y:auto; }
+  #app .artlog-entry { padding:11px 0; border-bottom:1px dashed #2c2118; font-size:1.1em; }
   #app .artlog-entry:last-child { border-bottom:none; }
-  #app .artlog-thumb { width:48px; height:48px; border-radius:5px; object-fit:cover; border:1px solid #4a392a; margin-right:8px; vertical-align:middle; }
+  #app .artlog-thumb { width:56px; height:56px; border-radius:5px; object-fit:cover; border:1px solid #4a392a; margin-right:10px; vertical-align:middle; }
   /* Stat bars */
-  #app .statgrid { display:grid; grid-template-columns:repeat(3,1fr); gap:4px; margin-top:8px; font-size:.82em; }
-  #app .statbar-wrap { display:flex; align-items:center; gap:5px; }
-  #app .statbar-bg { flex:1; height:6px; background:#15100c; border-radius:4px; overflow:hidden; }
+  #app .statgrid { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-top:12px; font-size:.92em; }
+  #app .statbar-wrap { display:flex; align-items:center; gap:8px; }
+  #app .statbar-bg { flex:1; height:8px; background:#15100c; border-radius:4px; overflow:hidden; }
   #app .statbar-fill { height:100%; background:linear-gradient(90deg,var(--accent2),var(--accent)); }
-  #app .expbar-bg { height:8px; background:#15100c; border-radius:5px; overflow:hidden; margin-top:4px; }
+  #app .expbar-bg { height:10px; background:#15100c; border-radius:5px; overflow:hidden; margin-top:6px; }
   #app .expbar-fill { height:100%; background:linear-gradient(90deg,#8a6fb0,#c98a3a); }
-  #app .breedslots { display:flex; gap:5px; margin-top:5px; flex-wrap:wrap; }
-  #app .slot { width:20px; height:20px; border-radius:50%; border:1px solid var(--accent); display:flex; align-items:center; justify-content:center; font-size:.65em; }
+  #app .breedslots { display:flex; gap:7px; margin-top:7px; flex-wrap:wrap; }
+  #app .slot { width:24px; height:24px; border-radius:50%; border:1px solid var(--accent); display:flex; align-items:center; justify-content:center; font-size:1em; }
   #app .slot.filled { background:var(--accent); color:#15100c; }
   /* Required field indicator */
-  #app .required { color:var(--warn); font-size:.8em; margin-left:4px; }
+  #app .required { color:var(--warn); font-size:1.06em; margin-left:4px; }
   #app input.missing, #app select.missing { border-color:var(--danger) !important; }
 
-  /* Ribbon Wall: cards shrink to fit narrow screens instead of overflowing */
-  #app .ribbon-frame { width:min(280px,72vw); }
+  /* Ribbon Wall: frames scale with screen size (bigger on a wide monitor, shrink
+     to fit on a phone) and fully contain their contents — long ribbon/prize labels
+     can never bleed out and overlap a neighboring frame. */
+  #app .ribbon-frame { width:clamp(230px,24vw,400px); min-width:0; }
+  #app .ribbon-frame * { min-width:0; }
   #app .ribbon-frame img, #app .ribbon-art-empty { width:100% !important; height:auto !important; aspect-ratio:1; }
+  #app .ribbon-frame > div:last-child { overflow:hidden; }
 
-  /* ---- Mobile: bigger touch targets, tighter spacing, single-column layouts ---- */
+  /* ---- Mobile: bigger touch targets, generous spacing, single-column layouts ---- */
   @media (max-width:640px){
-    #app { padding:12px; }
-    #app .card { padding:12px; }
-    #app .tabs { gap:6px; }
-    #app .tab { flex:1 1 auto; justify-content:center; padding:10px 10px; font-size:.9em; }
+    #app { padding:16px; }
+    #app .card { padding:16px; margin-bottom:18px; }
+    #app .tabs { gap:8px; }
+    #app .tab { flex:1 1 auto; justify-content:center; padding:12px 10px; font-size:1em; }
     #app .row > div { min-width:100%; }
     #app .statgrid { grid-template-columns:repeat(2,1fr); }
-    #app .horse-card { padding:14px; }
+    #app .horse-card { padding:16px; }
   }
   @media (max-width:380px){
     #app .statgrid { grid-template-columns:1fr; }
@@ -823,7 +827,7 @@ function render(){
       }
       app.innerHTML=`<div style="padding:40px;text-align:center;color:#b5a392;font-family:Georgia,serif;max-width:500px;margin:0 auto;">
         🐴 Horse not found.<br>
-        <div style="font-size:.8em;opacity:.8;margin-top:10px;background:#15100c;border:1px solid #4a392a;border-radius:6px;padding:10px;">${reason}</div>
+        <div style="font-size:1em;opacity:.8;margin-top:10px;background:#15100c;border:1px solid #4a392a;border-radius:6px;padding:10px;">${reason}</div>
         <br><a href="${window.location.pathname}" style="color:#c98a3a;">← Back</a>
       </div>`;
     });
@@ -858,7 +862,7 @@ function render(){
         </div>`).join("")}
       <div style="flex:1;"></div>
       <span class="small" style="color:var(--dim);margin-right:6px;">👤 ${bankAccount.userId}</span>
-      <button id="btn_signout" class="secondary" style="font-size:.78em;padding:4px 10px;margin-top:0;">🔓 Sign Out</button>
+      <button id="btn_signout" class="secondary" style="font-size:.98em;padding:4px 10px;margin-top:0;">🔓 Sign Out</button>
     </div>
     <div id="tab-content"></div>
   `;
@@ -896,23 +900,23 @@ function renderLoginScreen(app){
     <div style="max-width:460px;margin:clamp(16px,6vh,40px) auto;background:#241a14;border:1px solid #4a392a;border-radius:8px;padding:clamp(16px,4vw,20px);">
       <h3 style="margin-top:0;color:#c98a3a;">Sign in to your stable</h3>
       <p class="small">Use the same User ID and password as your Buxx Bank account.</p>
-      ${!stableSet?'<div style="background:rgba(177,71,63,.15);border:1px solid #b1473f;border-radius:6px;padding:8px;margin-bottom:10px;font-size:.85em;color:#e08080;">⚠️ Stable Data URL not configured — expand Admin section below first.</div>':""}
+      ${!stableSet?'<div style="background:rgba(177,71,63,.15);border:1px solid #b1473f;border-radius:6px;padding:8px;margin-bottom:10px;font-size:1.02em;color:#e08080;">⚠️ Stable Data URL not configured — expand Admin section below first.</div>':""}
       <div style="margin-bottom:8px;"><label class="small">Bank User ID</label><input id="li_user" placeholder="Your userId" style="width:100%;padding:8px;background:#15100c;border:1px solid #4a392a;color:#f1e6d8;border-radius:5px;box-sizing:border-box;margin-top:3px;" /></div>
       <div style="margin-bottom:10px;"><label class="small">Password</label><input id="li_pass" type="password" placeholder="Your password" style="width:100%;padding:8px;background:#15100c;border:1px solid #4a392a;color:#f1e6d8;border-radius:5px;box-sizing:border-box;margin-top:3px;" /></div>
-      <button id="li_go" style="width:100%;padding:10px;background:#c98a3a;color:#241a14;border:none;border-radius:6px;font-weight:bold;cursor:pointer;font-size:.95em;">🔐 Sign In</button>
+      <button id="li_go" style="width:100%;padding:10px;background:#c98a3a;color:#241a14;border:none;border-radius:6px;font-weight:bold;cursor:pointer;font-size:1.1em;">🔐 Sign In</button>
       <div id="li_result" style="margin-top:8px;"></div>
       <hr style="border:none;border-top:1px solid #4a392a;margin:16px 0;" />
       <details ${!stableSet?"open":""}>
-        <summary style="cursor:pointer;font-size:.85em;color:#b5a392;">⚙️ Admin: Configure Stable Data URL</summary>
+        <summary style="cursor:pointer;font-size:1.02em;color:#b5a392;">⚙️ Admin: Configure Stable Data URL</summary>
         <div style="margin-top:10px;">
           <p class="small">Paste the /exec URL from your deployed Stable Data Apps Script.</p>
-          ${stableSet?'<div style="color:#7a9b6e;font-size:.82em;margin-bottom:6px;">✅ Stable URL is configured.</div>':'<div style="color:#b1473f;font-size:.82em;margin-bottom:6px;">⚠️ Not configured yet.</div>'}
+          ${stableSet?'<div style="color:#7a9b6e;font-size:1em;margin-bottom:6px;">✅ Stable URL is configured.</div>':'<div style="color:#b1473f;font-size:1em;margin-bottom:6px;">⚠️ Not configured yet.</div>'}
           <input id="li_stable_url" placeholder="https://script.google.com/macros/s/…/exec" value="${STABLE_URL||''}" style="width:100%;padding:7px;background:#15100c;border:1px solid #4a392a;color:#f1e6d8;border-radius:5px;box-sizing:border-box;margin-bottom:6px;" />
           <div id="li_admin_lock" style="${stableSet?'':'display:none;'}">
             <input id="li_admin_pass" type="password" placeholder="Admin passcode" style="width:100%;padding:7px;background:#15100c;border:1px solid #4a392a;color:#f1e6d8;border-radius:5px;box-sizing:border-box;margin-bottom:6px;" />
           </div>
           <button id="li_save_url" style="width:100%;padding:8px;background:#2c2118;color:#f1e6d8;border:1px solid #4a392a;border-radius:5px;cursor:pointer;">💾 Save Stable URL</button>
-          <div id="li_url_result" style="margin-top:4px;font-size:.82em;"></div>
+          <div id="li_url_result" style="margin-top:4px;font-size:1em;"></div>
         </div>
       </details>
     </div>
@@ -922,18 +926,18 @@ function renderLoginScreen(app){
     const userId=app.querySelector('#li_user').value.trim();
     const password=app.querySelector('#li_pass').value.trim();
     const res=app.querySelector('#li_result');
-    if(!userId||!password){ res.innerHTML='<div style="color:#e08080;font-size:.85em;">Please enter both User ID and password.</div>'; return; }
-    if(!STABLE_URL){ res.innerHTML='<div style="color:#e08080;font-size:.85em;">⚠️ Configure the Stable Data URL first (Admin section below).</div>'; return; }
+    if(!userId||!password){ res.innerHTML='<div style="color:#e08080;font-size:1.02em;">Please enter both User ID and password.</div>'; return; }
+    if(!STABLE_URL){ res.innerHTML='<div style="color:#e08080;font-size:1.02em;">⚠️ Configure the Stable Data URL first (Admin section below).</div>'; return; }
     res.innerHTML='<div class="small">Signing in…</div>';
     const data=await gasPost({action:'loginPlayer',userId,password});
     if(data?.success){
       bankAccount={userId,password,linked:true};
       saveBankAccount();
-      res.innerHTML='<div style="color:#7a9b6e;font-size:.85em;">✅ Welcome, '+data.data.displayName+'! Loading stable…</div>';
+      res.innerHTML='<div style="color:#7a9b6e;font-size:1.02em;">✅ Welcome, '+data.data.displayName+'! Loading stable…</div>';
       await loadFromSheets();
       render();
     } else {
-      res.innerHTML='<div style="color:#e08080;font-size:.85em;">❌ '+(data?.error||'Login failed — check your User ID and password.')+'</div>';
+      res.innerHTML='<div style="color:#e08080;font-size:1.02em;">❌ '+(data?.error||'Login failed — check your User ID and password.')+'</div>';
     }
   };
   app.querySelector('#li_pass').onkeydown=e=>{ if(e.key==='Enter') app.querySelector('#li_go').click(); };
@@ -1043,9 +1047,9 @@ function renderRoster(){
     const statBars = STATS.map(s=>{
       const base=h.stats[s]||0, bonus=getEquippedStatBonus(h,s);
       return `<div class="statbar-wrap">
-        <span style="width:72px;font-size:.78em;">${STAT_LABELS[s]}</span>
+        <span style="width:72px;font-size:.98em;">${STAT_LABELS[s]}</span>
         <div class="statbar-bg"><div class="statbar-fill" style="width:${Math.min(100,base+bonus)}%"></div></div>
-        <span style="font-size:.75em;width:36px;text-align:right;">${base+bonus}${bonus?`<span style="color:var(--good);">+${bonus}</span>`:""}</span>
+        <span style="font-size:.98em;width:36px;text-align:right;">${base+bonus}${bonus?`<span style="color:var(--good);">+${bonus}</span>`:""}</span>
       </div>`;
     }).join("");
 
@@ -1062,8 +1066,8 @@ function renderRoster(){
             ${e.image?`<img src="${e.image}" class="artlog-thumb" data-lightbox="${e.image}" data-caption="${e.label}" style="cursor:zoom-in;" />`:""}
             <b>${e.label}</b> ${e.type==="competition"&&e.placement?`<span class="tag">${["1st","2nd","3rd","4th","5th","6th"][e.placement-1]||e.placement+"th"}</span>`:""}
             <span class="tag">+${e.exp} EXP</span>
-            <span data-act="delete-artlog" data-id="${h.id}" data-entry="${e.id}" style="cursor:pointer;color:#c96a3a;font-size:.85em;margin-left:6px;" title="Delete this entry (reverses its EXP/stats)">🗑️</span>
-            ${e.link?`<a href="${e.link}" target="_blank" class="artlog-link" style="font-size:.8em;margin-left:6px;">🔗 View</a>`:""}
+            <span data-act="delete-artlog" data-id="${h.id}" data-entry="${e.id}" style="cursor:pointer;color:#c96a3a;font-size:1.02em;margin-left:6px;" title="Delete this entry (reverses its EXP/stats)">🗑️</span>
+            ${e.link?`<a href="${e.link}" target="_blank" class="artlog-link" style="font-size:1em;margin-left:6px;">🔗 View</a>`:""}
             <div class="small" style="margin-top:2px;">${e.art||""}${e.lit?` · ${e.lit}`:""}</div>
           </div>`).join("") : '<div class="small">No entries yet.</div>'}
       </div>` : "";
@@ -1092,7 +1096,7 @@ function renderRoster(){
         <div style="display:flex;flex-direction:column;align-items:center;gap:4px;flex:none;">
           ${photoHtml}
           <input type="file" accept="image/*" data-photo-input="${h.id}" style="display:none;" />
-          <button class="secondary" data-act="upload-photo" data-id="${h.id}" style="font-size:.72em;padding:3px 7px;margin-top:0;">📷</button>
+          <button class="secondary" data-act="upload-photo" data-id="${h.id}" style="font-size:.97em;padding:3px 7px;margin-top:0;">📷</button>
         </div>
         <div style="flex:1;">
           <div style="display:flex;align-items:baseline;flex-wrap:wrap;gap:6px;">
@@ -1112,7 +1116,7 @@ function renderRoster(){
         <div class="small" style="margin-bottom:3px;">🏇 Equipped Tack:</div>
         <div style="display:flex;flex-wrap:wrap;gap:4px;">${equippedHtml}</div>
         ${availableTack.length ? `
-          <select data-act="equip-select" data-id="${h.id}" style="margin-top:4px;width:auto;display:inline-block;font-size:.82em;">
+          <select data-act="equip-select" data-id="${h.id}" style="margin-top:4px;width:auto;display:inline-block;font-size:1em;">
             <option value="">+ Equip tack…</option>
             ${availableTack.map(t=>`<option value="${t.id}">${t.name} (${t.category})</option>`).join("")}
           </select>` : `<div class="small" style="margin-top:4px;">No more tack available — add some in the Tack Inventory tab.</div>`}
@@ -1122,13 +1126,13 @@ function renderRoster(){
       <div class="breedslots">${slots||'<span class="small">none yet</span>'}</div>
 
       <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">
-        <button class="secondary" data-act="toggle-log" data-id="${h.id}" style="font-size:.8em;padding:4px 10px;margin-top:0;">📖 ${open?"Hide":"Show"} Art Log (${h.artLog.length})</button>
-        <button class="secondary" data-act="edit-lineage" data-id="${h.id}" style="font-size:.8em;padding:4px 10px;margin-top:0;">🧬 Lineage</button>
-        <button class="secondary" data-act="edit-profile" data-id="${h.id}" style="font-size:.8em;padding:4px 10px;margin-top:0;">✏️ Edit Profile</button>
-        <button class="secondary" data-act="edit-worth" data-id="${h.id}" style="font-size:.8em;padding:4px 10px;margin-top:0;">💰 Net Worth</button>
-        <button class="secondary" data-act="upload-ref" data-id="${h.id}" style="font-size:.8em;padding:4px 10px;margin-top:0;">📋 ${h.referenceImage?"Change":"Upload"} Ref</button>
+        <button class="secondary" data-act="toggle-log" data-id="${h.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">📖 ${open?"Hide":"Show"} Art Log (${h.artLog.length})</button>
+        <button class="secondary" data-act="edit-lineage" data-id="${h.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">🧬 Lineage</button>
+        <button class="secondary" data-act="edit-profile" data-id="${h.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">✏️ Edit Profile</button>
+        <button class="secondary" data-act="edit-worth" data-id="${h.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">💰 Net Worth</button>
+        <button class="secondary" data-act="upload-ref" data-id="${h.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">📋 ${h.referenceImage?"Change":"Upload"} Ref</button>
         <input type="file" accept="image/*" data-ref-input="${h.id}" style="display:none;" />
-        <button class="danger" data-act="del" data-id="${h.id}" style="font-size:.8em;padding:4px 10px;margin-top:0;">Remove</button>
+        <button class="danger" data-act="del" data-id="${h.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">Remove</button>
       </div>
       ${refHtml}
       ${artLogHtml}
@@ -1236,7 +1240,7 @@ function showBreedingSlotModal(horseId, slotIndex){
         ${existing.note?`<br><i>${existing.note}</i>`:""}
       </div>
       ${!existing.foalId ? `
-      <label style="font-size:.8em;color:#b5a392;text-transform:uppercase;">Link to Foal (if added to your roster)</label>
+      <label style="font-size:1em;color:#b5a392;text-transform:uppercase;">Link to Foal (if added to your roster)</label>
       <select id="bs_foal_select" style="width:100%;padding:7px;background:#15100c;border:1px solid #4a392a;color:#f1e6d8;border-radius:5px;margin-top:4px;">
         <option value="">— select foal from roster —</option>
         ${state.horses.filter(x=>x.id!==h.id).map(x=>`<option value="${x.id}">${x.name}</option>`).join("")}
@@ -1246,18 +1250,18 @@ function showBreedingSlotModal(horseId, slotIndex){
       <button id="bs_clear" style="margin-top:10px;width:100%;background:#b1473f;color:#fff;border:none;padding:9px;border-radius:6px;font-weight:bold;cursor:pointer;">🗑️ Clear This Slot</button>
     ` : `
       <p style="color:#b5a392;">Mark this slot as used by recording the breeding pairing.</p>
-      <label style="font-size:.8em;color:#b5a392;text-transform:uppercase;">This horse's role</label>
+      <label style="font-size:1em;color:#b5a392;text-transform:uppercase;">This horse's role</label>
       <select id="bs_role" style="width:100%;padding:7px;background:#15100c;border:1px solid #4a392a;color:#f1e6d8;border-radius:5px;margin-top:4px;">
         <option value="sire">Sire (this horse is the father)</option>
         <option value="dam">Dam (this horse is the mother)</option>
       </select>
-      <label style="font-size:.8em;color:#b5a392;text-transform:uppercase;margin-top:8px;display:block;">Partner's Name</label>
+      <label style="font-size:1em;color:#b5a392;text-transform:uppercase;margin-top:8px;display:block;">Partner's Name</label>
       <input id="bs_partner_name" placeholder="e.g. Moonshadow" style="width:100%;padding:7px;background:#15100c;border:1px solid #4a392a;color:#f1e6d8;border-radius:5px;margin-top:4px;" />
-      <label style="font-size:.8em;color:#b5a392;text-transform:uppercase;margin-top:8px;display:block;">Partner's Owner <span style="opacity:.7;">(optional)</span></label>
+      <label style="font-size:1em;color:#b5a392;text-transform:uppercase;margin-top:8px;display:block;">Partner's Owner <span style="opacity:.7;">(optional)</span></label>
       <input id="bs_partner_owner" placeholder="e.g. @username" style="width:100%;padding:7px;background:#15100c;border:1px solid #4a392a;color:#f1e6d8;border-radius:5px;margin-top:4px;" />
-      <label style="font-size:.8em;color:#b5a392;text-transform:uppercase;margin-top:8px;display:block;">Date</label>
+      <label style="font-size:1em;color:#b5a392;text-transform:uppercase;margin-top:8px;display:block;">Date</label>
       <input id="bs_date" placeholder="e.g. Day 45 or a real date" style="width:100%;padding:7px;background:#15100c;border:1px solid #4a392a;color:#f1e6d8;border-radius:5px;margin-top:4px;" />
-      <label style="font-size:.8em;color:#b5a392;text-transform:uppercase;margin-top:8px;display:block;">Note <span style="opacity:.7;">(optional)</span></label>
+      <label style="font-size:1em;color:#b5a392;text-transform:uppercase;margin-top:8px;display:block;">Note <span style="opacity:.7;">(optional)</span></label>
       <input id="bs_note" placeholder="Any notes about this breeding" style="width:100%;padding:7px;background:#15100c;border:1px solid #4a392a;color:#f1e6d8;border-radius:5px;margin-top:4px;" />
       <button id="bs_save" style="margin-top:12px;width:100%;background:#c98a3a;color:#241a14;border:none;padding:9px;border-radius:6px;font-weight:bold;cursor:pointer;">✅ Mark Slot as Used</button>
     `}
@@ -1346,19 +1350,19 @@ function renderPedigreeChart(h){
   function row(key, label, indent){
     const e = pedEntry(h, key);
     const indentStyle = `padding-left:${indent}px;`;
-    return `<div style="${indentStyle}font-size:.82em;padding:2px 0;display:flex;align-items:center;gap:6px;">
-      <span style="color:#4a392a;min-width:32px;font-size:.9em;">${label}:</span>
+    return `<div style="${indentStyle}font-size:1em;padding:2px 0;display:flex;align-items:center;gap:6px;">
+      <span style="color:#4a392a;min-width:32px;font-size:1.06em;">${label}:</span>
       ${pedLink(e, label)}
     </div>`;
   }
 
   return `<div style="font-family:'Courier New',monospace;background:#15100c;border:1px solid #4a392a;border-radius:8px;padding:14px;line-height:1.8;">
-    <div style="font-size:.78em;color:#b5a392;margin-bottom:8px;font-family:Georgia,serif;">Bloodline:</div>
+    <div style="font-size:.98em;color:#b5a392;margin-bottom:8px;font-family:Georgia,serif;">Bloodline:</div>
 
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0;">
       <div>
-        <div style="font-size:.85em;padding:2px 0;"><b style="color:#c98a3a;">Sire:</b> ${pedLink(pedEntry(h,'sire'),'Sire')}</div>
-        <div style="font-size:.85em;padding:2px 0;margin-top:4px;"><b style="color:#c98a3a;">Dam:</b> ${pedLink(pedEntry(h,'dam'),'Dam')}</div>
+        <div style="font-size:1.02em;padding:2px 0;"><b style="color:#c98a3a;">Sire:</b> ${pedLink(pedEntry(h,'sire'),'Sire')}</div>
+        <div style="font-size:1.02em;padding:2px 0;margin-top:4px;"><b style="color:#c98a3a;">Dam:</b> ${pedLink(pedEntry(h,'dam'),'Dam')}</div>
       </div>
     </div>
 
@@ -1409,12 +1413,12 @@ function showLineageModal(horseId){
     const inRosterVal = e.inRosterId || "";
     return `
       <div style="background:#15100c;border:1px solid #4a392a;border-radius:6px;padding:10px;margin-bottom:8px;">
-        <div style="font-weight:bold;color:#c98a3a;margin-bottom:6px;font-size:.9em;">${label}</div>
-        <label style="font-size:.72em;color:#b5a392;text-transform:uppercase;display:block;">Name</label>
+        <div style="font-weight:bold;color:#c98a3a;margin-bottom:6px;font-size:1.06em;">${label}</div>
+        <label style="font-size:.97em;color:#b5a392;text-transform:uppercase;display:block;">Name</label>
         <input data-ped="${key}" data-field="name" value="${e.name||''}" placeholder="e.g. Shadowfax" style="width:100%;padding:6px;background:#1b1410;border:1px solid #4a392a;color:#f1e6d8;border-radius:4px;margin-top:3px;box-sizing:border-box;" />
-        <label style="font-size:.72em;color:#b5a392;text-transform:uppercase;display:block;margin-top:6px;">External Link <span style="opacity:.6;">(off-site URL, optional)</span></label>
+        <label style="font-size:.97em;color:#b5a392;text-transform:uppercase;display:block;margin-top:6px;">External Link <span style="opacity:.6;">(off-site URL, optional)</span></label>
         <input data-ped="${key}" data-field="link" value="${e.link||''}" placeholder="https://… (DeviantArt, Toyhouse, etc.)" style="width:100%;padding:6px;background:#1b1410;border:1px solid #4a392a;color:#f1e6d8;border-radius:4px;margin-top:3px;box-sizing:border-box;" />
-        <label style="font-size:.72em;color:#b5a392;text-transform:uppercase;display:block;margin-top:6px;">Link to horse in your roster <span style="opacity:.6;">(overrides external link)</span></label>
+        <label style="font-size:.97em;color:#b5a392;text-transform:uppercase;display:block;margin-top:6px;">Link to horse in your roster <span style="opacity:.6;">(overrides external link)</span></label>
         <select data-ped="${key}" data-field="inRosterId" style="width:100%;padding:6px;background:#1b1410;border:1px solid #4a392a;color:#f1e6d8;border-radius:4px;margin-top:3px;box-sizing:border-box;">
           <option value="">— not in roster —</option>
           ${rosterOpts.replace(`value="${inRosterVal}"`, `value="${inRosterVal}" selected`)}
@@ -1426,7 +1430,7 @@ function showLineageModal(horseId){
   overlay.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.9);z-index:9999;display:flex;align-items:flex-start;justify-content:center;padding:16px;overflow-y:auto;';
   overlay.innerHTML=`<div style="background:#2c1f16;border:2px solid #c98a3a;border-radius:10px;padding:24px;max-width:560px;width:100%;color:#f1e6d8;font-family:Georgia,serif;margin:auto;">
     <h3 style="margin-top:0;color:#c98a3a;">🧬 Pedigree Editor — ${h.name}</h3>
-    <p style="color:#b5a392;font-size:.85em;margin-top:0;">Fill in up to 3 generations. Names can link to on-site horse profiles or external pages. Leave blank for Unknown.</p>
+    <p style="color:#b5a392;font-size:1.02em;margin-top:0;">Fill in up to 3 generations. Names can link to on-site horse profiles or external pages. Leave blank for Unknown.</p>
 
     <details open style="margin-bottom:8px;"><summary style="cursor:pointer;color:#c98a3a;font-weight:bold;padding:6px 0;">Generation 1 — Parents</summary>
       ${slotFields('sire','Sire (Father)')}
@@ -1447,8 +1451,8 @@ function showLineageModal(horseId){
       ${slotFields('dds','DDS')}${slotFields('ddd','DDD')}
     </details>
 
-    <button id="ln_save" style="margin-top:10px;width:100%;background:#c98a3a;color:#241a14;border:none;padding:10px;border-radius:6px;font-weight:bold;cursor:pointer;font-size:.95em;">💾 Save Pedigree</button>
-    <button id="ln_cancel" style="margin-top:8px;width:100%;background:#2c2118;color:#f1e6d8;border:1px solid #4a392a;padding:10px;border-radius:6px;cursor:pointer;font-size:.95em;">Cancel</button>
+    <button id="ln_save" style="margin-top:10px;width:100%;background:#c98a3a;color:#241a14;border:none;padding:10px;border-radius:6px;font-weight:bold;cursor:pointer;font-size:1.1em;">💾 Save Pedigree</button>
+    <button id="ln_cancel" style="margin-top:8px;width:100%;background:#2c2118;color:#f1e6d8;border:1px solid #4a392a;padding:10px;border-radius:6px;cursor:pointer;font-size:1.1em;">Cancel</button>
   </div>`;
   document.body.appendChild(overlay);
 
@@ -1548,7 +1552,7 @@ function renderTraining(){
     const statsStr=Object.entries(allStats).map(([s,v])=>`+${v} ${STAT_LABELS[s]}`).join(", ");
     card.querySelector('#tr_prompt').innerHTML=`<div class="prompt-box">
       ${t2?`⚡ <b>${t.name}</b> + <b>${t2.name}</b>`:`📝 <b>${t.name}</b>`}<br>
-      <span style="font-size:.85em;">${t.prompt}${t2?`<br><span style="opacity:.8;">${t2.prompt}</span>`:""}</span><br>
+      <span style="font-size:1.02em;">${t.prompt}${t2?`<br><span style="opacity:.8;">${t2.prompt}</span>`:""}</span><br>
       <span class="small">Stats: ${statsStr}</span>
     </div>`;
   }
@@ -1822,7 +1826,7 @@ function buildShowLogForm(){
     <label>Prizes, Ribbons & Trophies <span class="small">(add as many as you like)</span></label>
     <p class="small" style="margin:2px 0 6px;">Paste direct image links for your ribbons, trophies, sashes, prize tack, or any awards from this show. Each gets a label.</p>
     <div id="cs_prize_area"></div>
-    <button id="cs_add_prize" class="secondary" style="margin-top:6px;font-size:.85em;">➕ Add Prize / Ribbon</button>
+    <button id="cs_add_prize" class="secondary" style="margin-top:6px;font-size:1.02em;">➕ Add Prize / Ribbon</button>
 
     <hr style="border:none;border-top:1px solid #4a392a;margin:14px 0;" />
 
@@ -1875,7 +1879,7 @@ function buildShowLogForm(){
           <input data-prize-label="${i}" value="${p.label||''}" placeholder="e.g. 1st Place Ribbon, Championship Trophy, Prize Saddle Pad…"
             style="width:100%;padding:5px;background:#1b1410;border:1px solid #4a392a;color:#f1e6d8;border-radius:4px;box-sizing:border-box;" />
         </div>
-        <button data-remove-prize="${i}" class="danger" style="font-size:.75em;padding:3px 8px;flex:none;">✕</button>
+        <button data-remove-prize="${i}" class="danger" style="font-size:.98em;padding:3px 8px;flex:none;">✕</button>
       </div>`).join("") : '<div class="small" style="color:#5a4a3a;padding:4px 0;">No prizes added yet.</div>';
 
     area.querySelectorAll('[data-prize-label]').forEach(inp=>{
@@ -2012,9 +2016,9 @@ function buildShowHistory(){
               : `<div style="font-size:2.2em;margin-bottom:4px;">${icon}</div>`;
             return `<div style="background:#15100c;border:1px solid #4a392a;border-radius:8px;padding:8px;text-align:center;min-width:80px;max-width:110px;">
               ${prizesHtml}
-              <div style="font-size:.78em;">${icon} ${placeStr}</div>
-              <div style="font-size:.72em;opacity:.7;">${c.discipline}</div>
-              ${c.venue?`<div style="font-size:.68em;opacity:.5;">${c.venue}</div>`:""}
+              <div style="font-size:.98em;">${icon} ${placeStr}</div>
+              <div style="font-size:.97em;opacity:.7;">${c.discipline}</div>
+              ${c.venue?`<div style="font-size:1.1em;opacity:.5;">${c.venue}</div>`:""}
             </div>`;
           }).join("")}
         </div>
@@ -2044,11 +2048,11 @@ function buildShowHistory(){
                 ${prizes.length?`<div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px;">
                   ${prizes.map(p=>`<div style="text-align:center;">
                     <img src="${p.dataUrl}" style="width:40px;height:40px;object-fit:cover;border-radius:4px;border:1px solid #4a392a;cursor:zoom-in;display:block;" onclick="openLightbox('${jsStr(p.dataUrl)}','${jsStr(p.label||'Prize')}')" onerror="this.style.display='none'" />
-                    ${p.label?`<div style="font-size:.65em;opacity:.6;max-width:44px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${p.label}</div>`:""}
+                    ${p.label?`<div style="font-size:1.1em;opacity:.6;max-width:44px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${p.label}</div>`:""}
                   </div>`).join("")}
                 </div>`:""}
-                <button data-act="edit-show" data-hid="${h.id}" data-cid="${c.id}" class="secondary" style="font-size:.7em;padding:2px 7px;margin-top:6px;">✏️ Edit Placement / Prizes</button>
-                <button data-act="del-show" data-hid="${h.id}" data-cid="${c.id}" class="secondary" style="font-size:.7em;padding:2px 7px;margin-top:6px;">✕ Remove</button>
+                <button data-act="edit-show" data-hid="${h.id}" data-cid="${c.id}" class="secondary" style="font-size:.96em;padding:2px 7px;margin-top:6px;">✏️ Edit Placement / Prizes</button>
+                <button data-act="del-show" data-hid="${h.id}" data-cid="${c.id}" class="secondary" style="font-size:.96em;padding:2px 7px;margin-top:6px;">✕ Remove</button>
               </div>
             </div>
           </div>`;
@@ -2159,8 +2163,8 @@ function renderArtLog(){
               <b>${e.label}</b>
               ${placeLabel?`<span class="tag">${placeLabel}</span>`:""}
               <span class="tag" style="background:rgba(122,155,110,.15);color:#7a9b6e;border-color:#7a9b6e;">+${e.exp} EXP</span>
-              <span data-act="delete-artlog" data-id="${h.id}" data-entry="${e.id}" style="cursor:pointer;color:#c96a3a;font-size:.85em;margin-left:6px;" title="Delete this entry (reverses its EXP/stats)">🗑️</span>
-              ${e.link?`<a href="${e.link}" target="_blank" class="artlog-link" style="font-size:.8em;margin-left:4px;">🔗</a>`:""}
+              <span data-act="delete-artlog" data-id="${h.id}" data-entry="${e.id}" style="cursor:pointer;color:#c96a3a;font-size:1.02em;margin-left:6px;" title="Delete this entry (reverses its EXP/stats)">🗑️</span>
+              ${e.link?`<a href="${e.link}" target="_blank" class="artlog-link" style="font-size:1em;margin-left:4px;">🔗</a>`:""}
               <div class="small" style="margin-top:2px;">${[e.art,e.lit,...(e.bonuses||[])].filter(Boolean).join(" · ")}</div>
             </div>
           </div>
@@ -2214,7 +2218,7 @@ function renderTackInventory(){
     <div style="margin-top:8px;">
       <label>Stat Bonuses While Equipped <span class="small">(optional)</span></label>
       <div class="row">
-        ${STATS.map(s=>`<div style="min-width:90px;"><label style="font-size:.7em;">${STAT_LABELS[s]}</label><input type="number" id="tk_stat_${s}" value="0" style="padding:4px 6px;" /></div>`).join("")}
+        ${STATS.map(s=>`<div style="min-width:90px;"><label style="font-size:.96em;">${STAT_LABELS[s]}</label><input type="number" id="tk_stat_${s}" value="0" style="padding:4px 6px;" /></div>`).join("")}
       </div>
     </div>
     <button id="tk_add" style="margin-top:10px;">➕ Add to Inventory</button>
@@ -2263,10 +2267,10 @@ function renderTackInventory(){
       div.style.cssText='background:#15100c;border:1px solid #4a392a;border-radius:8px;padding:8px;text-align:center;';
       div.innerHTML=`
         ${item.image?`<img src="${item.image}" style="width:100%;height:90px;object-fit:cover;border-radius:5px;" />`:`<div style="height:90px;display:flex;align-items:center;justify-content:center;font-size:2em;color:#4a392a;">🏇</div>`}
-        <div style="margin-top:6px;font-weight:bold;font-size:.88em;">${item.name}</div>
+        <div style="margin-top:6px;font-weight:bold;font-size:1.04em;">${item.name}</div>
         <div class="small">${item.category}</div>
         ${statsStr?`<div class="small" style="color:var(--good);margin-top:2px;">${statsStr}</div>`:""}
-        <button class="danger" data-act="del-tack" data-id="${item.id}" style="font-size:.7em;padding:3px 8px;margin-top:6px;">Remove</button>
+        <button class="danger" data-act="del-tack" data-id="${item.id}" style="font-size:.96em;padding:3px 8px;margin-top:6px;">Remove</button>
       `;
       grid.appendChild(div);
     });
@@ -2645,9 +2649,9 @@ function renderHorseProfilePage(app, h){
   const statBars = STATS.map(s=>{
     const base=h.stats[s]||0, bonus=getEquippedStatBonus(h,s), eff=base+bonus;
     return `<div class="statbar-wrap">
-      <span style="width:80px;font-size:.8em;">${STAT_LABELS[s]}</span>
+      <span style="width:80px;font-size:1em;">${STAT_LABELS[s]}</span>
       <div class="statbar-bg"><div class="statbar-fill" style="width:${Math.min(100,eff)}%"></div></div>
-      <span style="font-size:.78em;width:60px;text-align:right;">${eff}${bonus?` <span style="color:#7a9b6e;">(+${bonus})</span>`:""}</span>
+      <span style="font-size:.98em;width:60px;text-align:right;">${eff}${bonus?` <span style="color:#7a9b6e;">(+${bonus})</span>`:""}</span>
     </div>`;
   }).join("");
 
@@ -2673,7 +2677,7 @@ function renderHorseProfilePage(app, h){
   }).join(" ")||`<span class="small">Nothing equipped.</span>`;
 
   const trophies=(h.compHistory||[]).filter(c=>c.placement>=1&&c.placement<=3);
-  const ribbonWall=trophies.length?`<div style="background:repeating-linear-gradient(90deg,#241a12,#241a12 42px,#2a1f16 42px,#2a1f16 84px);border:1px solid #4a392a;border-radius:10px;padding:20px;display:flex;gap:26px;flex-wrap:wrap;justify-content:flex-start;">
+  const ribbonWall=trophies.length?`<div style="background:repeating-linear-gradient(90deg,#241a12,#241a12 42px,#2a1f16 42px,#2a1f16 84px);border:1px solid #4a392a;border-radius:10px;padding:28px;display:flex;gap:36px;flex-wrap:wrap;justify-content:flex-start;">
     ${trophies.map(c=>{
       const icon=c.placement===1?"🥇":c.placement===2?"🥈":"🥉";
       const placeStr=["1st","2nd","3rd"][c.placement-1];
@@ -2682,10 +2686,10 @@ function renderHorseProfilePage(app, h){
       const prizesHtml = prizes.length===1
         ? `<img src="${prizes[0].dataUrl}" style="width:100%;aspect-ratio:1;object-fit:cover;border-radius:6px;display:block;cursor:zoom-in;" onclick="openLightbox('${jsStr(prizes[0].dataUrl)}','${jsStr(prizes[0].label||(c.discipline+' — '+placeStr))}')" onerror="this.style.display='none'" />`
         : prizes.length>1
-          ? `<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;">
+          ? `<div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;">
               ${prizes.map(p=>`<div style="text-align:center;">
                 <img src="${p.dataUrl}" style="width:100%;aspect-ratio:1;object-fit:cover;border-radius:6px;cursor:zoom-in;border:1px solid #4a392a;display:block;" onclick="openLightbox('${jsStr(p.dataUrl)}','${jsStr(p.label||'Prize')}')" onerror="this.style.display='none'" />
-                ${p.label?`<div style="font-size:.72em;opacity:.7;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${p.label}</div>`:""}
+                ${p.label?`<div style="font-size:.97em;opacity:.7;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${p.label}</div>`:""}
               </div>`).join("")}
             </div>`
           : `<div class="ribbon-art-empty" style="display:flex;align-items:center;justify-content:center;font-size:5em;">${icon}</div>`;
@@ -2696,9 +2700,9 @@ function renderHorseProfilePage(app, h){
           ${prizesHtml}
           <div style="text-align:center;margin-top:10px;">
             <div style="font-size:1.05em;color:${frameColor};">${icon} ${placeStr}</div>
-            <div style="font-size:.88em;opacity:.75;margin-top:2px;">${c.discipline}</div>
-            ${c.venue?`<div style="font-size:.78em;opacity:.55;">${c.venue}</div>`:""}
-            ${c.date?`<div style="font-size:.74em;opacity:.4;">${c.date}</div>`:""}
+            <div style="font-size:1.04em;opacity:.75;margin-top:2px;">${c.discipline}</div>
+            ${c.venue?`<div style="font-size:.98em;opacity:.55;">${c.venue}</div>`:""}
+            ${c.date?`<div style="font-size:.97em;opacity:.4;">${c.date}</div>`:""}
           </div>
         </div>
       </div>`;
@@ -2719,7 +2723,7 @@ function renderHorseProfilePage(app, h){
         ${prizes.length?`<div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px;">
           ${prizes.map(p=>`<div style="text-align:center;">
             <img src="${p.dataUrl}" style="width:36px;height:36px;object-fit:cover;border-radius:4px;border:1px solid #4a392a;cursor:zoom-in;display:block;" onclick="openLightbox('${jsStr(p.dataUrl)}','${jsStr(p.label||'Prize')}')" onerror="this.style.display='none'" />
-            ${p.label?`<div style="font-size:.62em;opacity:.6;max-width:40px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${p.label}</div>`:""}
+            ${p.label?`<div style="font-size:1.1em;opacity:.6;max-width:40px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${p.label}</div>`:""}
           </div>`).join("")}
         </div>`:""}
       </div>
@@ -2730,7 +2734,7 @@ function renderHorseProfilePage(app, h){
     <div class="artlog-entry" style="display:flex;gap:8px;align-items:flex-start;">
       ${e.image?`<img src="${e.image}" class="artlog-thumb" style="flex:none;cursor:zoom-in;" onclick="openLightbox('${jsStr(e.image)}','${jsStr(e.label)}')" />`:""}
       <div><b>${e.label}</b> <span class="tag">+${e.exp} EXP</span>
-        ${e.link?`<a href="${e.link}" target="_blank" style="color:#c98a3a;font-size:.8em;margin-left:4px;">🔗</a>`:""}
+        ${e.link?`<a href="${e.link}" target="_blank" style="color:#c98a3a;font-size:1em;margin-left:4px;">🔗</a>`:""}
         <div class="small">${e.art||""}${e.lit?` · ${e.lit}`:""}</div>
       </div>
     </div>`).join("")}</div>`:
@@ -2748,7 +2752,7 @@ function renderHorseProfilePage(app, h){
   const refUploadHtml = bankAccount.linked
     ? `<div style="margin-top:8px;">
         <input type="file" accept="image/*" id="pp_ref_input" style="display:none;" />
-        <button class="secondary" id="pp_ref_btn" style="font-size:.75em;">${h.referenceImage?"📋 Replace Reference Sheet":"📋 Upload Reference Sheet"}</button>
+        <button class="secondary" id="pp_ref_btn" style="font-size:.98em;">${h.referenceImage?"📋 Replace Reference Sheet":"📋 Upload Reference Sheet"}</button>
       </div>`
     : "";
 
@@ -2757,22 +2761,22 @@ function renderHorseProfilePage(app, h){
       body { background:#1b1410; color:#f1e6d8; font-family:Georgia,serif; margin:0; padding:0; }
       .pcard { background:#241a14; border:1px solid #4a392a; border-radius:8px; padding:16px; margin-bottom:14px; }
       .pcard h3 { color:#c98a3a; margin-top:0; font-family:"Palatino Linotype",Georgia,serif; }
-      .pcard .small { font-size:.82em; color:#b5a392; }
+      .pcard .small { font-size:1em; color:#b5a392; }
       a { color:#c98a3a; }
       .statbar-wrap { display:flex; align-items:center; gap:5px; margin-bottom:3px; }
       .statbar-bg { flex:1; height:7px; background:#15100c; border-radius:4px; overflow:hidden; }
       .statbar-fill { height:100%; background:linear-gradient(90deg,#7a9b6e,#c98a3a); }
       .expbar-bg { height:8px; background:#15100c; border-radius:5px; overflow:hidden; margin-top:4px; }
       .expbar-fill { height:100%; background:linear-gradient(90deg,#8a6fb0,#c98a3a); }
-      .tag { display:inline-block; font-size:.72em; padding:2px 8px; border-radius:10px; background:#15100c; color:#b5a392; border:1px solid #4a392a; margin-left:3px; }
-      .slot { width:22px; height:22px; border-radius:50%; border:1px solid #c98a3a; display:inline-flex; align-items:center; justify-content:center; font-size:.65em; margin-right:4px; }
+      .tag { display:inline-block; font-size:.97em; padding:2px 8px; border-radius:10px; background:#15100c; color:#b5a392; border:1px solid #4a392a; margin-left:3px; }
+      .slot { width:22px; height:22px; border-radius:50%; border:1px solid #c98a3a; display:inline-flex; align-items:center; justify-content:center; font-size:1.1em; margin-right:4px; }
       .slot.filled { background:#c98a3a; color:#15100c; }
       .artlog-panel { background:#15100c; border:1px solid #4a392a; border-radius:6px; padding:8px; overflow-y:auto; }
       .artlog-entry { padding:6px 0; border-bottom:1px dashed #2c2118; }
       .artlog-entry:last-child { border-bottom:none; }
       .artlog-thumb { width:52px; height:52px; border-radius:5px; object-fit:cover; border:1px solid #4a392a; }
       .breedslots { display:flex; flex-wrap:wrap; gap:4px; margin-top:6px; }
-      .worth-row { display:flex; justify-content:space-between; padding:4px 0; border-bottom:1px dashed #2c2118; font-size:.88em; }
+      .worth-row { display:flex; justify-content:space-between; padding:4px 0; border-bottom:1px dashed #2c2118; font-size:1.04em; }
       .worth-row:last-child { border-bottom:none; font-weight:bold; color:#c98a3a; }
     </style>
 
@@ -2784,7 +2788,7 @@ function renderHorseProfilePage(app, h){
           ${photoHtml}
           ${bankAccount.linked?`
             <input type="file" accept="image/*" id="pp_photo_input" style="display:none;" />
-            <button class="secondary" id="pp_photo_btn" style="font-size:.72em;padding:3px 7px;margin-top:0;">📷 Change Photo</button>
+            <button class="secondary" id="pp_photo_btn" style="font-size:.97em;padding:3px 7px;margin-top:0;">📷 Change Photo</button>
           `:""}
           ${h.ownerName?`<div class="small" style="text-align:center;">Owner: ${h.ownerLink?`<a href="${h.ownerLink}" target="_blank">${h.ownerName}</a>`:h.ownerName}</div>`:""}
           ${h.riderName?`<div class="small" style="text-align:center;">Rider: ${h.riderName}</div>`:""}
@@ -2793,18 +2797,18 @@ function renderHorseProfilePage(app, h){
         <div style="flex:1;min-width:220px;">
           <h1 style="margin:0 0 4px;color:#c98a3a;font-size:1.9em;">${h.name}</h1>
           ${(h.badges||[]).length?`<div style="margin-bottom:6px;">${h.badges.map(b=>`<span class="tag" style="background:#3a2a10;color:#e8c86a;border-color:#c98a3a;">🏆 ${b}</span>`).join(" ")}</div>`:""}
-          <div class="small" style="font-size:.95em;">${h.breed}${h.gender?` · ${h.gender}`:""} · Age ${h.age} (${h.stage})</div>
+          <div class="small" style="font-size:1.1em;">${h.breed}${h.gender?` · ${h.gender}`:""} · Age ${h.age} (${h.stage})</div>
           ${h.phenotype?`<div class="small">Phenotype: ${h.phenotype}</div>`:""}
           ${h.genotype?`<div class="small">Genotype: ${h.genotype}</div>`:""}
-          <div style="margin-top:8px;"><span class="tag" style="font-size:.85em;">Level ${h.level}</span> <span class="tag" style="font-size:.85em;">${h.exp} EXP</span></div>
+          <div style="margin-top:8px;"><span class="tag" style="font-size:1.02em;">Level ${h.level}</span> <span class="tag" style="font-size:1.02em;">${h.exp} EXP</span></div>
           <div class="expbar-bg" style="margin-top:6px;max-width:260px;"><div class="expbar-fill" style="width:${pct}%"></div></div>
-          <div style="margin-top:12px;font-size:.78em;color:#b5a392;">💰 Net Worth: <b style="color:#c98a3a;">฿${netWorth.toLocaleString()}</b> &nbsp;|&nbsp; Breeding Slot: <b style="color:#c98a3a;">฿${slotPrice.toLocaleString()}</b></div>
+          <div style="margin-top:12px;font-size:.98em;color:#b5a392;">💰 Net Worth: <b style="color:#c98a3a;">฿${netWorth.toLocaleString()}</b> &nbsp;|&nbsp; Breeding Slot: <b style="color:#c98a3a;">฿${slotPrice.toLocaleString()}</b></div>
         </div>
       </div>
 
       ${h.personality||h.horseHistory ? `<div class="pcard">
-        ${h.personality?`<h3>🐴 Personality</h3><p style="font-size:.9em;line-height:1.7;white-space:pre-wrap;">${h.personality}</p>`:""}
-        ${h.horseHistory?`<h3>📜 History</h3><p style="font-size:.9em;line-height:1.7;white-space:pre-wrap;">${h.horseHistory}</p>`:""}
+        ${h.personality?`<h3>🐴 Personality</h3><p style="font-size:1.06em;line-height:1.7;white-space:pre-wrap;">${h.personality}</p>`:""}
+        ${h.horseHistory?`<h3>📜 History</h3><p style="font-size:1.06em;line-height:1.7;white-space:pre-wrap;">${h.horseHistory}</p>`:""}
       </div>` : ""}
 
       ${(refHtml || refUploadHtml) ? `<div class="pcard">${refHtml}${refUploadHtml}</div>` : ""}
@@ -2915,7 +2919,7 @@ function showProfileModal(horseId){
     const inp = type==='textarea'
       ? `<textarea id="${id}" rows="4" placeholder="${placeholder}" style="width:100%;padding:7px;background:#15100c;border:1px solid #4a392a;color:#f1e6d8;border-radius:5px;margin-top:3px;box-sizing:border-box;font-family:Georgia,serif;resize:vertical;">${val||''}</textarea>`
       : `<input id="${id}" value="${val||''}" placeholder="${placeholder}" style="width:100%;padding:7px;background:#15100c;border:1px solid #4a392a;color:#f1e6d8;border-radius:5px;margin-top:3px;box-sizing:border-box;" />`;
-    return `<div style="margin-bottom:10px;"><label style="font-size:.78em;color:#b5a392;text-transform:uppercase;display:block;">${label}</label>${inp}</div>`;
+    return `<div style="margin-bottom:10px;"><label style="font-size:.98em;color:#b5a392;text-transform:uppercase;display:block;">${label}</label>${inp}</div>`;
   }
 
   overlay.innerHTML=`<div style="background:#2c1f16;border:2px solid #c98a3a;border-radius:10px;padding:24px;max-width:520px;width:100%;color:#f1e6d8;font-family:Georgia,serif;margin:auto;">
@@ -2932,8 +2936,8 @@ function showProfileModal(horseId){
     ${field('pm_stablelink','Stable Link (optional)',h.stableLink,'https://…')}
     ${field('pm_personality','Personality',h.personality,'Describe this horse - personality, quirks, and character...','textarea')}
     ${field('pm_history','History',h.horseHistory,'Background story, significant events, journey so far…','textarea')}
-    <button id="pm_save" style="width:100%;background:#c98a3a;color:#241a14;border:none;padding:10px;border-radius:6px;font-weight:bold;cursor:pointer;font-size:.95em;">💾 Save</button>
-    <button id="pm_cancel" style="margin-top:8px;width:100%;background:#2c2118;color:#f1e6d8;border:1px solid #4a392a;padding:10px;border-radius:6px;cursor:pointer;font-size:.95em;">Cancel</button>
+    <button id="pm_save" style="width:100%;background:#c98a3a;color:#241a14;border:none;padding:10px;border-radius:6px;font-weight:bold;cursor:pointer;font-size:1.1em;">💾 Save</button>
+    <button id="pm_cancel" style="margin-top:8px;width:100%;background:#2c2118;color:#f1e6d8;border:1px solid #4a392a;padding:10px;border-radius:6px;cursor:pointer;font-size:1.1em;">Cancel</button>
   </div>`;
   document.body.appendChild(overlay);
 
@@ -2983,9 +2987,9 @@ function showNetWorthModal(horseId){
 
   const existingMods = h.genoModifiers.map((m,i)=>`
     <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
-      <span style="flex:1;font-size:.85em;">${m.label}</span>
-      <span style="color:#c98a3a;font-size:.85em;">+฿${m.value}</span>
-      <button data-remove="${i}" style="background:#b1473f;color:#fff;border:none;border-radius:4px;padding:2px 8px;cursor:pointer;font-size:.75em;">✕</button>
+      <span style="flex:1;font-size:1.02em;">${m.label}</span>
+      <span style="color:#c98a3a;font-size:1.02em;">+฿${m.value}</span>
+      <button data-remove="${i}" style="background:#b1473f;color:#fff;border:none;border-radius:4px;padding:2px 8px;cursor:pointer;font-size:.98em;">✕</button>
     </div>`).join("") || `<div class="small" style="opacity:.6;">No modifiers added yet.</div>`;
 
   const currentNW = calcNetWorth(h);
@@ -2993,15 +2997,15 @@ function showNetWorthModal(horseId){
 
   overlay.innerHTML=`<div style="background:#2c1f16;border:2px solid #c98a3a;border-radius:10px;padding:24px;max-width:540px;width:100%;color:#f1e6d8;font-family:Georgia,serif;margin:auto;">
     <h3 style="margin-top:0;color:#c98a3a;">💰 Net Worth — ${h.name}</h3>
-    <p style="color:#b5a392;font-size:.85em;margin-top:0;">Based on the Lightblood Pricing Guide. Breeding slot = Net Worth × 5%.</p>
+    <p style="color:#b5a392;font-size:1.02em;margin-top:0;">Based on the Lightblood Pricing Guide. Breeding slot = Net Worth × 5%.</p>
 
-    <label style="font-size:.78em;color:#b5a392;text-transform:uppercase;display:block;margin-bottom:3px;">Genotype Base Price</label>
+    <label style="font-size:.98em;color:#b5a392;text-transform:uppercase;display:block;margin-bottom:3px;">Genotype Base Price</label>
     <select id="nw_base" style="width:100%;padding:7px;background:#15100c;border:1px solid #4a392a;color:#f1e6d8;border-radius:5px;margin-bottom:12px;">
       <option value="0">— Select base —</option>
       ${baseOpts}
     </select>
 
-    <label style="font-size:.78em;color:#b5a392;text-transform:uppercase;display:block;margin-bottom:3px;">Add Modifier</label>
+    <label style="font-size:.98em;color:#b5a392;text-transform:uppercase;display:block;margin-bottom:3px;">Add Modifier</label>
     ${genoNote}
     <div style="display:flex;gap:6px;margin-bottom:10px;">
       <select id="nw_mod_pick" style="flex:1;padding:7px;background:#15100c;border:1px solid #4a392a;color:#f1e6d8;border-radius:5px;">
@@ -3015,18 +3019,18 @@ function showNetWorthModal(horseId){
       ${existingMods}
     </div>
 
-    <label style="font-size:.78em;color:#b5a392;text-transform:uppercase;display:block;margin-bottom:3px;">Custom Net Worth Override <span style="opacity:.6;">(optional — leave blank to use calculated value)</span></label>
+    <label style="font-size:.98em;color:#b5a392;text-transform:uppercase;display:block;margin-bottom:3px;">Custom Net Worth Override <span style="opacity:.6;">(optional — leave blank to use calculated value)</span></label>
     <input id="nw_custom" type="number" value="${h.customNetWorth!==null&&h.customNetWorth!==undefined&&h.customNetWorth!==""?h.customNetWorth:''}" placeholder="e.g. 5000" style="width:100%;padding:7px;background:#15100c;border:1px solid #4a392a;color:#f1e6d8;border-radius:5px;box-sizing:border-box;margin-bottom:12px;" />
 
-    <div id="nw_preview" style="background:#15100c;border:1px solid #4a392a;border-radius:6px;padding:10px;margin-bottom:12px;font-size:.88em;">
+    <div id="nw_preview" style="background:#15100c;border:1px solid #4a392a;border-radius:6px;padding:10px;margin-bottom:12px;font-size:1.04em;">
       <div style="display:flex;justify-content:space-between;"><span>Genotype Value</span><span>฿${calcGenoPrice(h).toLocaleString()}</span></div>
       <div style="display:flex;justify-content:space-between;"><span>Show Earnings</span><span>฿${calcShowEarnings(h).toLocaleString()}</span></div>
       <div style="display:flex;justify-content:space-between;padding-top:6px;margin-top:6px;border-top:1px solid #2c2118;font-weight:bold;color:#c98a3a;"><span>Net Worth</span><span>฿${currentNW.toLocaleString()}</span></div>
       <div style="display:flex;justify-content:space-between;color:#c98a3a;"><span>Slot Price (5%)</span><span>฿${currentSlot.toLocaleString()}</span></div>
     </div>
 
-    <button id="nw_save" style="width:100%;background:#c98a3a;color:#241a14;border:none;padding:10px;border-radius:6px;font-weight:bold;cursor:pointer;font-size:.95em;">💾 Save</button>
-    <button id="nw_cancel" style="margin-top:8px;width:100%;background:#2c2118;color:#f1e6d8;border:1px solid #4a392a;padding:10px;border-radius:6px;cursor:pointer;font-size:.95em;">Cancel</button>
+    <button id="nw_save" style="width:100%;background:#c98a3a;color:#241a14;border:none;padding:10px;border-radius:6px;font-weight:bold;cursor:pointer;font-size:1.1em;">💾 Save</button>
+    <button id="nw_cancel" style="margin-top:8px;width:100%;background:#2c2118;color:#f1e6d8;border:1px solid #4a392a;padding:10px;border-radius:6px;cursor:pointer;font-size:1.1em;">Cancel</button>
   </div>`;
   document.body.appendChild(overlay);
 
@@ -3065,9 +3069,9 @@ function showNetWorthModal(horseId){
     const list=overlay.querySelector('#nw_mod_list');
     list.innerHTML=h.genoModifiers.length ? h.genoModifiers.map((m,i)=>`
       <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
-        <span style="flex:1;font-size:.85em;">${m.label}</span>
-        <span style="color:#c98a3a;font-size:.85em;">+฿${m.value}</span>
-        <button data-remove="${i}" style="background:#b1473f;color:#fff;border:none;border-radius:4px;padding:2px 8px;cursor:pointer;font-size:.75em;">✕</button>
+        <span style="flex:1;font-size:1.02em;">${m.label}</span>
+        <span style="color:#c98a3a;font-size:1.02em;">+฿${m.value}</span>
+        <button data-remove="${i}" style="background:#b1473f;color:#fff;border:none;border-radius:4px;padding:2px 8px;cursor:pointer;font-size:.98em;">✕</button>
       </div>`).join("") : `<div class="small" style="opacity:.6;">No modifiers added yet.</div>`;
     list.querySelectorAll('[data-remove]').forEach(b=>b.onclick=()=>{
       h.genoModifiers.splice(Number(b.dataset.remove),1);
