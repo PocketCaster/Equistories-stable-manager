@@ -353,13 +353,13 @@ function stableGas(payload, urlOverride){
     // actually be diagnosed instead of guessed at.
     const finish=(data)=>{
       if(!data || data.success===false){
-        console.error('[EquiStories save failed]', payload.action, '—', data?.error || 'no response (network/CORS/timeout)', {payload, response:data});
+        console.error('[EquiStories save failed]', payload.action, '—', data?.error || 'no response (network/CORS/timeout)', {payload, response:data, requestUrlLength:url.length});
       }
       resolve(data);
     };
     window[cb]=(data)=>{ done=true; delete window[cb]; try{document.head.removeChild(s);}catch(e){} finish(data); };
-    s.onerror=()=>{ if(!done){done=true;delete window[cb];try{document.head.removeChild(s);}catch(e){} finish({success:false,error:'Network error'});} };
-    setTimeout(()=>{ if(!done){done=true;delete window[cb];try{document.head.removeChild(s);}catch(e){} finish({success:false,error:'Timed out'});} },15000);
+    s.onerror=()=>{ if(!done){done=true;delete window[cb];try{document.head.removeChild(s);}catch(e){} console.error('[EquiStories save failed]', payload.action, '— Network error — request URL length:', url.length); finish({success:false,error:'Network error'});} };
+    setTimeout(()=>{ if(!done){done=true;delete window[cb];try{document.head.removeChild(s);}catch(e){} console.error('[EquiStories save failed]', payload.action, '— Timed out — request URL length:', url.length); finish({success:false,error:'Timed out'});} },15000);
     s.src=url; document.head.appendChild(s);
   });
 }
