@@ -2677,36 +2677,35 @@ function renderHorseProfilePage(app, h){
   }).join(" ")||`<span class="small">Nothing equipped.</span>`;
 
   const trophies=(h.compHistory||[]).filter(c=>c.placement>=1&&c.placement<=3);
-  const ribbonWall=trophies.length?`<div style="background:repeating-linear-gradient(90deg,#241a12,#241a12 42px,#2a1f16 42px,#2a1f16 84px);border:1px solid #4a392a;border-radius:10px;padding:28px;display:flex;gap:36px;flex-wrap:wrap;justify-content:flex-start;">
+  const ribbonWall=trophies.length?`<div style="background:#000;border-radius:10px;padding:32px 24px;">
+    <h3 style="text-align:center;color:#f1e6d8;text-decoration:underline;text-decoration-color:#f1e6d8;margin:0 0 26px;font-size:1.25em;font-family:'Palatino Linotype',Georgia,serif;">Ribbon Collection:</h3>
+    <div style="display:flex;gap:30px;flex-wrap:wrap;justify-content:center;">
     ${trophies.map(c=>{
       const icon=c.placement===1?"🥇":c.placement===2?"🥈":"🥉";
       const placeStr=["1st","2nd","3rd"][c.placement-1];
       const frameColor=c.placement===1?"#d4af37":c.placement===2?"#b8b8b8":"#c88a4a";
       const prizes=c.prizes||[];
       const prizesHtml = prizes.length===1
-        ? `<img src="${prizes[0].dataUrl}" style="width:100%;aspect-ratio:1;object-fit:cover;border-radius:6px;display:block;cursor:zoom-in;" onclick="openLightbox('${jsStr(prizes[0].dataUrl)}','${jsStr(prizes[0].label||(c.discipline+' — '+placeStr))}')" onerror="this.style.display='none'" />`
+        ? `<img src="${prizes[0].dataUrl}" style="width:130px;max-width:100%;aspect-ratio:1;object-fit:contain;display:block;cursor:zoom-in;margin:0 auto;" onclick="openLightbox('${jsStr(prizes[0].dataUrl)}','${jsStr(prizes[0].label||(c.discipline+' — '+placeStr))}')" onerror="this.style.display='none'" />`
         : prizes.length>1
-          ? `<div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;">
+          ? `<div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;width:130px;">
               ${prizes.map(p=>`<div style="text-align:center;">
-                <img src="${p.dataUrl}" style="width:100%;aspect-ratio:1;object-fit:cover;border-radius:6px;cursor:zoom-in;border:1px solid #4a392a;display:block;" onclick="openLightbox('${jsStr(p.dataUrl)}','${jsStr(p.label||'Prize')}')" onerror="this.style.display='none'" />
-                ${p.label?`<div style="font-size:.97em;opacity:.7;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${p.label}</div>`:""}
+                <img src="${p.dataUrl}" style="width:100%;aspect-ratio:1;object-fit:contain;cursor:zoom-in;display:block;" onclick="openLightbox('${jsStr(p.dataUrl)}','${jsStr(p.label||'Prize')}')" onerror="this.style.display='none'" />
+                ${p.label?`<div style="font-size:.9em;opacity:.7;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${p.label}</div>`:""}
               </div>`).join("")}
             </div>`
-          : `<div class="ribbon-art-empty" style="display:flex;align-items:center;justify-content:center;font-size:5em;">${icon}</div>`;
-      return `<div class="ribbon-frame" style="display:flex;flex-direction:column;align-items:center;">
-        <div style="width:10px;height:10px;border-radius:50%;background:#2a2018;border:1px solid #6b4a2a;box-shadow:0 1px 2px rgba(0,0,0,.6);margin-bottom:-1px;z-index:1;"></div>
-        <div style="width:2px;height:16px;background:linear-gradient(#8a6a3a,#5a4228);"></div>
-        <div style="width:100%;background:linear-gradient(180deg,#2c1f16,#1a130d);border:2px solid ${frameColor};border-radius:10px;padding:10px;box-shadow:0 14px 22px -8px rgba(0,0,0,.65), 0 2px 0 rgba(255,255,255,.04) inset;">
-          ${prizesHtml}
-          <div style="text-align:center;margin-top:10px;">
-            <div style="font-size:1.05em;color:${frameColor};">${icon} ${placeStr}</div>
-            <div style="font-size:1.04em;opacity:.75;margin-top:2px;">${c.discipline}</div>
-            ${c.venue?`<div style="font-size:.98em;opacity:.55;">${c.venue}</div>`:""}
-            ${c.date?`<div style="font-size:.97em;opacity:.4;">${c.date}</div>`:""}
-          </div>
+          : `<div class="ribbon-art-empty" style="width:130px;height:130px;display:flex;align-items:center;justify-content:center;font-size:4.5em;margin:0 auto;">${icon}</div>`;
+      return `<div class="ribbon-frame" style="display:flex;flex-direction:column;align-items:center;width:150px;max-width:150px;">
+        ${prizesHtml}
+        <div style="text-align:center;margin-top:14px;">
+          <div style="font-size:1.1em;color:#e8c86a;">${icon} ${placeStr}</div>
+          <div style="font-size:1.08em;color:#f1e6d8;font-weight:bold;margin-top:4px;">${c.discipline}</div>
+          ${c.venue?`<div style="font-size:1.02em;color:#f1e6d8;margin-top:2px;">${c.venue}</div>`:""}
+          ${c.date?`<div style="font-size:.95em;opacity:.55;margin-top:2px;">${c.date}</div>`:""}
         </div>
       </div>`;
     }).join("")}
+    </div>
   </div>`:null;
 
   const compHistoryHtml=(h.compHistory||[]).length?`<div class="artlog-panel" style="max-height:280px;">${(h.compHistory||[]).map(c=>{
