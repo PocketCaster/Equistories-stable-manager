@@ -2933,20 +2933,31 @@ function showProfileModal(horseId){
 
   overlay.querySelector('#pm_cancel').onclick=()=>overlay.remove();
   overlay.querySelector('#pm_save').onclick=async()=>{
-    h.breed = overlay.querySelector('#pm_breed').value.trim() || h.breed;
-    const newAge = Number(overlay.querySelector('#pm_age').value);
-    if(!isNaN(newAge) && newAge >= 0) h.age = newAge;
-    h.ownerName  = overlay.querySelector('#pm_owner').value.trim();
-    h.ownerLink  = overlay.querySelector('#pm_ownerlink').value.trim();
-    h.riderName  = overlay.querySelector('#pm_rider').value.trim();
-    h.stableName = overlay.querySelector('#pm_stable').value.trim();
-    h.stableLink = overlay.querySelector('#pm_stablelink').value.trim();
-    h.personality  = overlay.querySelector('#pm_personality').value.trim();
-    h.horseHistory = overlay.querySelector('#pm_history').value.trim();
-    const ok = await saveHorse(h);
-    await save();
-    overlay.remove(); render();
-    if(!ok) alert(`Profile was updated here, but saving it to the Stable Data sheet failed. Try again, or check your Stable Data URL in Admin settings.`);
+    const saveBtn = overlay.querySelector('#pm_save');
+    saveBtn.disabled = true;
+    const origLabel = saveBtn.textContent;
+    saveBtn.textContent = 'Saving…';
+    try{
+      h.breed = overlay.querySelector('#pm_breed').value.trim() || h.breed;
+      const newAge = Number(overlay.querySelector('#pm_age').value);
+      if(!isNaN(newAge) && newAge >= 0) h.age = newAge;
+      h.ownerName  = overlay.querySelector('#pm_owner').value.trim();
+      h.ownerLink  = overlay.querySelector('#pm_ownerlink').value.trim();
+      h.riderName  = overlay.querySelector('#pm_rider').value.trim();
+      h.stableName = overlay.querySelector('#pm_stable').value.trim();
+      h.stableLink = overlay.querySelector('#pm_stablelink').value.trim();
+      h.personality  = overlay.querySelector('#pm_personality').value.trim();
+      h.horseHistory = overlay.querySelector('#pm_history').value.trim();
+      const ok = await saveHorse(h);
+      await save();
+      overlay.remove(); render();
+      if(!ok) alert(`Profile was updated here, but saving it to the Stable Data sheet failed. Try again, or check your Stable Data URL in Admin settings.`);
+    }catch(err){
+      console.error('[EquiStories] Edit Profile save failed:', err);
+      saveBtn.disabled = false;
+      saveBtn.textContent = origLabel;
+      alert(`Something went wrong while saving this profile. Try again, or check your Stable Data URL in Admin settings.\n(Open your browser's console — F12 or right-click → Inspect → Console — for the technical error.)`);
+    }
   };
 }
 
