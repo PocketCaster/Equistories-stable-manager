@@ -31,6 +31,10 @@
   #app .tab.active { background:var(--accent); color:#241a14; font-weight:bold; border-color:var(--accent); }
   #app .row { display:flex; gap:16px; flex-wrap:wrap; }
   #app .row > div { flex:1; min-width:min(160px,100%); }
+  #app .gene-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(190px,1fr)); gap:14px 16px; align-items:end; }
+  #app .gene-cell { display:flex; flex-direction:column; min-width:0; }
+  #app .gene-cell label { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; cursor:help; }
+  #app .gene-cell select { width:100%; }
   #app label { font-size:.92em; color:var(--dim); display:block; margin-bottom:6px; text-transform:uppercase; letter-spacing:.5px; }
   #app input, #app select, #app textarea {
     width:100%; padding:12px 14px; background:#15100c; border:1px solid #4a392a;
@@ -1003,7 +1007,7 @@ function renderRoster(){
     const loci=[GENETIC_LOCI.find(l=>l.key==="extension"), GENETIC_LOCI.find(l=>l.key==="agouti"),
       ...getAllowedLoci(breed).map(k=>GENETIC_LOCI.find(l=>l.key===k))].filter(Boolean);
     const wrapEl=form.querySelector('#nh_genetics_wrap');
-    wrapEl.innerHTML=`<div class="row" style="flex-wrap:wrap;gap:8px;">
+    wrapEl.innerHTML=`<div class="gene-grid">
       ${loci.map(locus=>{
         if(locus.requiresAny){
           const satisfiesAll=Object.entries(locus.requiresAny).every(([reqKey,reqCodes])=>reqCodes.includes(genoSelections[reqKey]));
@@ -1011,8 +1015,10 @@ function renderRoster(){
         }
         const current=genoSelections[locus.key]||locus.options[0].code;
         genoSelections[locus.key]=current;
-        return `<div style="min-width:180px;"><label class="small">${locus.label}</label>
-          <select data-locus="${locus.key}" style="width:100%;">
+        const labelAttr=locus.label.replace(/"/g,"&quot;");
+        return `<div class="gene-cell">
+          <label class="small" title="${labelAttr}">${locus.label}</label>
+          <select data-locus="${locus.key}">
             ${locus.options.map(o=>`<option value="${o.code}" ${o.code===current?"selected":""}>${o.code} — ${o.desc}</option>`).join("")}
           </select>
         </div>`;
@@ -1103,8 +1109,6 @@ function renderRoster(){
       <div style="display:flex;gap:12px;align-items:flex-start;">
         <div style="display:flex;flex-direction:column;align-items:center;gap:4px;flex:none;">
           ${photoHtml}
-          <input type="file" accept="image/*" data-photo-input="${h.id}" style="display:none;" />
-          <button class="secondary" data-act="upload-photo" data-id="${h.id}" style="font-size:.97em;padding:3px 7px;margin-top:0;"></button>
         </div>
         <div style="flex:1;">
           <div style="display:flex;align-items:baseline;flex-wrap:wrap;gap:6px;">
@@ -1138,8 +1142,6 @@ function renderRoster(){
         <button class="secondary" data-act="edit-lineage" data-id="${h.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">Lineage</button>
         <button class="secondary" data-act="edit-profile" data-id="${h.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">Edit Profile</button>
         <button class="secondary" data-act="edit-worth" data-id="${h.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">Net Worth</button>
-        <button class="secondary" data-act="upload-ref" data-id="${h.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">${h.referenceImage?"Change":"Upload"} Ref</button>
-        <input type="file" accept="image/*" data-ref-input="${h.id}" style="display:none;" />
         <button class="danger" data-act="del" data-id="${h.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">Remove</button>
       </div>
       ${refHtml}
@@ -1161,41 +1163,6 @@ function renderRoster(){
     state.horses=state.horses.filter(x=>x.id!==delId);
     deleteHorseFromSheets(delId);
     save(); render();
-  });
-  wrap.querySelectorAll('[data-act="upload-photo"]').forEach(b=>b.onclick=()=>
-    wrap.querySelector(`[data-photo-input="${b.dataset.id}"]`).click());
-  wrap.querySelectorAll('[data-photo-input]').forEach(inp=>inp.onchange=async e=>{
-    const f=e.target.files[0]; if(!f) return;
-    const h=state.horses.find(x=>x.id===inp.dataset.photoInput);
-    if(!h) return;
-    try{
-      h.profileImage = await resizeImageFile(f);
-      render();
-      const ok = await saveHorse(h);
-      if(!ok) alert(`${h.name}'s photo was updated here, but saving it to the Stable Data sheet failed. Try again, or check your Stable Data URL in Admin settings.`);
-    }catch(err){ alert('Could not process that image: '+err.message); }
-  });
-  wrap.querySelectorAll('[data-act="upload-ref"]').forEach(b=>b.onclick=()=>
-    wrap.querySelector(`[data-ref-input="${b.dataset.id}"]`).click());
-  wrap.querySelectorAll('[data-ref-input]').forEach(inp=>inp.onchange=async e=>{
-    const f=e.target.files[0]; if(!f) return;
-    const h=state.horses.find(x=>x.id===inp.dataset.refInput);
-    if(!h) return;
-    try{
-      h.referenceImage = await resizeImageFile(f);
-      let bonusMsg = "";
-      if(!h.refBonusGiven){
-        h.refBonusGiven = true;
-        h.exp += REF_SHEET_EXP;
-        checkLevelUp(h);
-        addLog(`${h.name} — Reference sheet submitted · +${REF_SHEET_EXP} EXP`);
-        bonusMsg = ` +${REF_SHEET_EXP} EXP awarded for first reference sheet submission!`;
-      }
-      render();
-      const ok = await saveHorse(h);
-      if(!ok) alert(`${h.name}'s reference sheet was updated here, but saving it to the Stable Data sheet failed. Try again, or check your Stable Data URL in Admin settings.`);
-      else if(bonusMsg) alert(`Reference sheet saved for ${h.name}.${bonusMsg}`);
-    }catch(err){ alert('Could not process that image: '+err.message); }
   });
   wrap.querySelectorAll('[data-act="equip-select"]').forEach(sel=>sel.onchange=()=>{
     const h=state.horses.find(x=>x.id===sel.dataset.id);
