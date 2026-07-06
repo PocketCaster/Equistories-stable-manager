@@ -322,9 +322,11 @@ window.openLightbox = openLightbox;
 // silently fails, so the image looks fine locally but never actually saves.
 // Keeping images small and compressed keeps them reliably under that limit.
 //
-// EVERY image upload in this app (profile photo, reference sheet, training
-// art, competition art, prize/ribbon photos, tack images) MUST go through
-// this before being stored, or it will silently fail to persist.
+// UNUSED as of the switch to pasted image links: every image in the app
+// (profile photo, reference sheet, training art, competition art,
+// prize/ribbon photos, tack images) is now a URL string instead of an
+// uploaded file, so nothing calls this anymore. Left in place in case a
+// file-upload path is ever reintroduced.
 // FIX: this used one fixed quality/dimension for every image. That's fine
 // for simple photos, but a busy/detailed reference sheet can still encode
 // to well over Google Sheets' 50,000-character-per-cell limit even at
@@ -568,11 +570,13 @@ async function saveHorse(horse){
   let allOk = true;
   // FIX: this used to also chunk-upload every show's art photo and every
   // prize photo (see the comment history above/in saveArtEntry) — that was
-  // needed when those were uploaded files. Now that show art, prizes, and
-  // art log images are pasted links (see the note at the top of the app),
-  // they're just short strings and need no special handling at all — only
-  // the one-per-horse profile picture and reference sheet still go through
-  // chunked upload, since those remain regular file uploads.
+  // needed when those were uploaded files. Show art, prizes, art log
+  // images, profile photos, and reference sheets are now all pasted links
+  // (see the note at the top of the app), so they're just short strings
+  // and need no special handling. The chunked-image path below now only
+  // ever fires for horses that still carry an old base64 profileImage/
+  // referenceImage saved back when those were file uploads; once replaced
+  // with a pasted link it never triggers again.
   const IMAGE_KEYS = ['profileImage','referenceImage'];
   for(const key of IMAGE_KEYS){
     if(horseData[key] && horseData[key].startsWith('data:')){
@@ -853,7 +857,7 @@ function render(){
     <details ${imageLinkHelpOpen?"open":""} id="imgHelpBox" style="background:#241a14;border:1px solid #4a392a;border-radius:8px;padding:10px 14px;margin-bottom:14px;">
       <summary style="cursor:pointer;color:#c98a3a;font-weight:bold;">How to add show art, prize photos & art log images (click to expand)</summary>
       <div class="small" style="margin-top:10px;line-height:1.5;color:#d8c8b8;">
-        Show art, prize/ribbon photos, and art log images are added by <b>pasting a direct link to the image</b> — not by uploading a file. (Profile pictures and reference sheets are still regular uploads, that hasn't changed.)
+        Show art, prize/ribbon photos, art log images, profile photos, reference sheets, and tack item photos are all added by <b>pasting a direct link to the image</b> — not by uploading a file.
         <br><br>
         <b>The link has to point straight at the image file itself, not the page it's posted on.</b> A page link like <code>deviantart.com/user/art/Title-12345</code> won't preview or save correctly — you need the actual image address, which usually ends in <code>.jpg</code>, <code>.png</code>, or <code>.gif</code>.
         <br><br>
@@ -2172,7 +2176,7 @@ function renderTackInventory(){
     </div>
     <div style="margin-top:8px;">
       <label>Item Image</label>
-      <input type="file" id="tk_image_file" accept="image/*" />
+      <input type="text" id="tk_image_url" placeholder="Paste a direct link to the item photo (.jpg/.png/.gif)" style="width:100%;max-width:420px;" />
       <div id="tk_image_preview" style="margin-top:6px;"></div>
     </div>
     <div style="margin-top:8px;">
@@ -2186,15 +2190,13 @@ function renderTackInventory(){
   wrap.appendChild(form);
 
   let tackImage=null;
-  // FIX: also switched to resizeImageFile — tack item photos are saved as
-  // part of state.tackInventory in the same synced payload, so an
-  // uncompressed image here could push that whole save over the limit too.
-  form.querySelector('#tk_image_file').onchange=async e=>{
-    const f=e.target.files[0]; if(!f) return;
-    try{
-      tackImage = await resizeImageFile(f);
-      form.querySelector('#tk_image_preview').innerHTML=`<img src="${tackImage}" style="max-height:100px;border-radius:6px;border:1px solid #4a392a;" />`;
-    }catch(err){ alert('Could not process that image: '+err.message); }
+  // FIX: tack item photos are saved as part of state.tackInventory in the
+  // same synced payload as everything else, so a file upload here (even
+  // resized) could still push that whole save over the JSONP/Sheets size
+  // limit. Now a pasted direct image link, same as the rest of the app.
+  form.querySelector('#tk_image_url').oninput=()=>{
+    tackImage = form.querySelector('#tk_image_url').value.trim() || null;
+    form.querySelector('#tk_image_preview').innerHTML = urlImagePreviewHTML(tackImage, 'Tack Item');
   };
 
   form.querySelector('#tk_add').onclick=async()=>{
@@ -2210,6 +2212,7 @@ function renderTackInventory(){
     if(!state.tackInventory) state.tackInventory=[];
     state.tackInventory.push(item);
     addLog(`Added "${name}" (${cat}) to the tack inventory.`);
+    tackImage=null;
     await save(); render();
   };
 
@@ -2683,8 +2686,8 @@ function renderHorseProfilePage(app, h){
     : (bankAccount.linked ? `<div class="small" style="text-align:center;opacity:.7;">No reference sheet uploaded yet.</div>` : "");
   const refUploadHtml = bankAccount.linked
     ? `<div style="text-align:center;margin-top:12px;">
-        <input type="file" accept="image/*" id="pp_ref_input" style="display:none;" />
-        <button class="secondary" id="pp_ref_btn" style="font-size:.98em;">${h.referenceImage?"Replace Reference Sheet":"Upload Reference Sheet"}</button>
+        <input type="text" id="pp_ref_url" placeholder="Paste a direct link to the reference sheet image (.jpg/.png/.gif)" value="${escAttr(h.referenceImage||"")}" style="max-width:420px;width:100%;" />
+        <div id="pp_ref_preview" style="margin-top:8px;">${h.referenceImage?urlImagePreviewHTML(h.referenceImage, h.name+' — Reference Sheet'):''}</div>
       </div>`
     : "";
 
@@ -2719,8 +2722,7 @@ function renderHorseProfilePage(app, h){
         <div style="display:flex;flex-direction:column;gap:8px;align-items:center;">
           ${photoHtml}
           ${bankAccount.linked?`
-            <input type="file" accept="image/*" id="pp_photo_input" style="display:none;" />
-            <button class="secondary" id="pp_photo_btn" style="font-size:.97em;padding:3px 7px;margin-top:0;">Change Photo</button>
+            <input type="text" id="pp_photo_url" placeholder="Paste a direct link to the photo (.jpg/.png/.gif)" value="${escAttr(h.profileImage||"")}" style="max-width:min(300px,55vw);width:100%;font-size:.9em;" />
           `:""}
           ${h.ownerName?`<div class="small" style="text-align:center;">Owner: ${h.ownerLink?`<a href="${h.ownerLink}" target="_blank">${h.ownerName}</a>`:h.ownerName}</div>`:""}
           ${h.riderName?`<div class="small" style="text-align:center;">Rider: ${h.riderName}</div>`:""}
@@ -2797,40 +2799,44 @@ function renderHorseProfilePage(app, h){
   const backLink = app.querySelector('[data-act="back-to-roster"]');
   if(backLink) backLink.onclick = goToRoster;
 
-  const photoBtn = app.querySelector('#pp_photo_btn');
-  if(photoBtn){
-    photoBtn.onclick = ()=>app.querySelector('#pp_photo_input').click();
-    app.querySelector('#pp_photo_input').onchange = async e=>{
-      const f=e.target.files[0]; if(!f) return;
-      try{
-        h.profileImage = await resizeImageFile(f);
-        render();
-        const ok = await saveHorse(h);
-        if(!ok) alert(`${h.name}'s photo was updated here, but saving it to the Stable Data sheet failed. Try again, or check your Stable Data URL in Admin settings.`);
-      }catch(err){ alert('Could not process that image: '+err.message); }
+  // FIX: profile photo used to be a file upload run through resizeImageFile
+  // and base64-encoded, which could still blow past the JSONP/Sheets size
+  // limit for a full-res phone photo. It's now a pasted direct image link,
+  // same as the show/prize/training art elsewhere in the app — save fires
+  // on blur so we're not hammering the sheet on every keystroke.
+  const photoInput = app.querySelector('#pp_photo_url');
+  if(photoInput){
+    photoInput.onblur = async ()=>{
+      const url = photoInput.value.trim() || null;
+      if(url === (h.profileImage||null)) return;
+      h.profileImage = url;
+      render();
+      const ok = await saveHorse(h);
+      if(!ok) alert(`${h.name}'s photo was updated here, but saving it to the Stable Data sheet failed. Try again, or check your Stable Data URL in Admin settings.`);
     };
   }
 
-  const refBtn = app.querySelector('#pp_ref_btn');
-  if(refBtn){
-    refBtn.onclick = ()=>app.querySelector('#pp_ref_input').click();
-    app.querySelector('#pp_ref_input').onchange = async e=>{
-      const f=e.target.files[0]; if(!f) return;
-      try{
-        h.referenceImage = await resizeImageFile(f);
-        let bonusMsg = "";
-        if(!h.refBonusGiven){
-          h.refBonusGiven = true;
-          h.exp += REF_SHEET_EXP;
-          checkLevelUp(h);
-          addLog(`${h.name} — Reference sheet submitted · +${REF_SHEET_EXP} EXP`);
-          bonusMsg = ` +${REF_SHEET_EXP} EXP awarded for first reference sheet submission!`;
-        }
-        render();
-        const ok = await saveHorse(h);
-        if(!ok) alert(`${h.name}'s reference sheet was updated here, but saving it to the Stable Data sheet failed. Try again, or check your Stable Data URL in Admin settings.`);
-        else if(bonusMsg) alert(`Reference sheet saved for ${h.name}.${bonusMsg}`);
-      }catch(err){ alert('Could not process that image: '+err.message); }
+  const refInput = app.querySelector('#pp_ref_url');
+  if(refInput){
+    refInput.oninput = ()=>{
+      app.querySelector('#pp_ref_preview').innerHTML = urlImagePreviewHTML(refInput.value.trim(), h.name+' — Reference Sheet');
+    };
+    refInput.onblur = async ()=>{
+      const url = refInput.value.trim() || null;
+      if(url === (h.referenceImage||null)) return;
+      h.referenceImage = url;
+      let bonusMsg = "";
+      if(url && !h.refBonusGiven){
+        h.refBonusGiven = true;
+        h.exp += REF_SHEET_EXP;
+        checkLevelUp(h);
+        addLog(`${h.name} — Reference sheet submitted · +${REF_SHEET_EXP} EXP`);
+        bonusMsg = ` +${REF_SHEET_EXP} EXP awarded for first reference sheet submission!`;
+      }
+      render();
+      const ok = await saveHorse(h);
+      if(!ok) alert(`${h.name}'s reference sheet was updated here, but saving it to the Stable Data sheet failed. Try again, or check your Stable Data URL in Admin settings.`);
+      else if(bonusMsg) alert(`Reference sheet saved for ${h.name}.${bonusMsg}`);
     };
   }
 }
