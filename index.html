@@ -2678,8 +2678,8 @@ function renderHorseProfilePage(app, h){
 
   const trophies=(h.compHistory||[]).filter(c=>c.placement>=1&&c.placement<=3);
   const allPrizeImages=trophies.flatMap(c=>(c.prizes||[]).map(p=>({...p, discipline:c.discipline, placeStr:["1st","2nd","3rd"][c.placement-1]})));
-  const ribbonWall=allPrizeImages.length?`<div style="display:flex;gap:18px;flex-wrap:wrap;align-items:flex-end;">
-    ${allPrizeImages.map(p=>`<img src="${p.dataUrl}" style="width:180px;height:180px;object-fit:contain;cursor:zoom-in;" onclick="openLightbox('${jsStr(p.dataUrl)}','${jsStr(p.label||(p.discipline+' — '+p.placeStr))}')" onerror="this.style.display='none'" />`).join("")}
+  const ribbonWall=allPrizeImages.length?`<div style="display:flex;gap:22px;flex-wrap:wrap;align-items:flex-end;">
+    ${allPrizeImages.map(p=>`<img src="${p.dataUrl}" style="width:280px;height:280px;object-fit:contain;cursor:zoom-in;" onclick="openLightbox('${jsStr(p.dataUrl)}','${jsStr(p.label||(p.discipline+' — '+p.placeStr))}')" onerror="this.style.display='none'" />`).join("")}
   </div>`:null;
 
   const compHistoryHtml=(h.compHistory||[]).length?`<div class="artlog-panel" style="max-height:280px;">${(h.compHistory||[]).map(c=>{
