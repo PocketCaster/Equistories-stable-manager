@@ -249,6 +249,9 @@ let bankAccount = { userId:'', password:'', linked:false };
 let activeTab = "roster";
 let imageLinkHelpOpen = true; // starts expanded once so the new paste-a-link instructions are seen; user can collapse it
 let expandedLogs = new Set();
+let adminPanelUnlocked = false; // gates the "Configure Stable Data URL" admin panel on the login screen behind ADMIN_PASSCODE
+
+const ADMIN_PASSCODE = 'Eqistories123';
 
 function uid(){ return 'h_'+Math.random().toString(36).slice(2,9); }
 function rand(a,b){ return Math.floor(Math.random()*(b-a+1))+a; }
@@ -922,17 +925,21 @@ function renderLoginScreen(app){
       <button id="li_go" style="width:100%;padding:10px;background:#c98a3a;color:#241a14;border:none;border-radius:6px;font-weight:bold;cursor:pointer;font-size:1.1em;">Sign In</button>
       <div id="li_result" style="margin-top:8px;"></div>
       <hr style="border:none;border-top:1px solid #4a392a;margin:16px 0;" />
-      <details ${!stableSet?"open":""}>
+      <details ${adminPanelUnlocked?"open":""}>
         <summary style="cursor:pointer;font-size:1.02em;color:#b5a392;">Admin: Configure Stable Data URL</summary>
         <div style="margin-top:10px;">
+          ${adminPanelUnlocked ? `
           <p class="small">Paste the /exec URL from your deployed Stable Data Apps Script.</p>
           ${stableSet?'<div style="color:#7a9b6e;font-size:1em;margin-bottom:6px;">✓ Stable URL is configured.</div>':'<div style="color:#b1473f;font-size:1em;margin-bottom:6px;">⚠ Not configured yet.</div>'}
           <input id="li_stable_url" placeholder="https://script.google.com/macros/s/…/exec" value="${STABLE_URL||''}" style="width:100%;padding:7px;background:#15100c;border:1px solid #4a392a;color:#f1e6d8;border-radius:5px;box-sizing:border-box;margin-bottom:6px;" />
-          <div id="li_admin_lock" style="${stableSet?'':'display:none;'}">
-            <input id="li_admin_pass" type="password" placeholder="Admin passcode" style="width:100%;padding:7px;background:#15100c;border:1px solid #4a392a;color:#f1e6d8;border-radius:5px;box-sizing:border-box;margin-bottom:6px;" />
-          </div>
           <button id="li_save_url" style="width:100%;padding:8px;background:#2c2118;color:#f1e6d8;border:1px solid #4a392a;border-radius:5px;cursor:pointer;">Save Stable URL</button>
           <div id="li_url_result" style="margin-top:4px;font-size:1em;"></div>
+          ` : `
+          <p class="small">Enter the admin passcode to view or change the Stable Data URL.</p>
+          <input id="li_admin_pass" type="password" placeholder="Admin passcode" style="width:100%;padding:7px;background:#15100c;border:1px solid #4a392a;color:#f1e6d8;border-radius:5px;box-sizing:border-box;margin-bottom:6px;" />
+          <button id="li_admin_unlock" style="width:100%;padding:8px;background:#2c2118;color:#f1e6d8;border:1px solid #4a392a;border-radius:5px;cursor:pointer;">Unlock Admin Panel</button>
+          <div id="li_admin_unlock_result" style="margin-top:4px;font-size:1em;"></div>
+          `}
         </div>
       </details>
     </div>
@@ -958,20 +965,35 @@ function renderLoginScreen(app){
   };
   app.querySelector('#li_pass').onkeydown=e=>{ if(e.key==='Enter') app.querySelector('#li_go').click(); };
 
-  app.querySelector('#li_save_url').onclick=()=>{
-    const url=app.querySelector('#li_stable_url').value.trim();
-    const res=app.querySelector('#li_url_result');
-    const adminInp=app.querySelector('#li_admin_pass');
-    if(!url){ res.innerHTML='<span style="color:#e08080;">Please paste a URL first.</span>'; return; }
-    if(!url.includes('script.google.com')){ res.innerHTML='<span style="color:#e08080;">That does not look like a Google Apps Script URL.</span>'; return; }
-    if(STABLE_URL && adminInp){
-      if(adminInp.value !== 'Eqistories123'){ res.innerHTML='<span style="color:#e08080;">Incorrect admin passcode.</span>'; return; }
-    }
-    STABLE_URL=url;
-    localStorage.setItem('equi_stable_url',url);
-    res.innerHTML='<span style="color:#7a9b6e;">✓ Saved!</span>';
-    setTimeout(()=>renderLoginScreen(app), 800);
-  };
+  const saveUrlBtn = app.querySelector('#li_save_url');
+  if(saveUrlBtn){
+    saveUrlBtn.onclick=()=>{
+      const url=app.querySelector('#li_stable_url').value.trim();
+      const res=app.querySelector('#li_url_result');
+      if(!url){ res.innerHTML='<span style="color:#e08080;">Please paste a URL first.</span>'; return; }
+      if(!url.includes('script.google.com')){ res.innerHTML='<span style="color:#e08080;">That does not look like a Google Apps Script URL.</span>'; return; }
+      STABLE_URL=url;
+      localStorage.setItem('equi_stable_url',url);
+      res.innerHTML='<span style="color:#7a9b6e;">✓ Saved!</span>';
+      setTimeout(()=>renderLoginScreen(app), 800);
+    };
+  }
+
+  const adminUnlockBtn = app.querySelector('#li_admin_unlock');
+  if(adminUnlockBtn){
+    const adminPassInp = app.querySelector('#li_admin_pass');
+    const doUnlock = ()=>{
+      const res=app.querySelector('#li_admin_unlock_result');
+      if(adminPassInp.value === ADMIN_PASSCODE){
+        adminPanelUnlocked = true;
+        renderLoginScreen(app);
+      } else {
+        res.innerHTML='<span style="color:#e08080;">Incorrect admin passcode.</span>';
+      }
+    };
+    adminUnlockBtn.onclick = doUnlock;
+    adminPassInp.onkeydown = e=>{ if(e.key==='Enter') doUnlock(); };
+  }
 }
 
 // ============================================
@@ -2686,8 +2708,11 @@ function renderHorseProfilePage(app, h){
     : (bankAccount.linked ? `<div class="small" style="text-align:center;opacity:.7;">No reference sheet uploaded yet.</div>` : "");
   const refUploadHtml = bankAccount.linked
     ? `<div style="text-align:center;margin-top:12px;">
-        <input type="text" id="pp_ref_url" placeholder="Paste a direct link to the reference sheet image (.jpg/.png/.gif)" value="${escAttr(h.referenceImage||"")}" style="max-width:420px;width:100%;" />
-        <div id="pp_ref_preview" style="margin-top:8px;">${h.referenceImage?urlImagePreviewHTML(h.referenceImage, h.name+' — Reference Sheet'):''}</div>
+        <button id="pp_ref_change_btn" class="secondary" style="font-size:.92em;">Change Image</button>
+        <div id="pp_ref_url_wrap" style="display:none;margin-top:10px;">
+          <input type="text" id="pp_ref_url" placeholder="Paste a direct link to the reference sheet image (.jpg/.png/.gif)" value="${escAttr(h.referenceImage||"")}" style="max-width:420px;width:100%;" />
+          <div id="pp_ref_preview" style="margin-top:8px;">${h.referenceImage?urlImagePreviewHTML(h.referenceImage, h.name+' — Reference Sheet'):''}</div>
+        </div>
       </div>`
     : "";
 
@@ -2722,7 +2747,10 @@ function renderHorseProfilePage(app, h){
         <div style="display:flex;flex-direction:column;gap:8px;align-items:center;">
           ${photoHtml}
           ${bankAccount.linked?`
-            <input type="text" id="pp_photo_url" placeholder="Paste a direct link to the photo (.jpg/.png/.gif)" value="${escAttr(h.profileImage||"")}" style="max-width:min(300px,55vw);width:100%;font-size:.9em;" />
+            <button id="pp_photo_change_btn" class="secondary" style="width:min(300px,55vw);font-size:.85em;">Change Image</button>
+            <div id="pp_photo_url_wrap" style="display:none;width:100%;">
+              <input type="text" id="pp_photo_url" placeholder="Paste a direct link to the photo (.jpg/.png/.gif)" value="${escAttr(h.profileImage||"")}" style="max-width:min(300px,55vw);width:100%;font-size:.9em;" />
+            </div>
           `:""}
           ${h.ownerName?`<div class="small" style="text-align:center;">Owner: ${h.ownerLink?`<a href="${h.ownerLink}" target="_blank">${h.ownerName}</a>`:h.ownerName}</div>`:""}
           ${h.riderName?`<div class="small" style="text-align:center;">Rider: ${h.riderName}</div>`:""}
@@ -2804,6 +2832,28 @@ function renderHorseProfilePage(app, h){
   // limit for a full-res phone photo. It's now a pasted direct image link,
   // same as the show/prize/training art elsewhere in the app — save fires
   // on blur so we're not hammering the sheet on every keystroke.
+  const photoChangeBtn = app.querySelector('#pp_photo_change_btn');
+  const photoUrlWrap = app.querySelector('#pp_photo_url_wrap');
+  if(photoChangeBtn && photoUrlWrap){
+    photoChangeBtn.onclick = ()=>{
+      photoUrlWrap.style.display = 'block';
+      photoChangeBtn.style.display = 'none';
+      const inp = app.querySelector('#pp_photo_url');
+      if(inp) inp.focus();
+    };
+  }
+
+  const refChangeBtn = app.querySelector('#pp_ref_change_btn');
+  const refUrlWrap = app.querySelector('#pp_ref_url_wrap');
+  if(refChangeBtn && refUrlWrap){
+    refChangeBtn.onclick = ()=>{
+      refUrlWrap.style.display = 'block';
+      refChangeBtn.style.display = 'none';
+      const inp = app.querySelector('#pp_ref_url');
+      if(inp) inp.focus();
+    };
+  }
+
   const photoInput = app.querySelector('#pp_photo_url');
   if(photoInput){
     photoInput.onblur = async ()=>{
