@@ -1999,28 +1999,14 @@ function buildShowHistory(){
     const history=h.compHistory||[];
     if(!history.length) return;
     const trophies=history.filter(c=>c.placement>=1&&c.placement<=3);
+    const allPrizeImages=trophies.flatMap(c=>(c.prizes||[]).map(p=>({...p, discipline:c.discipline, placeStr:["1st","2nd","3rd"][c.placement-1]})));
     const card=el('div','card');
 
-    const ribbonWallHtml=trophies.length?`
+    const ribbonWallHtml=allPrizeImages.length?`
       <div style="margin-bottom:14px;">
         <div class="small" style="margin-bottom:6px;color:#b5a392;">🏆 Ribbon Wall</div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;">
-          ${trophies.map(c=>{
-            const icon=c.placement===1?"🥇":c.placement===2?"🥈":"🥉";
-            const placeStr=["1st","2nd","3rd"][c.placement-1];
-            const prizes=c.prizes||[];
-            const prizesHtml = prizes.length
-              ? `<div style="display:flex;gap:3px;justify-content:center;flex-wrap:wrap;margin-bottom:4px;">
-                  ${prizes.map(p=>`<img src="${p.dataUrl}" style="width:${prizes.length>1?32:70}px;height:${prizes.length>1?32:70}px;object-fit:cover;border-radius:5px;cursor:zoom-in;" onclick="openLightbox('${jsStr(p.dataUrl)}','${jsStr(p.label||'Prize')}')" title="${escAttr(p.label||'Prize')}" onerror="this.style.display='none'" />`).join("")}
-                </div>`
-              : `<div style="font-size:2.2em;margin-bottom:4px;">${icon}</div>`;
-            return `<div style="background:#15100c;border:1px solid #4a392a;border-radius:8px;padding:8px;text-align:center;min-width:80px;max-width:110px;">
-              ${prizesHtml}
-              <div style="font-size:.98em;">${icon} ${placeStr}</div>
-              <div style="font-size:.97em;opacity:.7;">${c.discipline}</div>
-              ${c.venue?`<div style="font-size:1.1em;opacity:.5;">${c.venue}</div>`:""}
-            </div>`;
-          }).join("")}
+        <div style="display:flex;gap:22px;flex-wrap:wrap;align-items:flex-end;">
+          ${allPrizeImages.map(p=>`<img src="${p.dataUrl}" style="width:280px;height:280px;object-fit:contain;cursor:zoom-in;" onclick="openLightbox('${jsStr(p.dataUrl)}','${jsStr(p.label||(p.discipline+' — '+p.placeStr))}')" onerror="this.style.display='none'" />`).join("")}
         </div>
       </div>`:
       `<div class="small" style="color:#5a4a3a;margin-bottom:10px;">No top-3 placements yet.</div>`;
@@ -2048,7 +2034,6 @@ function buildShowHistory(){
                 ${prizes.length?`<div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px;">
                   ${prizes.map(p=>`<div style="text-align:center;">
                     <img src="${p.dataUrl}" style="width:40px;height:40px;object-fit:cover;border-radius:4px;border:1px solid #4a392a;cursor:zoom-in;display:block;" onclick="openLightbox('${jsStr(p.dataUrl)}','${jsStr(p.label||'Prize')}')" onerror="this.style.display='none'" />
-                    ${p.label?`<div style="font-size:1.1em;opacity:.6;max-width:44px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${p.label}</div>`:""}
                   </div>`).join("")}
                 </div>`:""}
                 <button data-act="edit-show" data-hid="${h.id}" data-cid="${c.id}" class="secondary" style="font-size:.96em;padding:2px 7px;margin-top:6px;">✏️ Edit Placement / Prizes</button>
@@ -2696,7 +2681,6 @@ function renderHorseProfilePage(app, h){
         ${prizes.length?`<div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px;">
           ${prizes.map(p=>`<div style="text-align:center;">
             <img src="${p.dataUrl}" style="width:36px;height:36px;object-fit:cover;border-radius:4px;border:1px solid #4a392a;cursor:zoom-in;display:block;" onclick="openLightbox('${jsStr(p.dataUrl)}','${jsStr(p.label||'Prize')}')" onerror="this.style.display='none'" />
-            ${p.label?`<div style="font-size:1.1em;opacity:.6;max-width:40px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${p.label}</div>`:""}
           </div>`).join("")}
         </div>`:""}
       </div>
