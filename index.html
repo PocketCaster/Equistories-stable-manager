@@ -198,7 +198,8 @@ function calcLitExp(wc){
 // ============================================
 
 const BANK_URL = 'https://script.google.com/macros/s/AKfycby9WLxUPDAPg9EH5aTPATzTkHd8XeSKXuQ0WYqyQoHusEbws85qxwaML6cSovDod80/exec';
-let STABLE_URL = localStorage.getItem('equi_stable_url') || '';
+const DEFAULT_STABLE_URL = 'https://script.google.com/macros/s/AKfycbwNF02tC8_U9MjAvJJzjVLNgHUyAf2ND-drxjhQPnOikJdw_seUIIxrYEsTsAlhG-o/exec';
+let STABLE_URL = localStorage.getItem('equi_stable_url') || DEFAULT_STABLE_URL;
 
 let state = { horses:[], log:[], tackInventory:[], loaded:false };
 let bankAccount = { userId:'', password:'', linked:false };
