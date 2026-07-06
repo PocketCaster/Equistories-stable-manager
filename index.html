@@ -203,6 +203,7 @@ let STABLE_URL = localStorage.getItem('equi_stable_url') || '';
 let state = { horses:[], log:[], tackInventory:[], loaded:false };
 let bankAccount = { userId:'', password:'', linked:false };
 let activeTab = "roster";
+let imageLinkHelpOpen = true; // starts expanded once so the new paste-a-link instructions are seen; user can collapse it
 let expandedLogs = new Set();
 
 function uid(){ return 'h_'+Math.random().toString(36).slice(2,9); }
@@ -210,6 +211,39 @@ function rand(a,b){ return Math.floor(Math.random()*(b-a+1))+a; }
 function pick(arr){ return arr[Math.floor(Math.random()*arr.length)]; }
 function el(tag,cls,html){ const e=document.createElement(tag); if(cls)e.className=cls; if(html)e.innerHTML=html; return e; }
 function addLog(msg){ state.log.unshift({day:Date.now(),msg}); if(state.log.length>200)state.log.pop(); }
+
+// ============================================
+// PASTED-LINK IMAGE PREVIEWS
+// ============================================
+// Show art, prize/ribbon photos, and art log images are entered as a pasted
+// direct link instead of an upload (see the note at the top of the app) —
+// this sidesteps the Google Sheets cell-size limit and GET/JSONP request
+// size limit entirely, since a URL is just a short string. These helpers
+// give a live preview and a clear fallback if someone pastes the artwork's
+// page link instead of the actual image file link.
+
+function imgUrlLoadError(img){
+  const div=document.createElement('div');
+  div.className='small';
+  div.style.cssText='color:#c9605a;padding:6px;border:1px dashed #c9605a;border-radius:6px;';
+  div.textContent="⚠️ Couldn't load this as an image — you likely copied the artwork's page link rather than the direct image file link. See the note at the top of the app for how to get the right one.";
+  img.replaceWith(div);
+}
+function imgUrlLoadErrorCompact(img){
+  const div=document.createElement('div');
+  div.style.cssText='width:44px;height:44px;display:flex;align-items:center;justify-content:center;font-size:1.3em;border:1px dashed #c9605a;border-radius:5px;flex:none;';
+  div.title="Couldn't load — this looks like a page link, not a direct image link.";
+  div.textContent='⚠️';
+  img.replaceWith(div);
+}
+function urlImagePreviewHTML(url, caption){
+  if(!url) return '';
+  return `<img src="${url}" style="max-height:120px;border-radius:6px;border:1px solid #4a392a;object-fit:contain;cursor:zoom-in;" onclick="openLightbox('${url.replace(/'/g,"\\'")}','${(caption||'').replace(/'/g,"\\'")}')" onerror="imgUrlLoadError(this)" />`;
+}
+function prizeThumbHTML(url){
+  if(!url) return '<div style="width:56px;height:56px;border:1px dashed #4a392a;border-radius:5px;flex:none;"></div>';
+  return `<img src="${url}" style="width:56px;height:56px;object-fit:cover;border-radius:5px;border:1px solid #4a392a;flex:none;" onerror="imgUrlLoadErrorCompact(this)" />`;
+}
 
 function openLightbox(src, caption){
   document.getElementById('lightbox-overlay')?.remove();
@@ -374,28 +408,23 @@ async function saveHorseImageChunked(userId, horseId, imageKey, imageData){
   return true;
 }
 
-// FIX: profileImage/referenceImage were the only fields that ever got
+// HISTORY: profileImage/referenceImage were the only fields that ever got
 // chunked before saving — everything else (show art in compHistory, prize/
 // ribbon photos, art log entry images) rode along as raw base64 inside the
-// same GET/JSONP request as the rest of the horse or entry data. That
-// request has to fit in a URL, so any real photo attached to a show or an
-// art log entry made the whole save silently fail (or time out, looking
-// "stuck"). And since the entry/record never actually reached the sheet,
-// there was nothing for a later load to bring back — which is why logged
-// art never showed up on the profile after a refresh.
-//
-// Fix: route every embedded image through the same chunked-upload path
-// already used for profile/reference images, keyed uniquely per entry/
-// prize, and swap in a small "@img:<key>" placeholder for the request that
-// actually carries the JSON. The real image data stays in the in-memory
-// object so it still displays immediately in this session. On load,
-// resolveImageRefs() swaps the placeholders back out using the flat
-// imageKey map the backend already merges onto the horse object.
+// same GET/JSONP request as the rest of the horse or entry data, which
+// caused failures/hangs once real photos were attached. That was briefly
+// fixed by chunk-uploading those too (keyed placeholders, resolved back on
+// load) — but since Google Sheets' 50,000-char cell limit still applied
+// once reassembled, and a show's worth of prize photos meant many
+// sequential uploads, that approach kept hitting new walls. Show art,
+// prizes, and art log images are now pasted links instead (see the note at
+// the top of the app) — sidestepping both problems, since a URL never
+// needs chunking or hits any size limit.
 
-async function uploadImageRef(horseId, key, dataUri){
-  if(!dataUri || !dataUri.startsWith('data:')) return false;
-  return await saveHorseImageChunked(bankAccount.userId, horseId, key, dataUri);
-}
+// resolveImageRefs() is kept for backward compatibility: it still resolves
+// any older @img:-placeholder records saved during the brief window when
+// show/prize/art images were chunk-uploaded, before switching to pasted
+// links. Nothing new gets saved in that placeholder format going forward.
 
 function resolveImageRefs(horse){
   if(!horse) return;
@@ -440,77 +469,29 @@ async function saveHorse(horse){
   if(!bankAccount.linked || !STABLE_URL) return false;
   const {artLog,...horseData}=horse;
   let allOk = true;
-  // FIX: this used to upload every image one at a time — profile pic, then
-  // reference sheet, then each show's art, then each prize photo — awaiting
-  // each one before starting the next. A single show with several prize
-  // photos meant dozens of sequential chunked round trips before the save
-  // ever reported back, which for a show with a handful of ribbon/trophy
-  // photos could take minutes and just looked stuck. Now every image this
-  // horse needs uploaded is gathered up front and sent at once — the wait
-  // is however long the slowest single image takes, not the sum of all of
-  // them.
-  const uploadTasks = [];
-
+  // FIX: this used to also chunk-upload every show's art photo and every
+  // prize photo (see the comment history above/in saveArtEntry) — that was
+  // needed when those were uploaded files. Now that show art, prizes, and
+  // art log images are pasted links (see the note at the top of the app),
+  // they're just short strings and need no special handling at all — only
+  // the one-per-horse profile picture and reference sheet still go through
+  // chunked upload, since those remain regular file uploads.
   const IMAGE_KEYS = ['profileImage','referenceImage'];
-  IMAGE_KEYS.forEach(key=>{
+  for(const key of IMAGE_KEYS){
     if(horseData[key] && horseData[key].startsWith('data:')){
-      uploadTasks.push(
-        saveHorseImageChunked(bankAccount.userId, horse.id, key, horseData[key])
-          .then(ok=>{ if(!ok) allOk=false; })
-      );
+      const ok = await saveHorseImageChunked(bankAccount.userId, horse.id, key, horseData[key]);
+      if(!ok) allOk = false;
     }
-  });
-
-  if(Array.isArray(horse.compHistory)){
-    horse.compHistory.forEach(rec=>{
-      if(rec.image && rec.image.startsWith('data:') && !rec._imgUploaded){
-        const key='show_'+rec.id+'_image';
-        uploadTasks.push(
-          uploadImageRef(horse.id, key, rec.image)
-            .then(ok=>{ if(ok) rec._imgUploaded=true; else allOk=false; })
-        );
-      }
-      if(Array.isArray(rec.prizes)){
-        rec.prizes.forEach((p,i)=>{
-          if(p?.dataUrl && p.dataUrl.startsWith('data:')){
-            if(!rec._prizeUploaded) rec._prizeUploaded={};
-            if(!rec._prizeUploaded[i]){
-              const key='show_'+rec.id+'_prize_'+i;
-              uploadTasks.push(
-                uploadImageRef(horse.id, key, p.dataUrl)
-                  .then(ok=>{ if(ok) rec._prizeUploaded[i]=true; else allOk=false; })
-              );
-            }
-          }
-        });
-      }
-    });
   }
-
-  await Promise.all(uploadTasks);
-
-  // Now that uploads (and their _imgUploaded/_prizeUploaded flags) have
-  // settled, build the slim version of compHistory with placeholders swapped
-  // in for anything that has a corresponding uploaded image.
-  if(Array.isArray(horse.compHistory)){
-    horseData.compHistory = horse.compHistory.map(rec=>{
+  // Strip any leftover bookkeeping flags from the now-retired chunked-image
+  // scheme (harmless if absent) so they don't clutter the saved JSON.
+  if(Array.isArray(horseData.compHistory)){
+    horseData.compHistory = horseData.compHistory.map(rec=>{
       const clean={...rec};
-      if(clean.image && clean.image.startsWith('data:')){
-        clean.image='@img:show_'+rec.id+'_image';
-      }
-      if(Array.isArray(clean.prizes)){
-        clean.prizes = clean.prizes.map((p,i)=>{
-          if(p?.dataUrl && p.dataUrl.startsWith('data:')){
-            return {...p, dataUrl:'@img:show_'+rec.id+'_prize_'+i};
-          }
-          return p;
-        });
-      }
       delete clean._imgUploaded; delete clean._prizeUploaded;
       return clean;
     });
   }
-
   const res = await stableGas({ action:'saveHorse', userId:bankAccount.userId, horseId:horse.id, horseJson:JSON.stringify(horseData) });
   if(!res?.success) allOk = false;
   return allOk;
@@ -518,17 +499,11 @@ async function saveHorse(horse){
 
 async function saveArtEntry(horse, entry){
   if(!bankAccount.linked || !STABLE_URL) return false;
-  let wireEntry = entry;
-  if(entry.image && entry.image.startsWith('data:')){
-    const key='art_'+entry.id;
-    if(!entry._imgUploaded){
-      const ok=await uploadImageRef(horse.id, key, entry.image);
-      if(!ok) return false;
-      entry._imgUploaded=true;
-    }
-    wireEntry = {...entry, image:'@img:'+key};
-    delete wireEntry._imgUploaded;
-  }
+  // FIX: art log images are pasted links now (see the note at the top of
+  // the app), not uploaded files, so there's nothing to chunk-upload here
+  // anymore — just strip any leftover flag from the old scheme and send.
+  const wireEntry = {...entry};
+  delete wireEntry._imgUploaded;
   const res = await stableGas({ action:'saveArtLogEntry', userId:bankAccount.userId, horseId:horse.id, entryJson:JSON.stringify(wireEntry) });
   return !!res?.success;
 }
@@ -775,6 +750,20 @@ function render(){
 
   app.innerHTML=`
     <h1>🐴 EquiStories Art Tracker</h1>
+    <details ${imageLinkHelpOpen?"open":""} id="imgHelpBox" style="background:#241a14;border:1px solid #4a392a;border-radius:8px;padding:10px 14px;margin-bottom:14px;">
+      <summary style="cursor:pointer;color:#c98a3a;font-weight:bold;">📎 How to add show art, prize photos & art log images (click to expand)</summary>
+      <div class="small" style="margin-top:10px;line-height:1.5;color:#d8c8b8;">
+        Show art, prize/ribbon photos, and art log images are added by <b>pasting a direct link to the image</b> — not by uploading a file. (Profile pictures and reference sheets are still regular uploads, that hasn't changed.)
+        <br><br>
+        <b>The link has to point straight at the image file itself, not the page it's posted on.</b> A page link like <code>deviantart.com/user/art/Title-12345</code> won't preview or save correctly — you need the actual image address, which usually ends in <code>.jpg</code>, <code>.png</code>, or <code>.gif</code>.
+        <br><br>
+        <b>DeviantArt:</b> open the full-size image, right-click it, choose "Copy Image Address."<br>
+        <b>Toyhouse:</b> click through to the full-size image (not the thumbnail), then right-click → "Copy Image Address."<br>
+        <b>Tumblr, Bluesky, Twitter/X, Imgur, your own site, etc.:</b> same idea — right-click the actual picture and copy its image address, not the page URL.
+        <br><br>
+        Paste that link into the image field and it'll preview right there. If you see a "⚠️ couldn't load this image" message instead of your art, you likely copied the page link by mistake — go back and copy the image address specifically.
+      </div>
+    </details>
     <div class="tabs" style="align-items:center;">
       ${["roster","train","compete","tack"].map(t=>`
         <div class="tab${activeTab===t?' active':''}" data-tab="${t}">
@@ -786,6 +775,9 @@ function render(){
     </div>
     <div id="tab-content"></div>
   `;
+
+  const imgHelpBox=app.querySelector('#imgHelpBox');
+  if(imgHelpBox) imgHelpBox.ontoggle=()=>{ imageLinkHelpOpen=imgHelpBox.open; };
 
   app.querySelectorAll('[data-tab]').forEach(b=>{
     b.onclick=()=>{ activeTab=b.dataset.tab; render(); };
@@ -1427,9 +1419,9 @@ function renderTraining(){
     <div id="tr_milestone_status"></div>
     <div id="tr_prompt"></div>
     <div style="margin-top:12px;">
-      <label>Art Image <span class="required">* Required</span></label>
-      <p class="small" style="margin:2px 0 6px;">Upload the artwork for this training entry. Image is required to log.</p>
-      <input type="file" id="tr_image_file" accept="image/*" />
+      <label>Art Image URL <span class="required">* Required</span></label>
+      <p class="small" style="margin:2px 0 6px;">Paste a direct link to the artwork image (not the page it's posted on) — see the note at the top of the page for how to get one.</p>
+      <input type="text" id="tr_image_url" placeholder="https://…jpg / .png / .gif" />
       <div id="tr_image_preview" style="margin-top:6px;"></div>
     </div>
     <div class="row" style="margin-top:10px;">
@@ -1537,19 +1529,17 @@ function renderTraining(){
     prev.style.color=wc<200&&wc>0?"#c9a23a":"#7a9b6e";
   };
 
-  // FIX (was the training-entry save bug): this used to read the file with
-  // plain FileReader.readAsDataURL(f), storing a full-resolution image.
-  // That produces a base64 string far too long for the GET/JSONP request
-  // this app uses to sync to Google Sheets, so the save silently failed
-  // and the training entry vanished on refresh. Now routed through
-  // resizeImageFile(), the same compression already used for profile and
-  // reference photos.
-  card.querySelector('#tr_image_file').onchange=async e=>{
-    const f=e.target.files[0]; if(!f) return;
-    try{
-      uploadedImage = await resizeImageFile(f);
-      card.querySelector('#tr_image_preview').innerHTML=`<img src="${uploadedImage}" style="max-height:120px;border-radius:6px;border:1px solid #4a392a;object-fit:contain;" />`;
-    }catch(err){ alert('Could not process that image: '+err.message); }
+  // FIX (was the training-entry save bug): this used to read an uploaded
+  // file and embed it as base64, which was either too large for the
+  // GET/JSONP request or (after compression) still ate into the Sheets
+  // cell-size limit. Art images are now pasted links instead — a URL is
+  // just a short string, so there's nothing left to compress, chunk, or
+  // fail to fit.
+  card.querySelector('#tr_image_url').oninput=()=>{
+    uploadedImage = card.querySelector('#tr_image_url').value.trim() || null;
+  };
+  card.querySelector('#tr_image_url').onblur=()=>{
+    card.querySelector('#tr_image_preview').innerHTML = urlImagePreviewHTML(uploadedImage, 'Training Art');
   };
 
   card.querySelector('#tr_go').onclick=async()=>{
@@ -1614,7 +1604,7 @@ function renderTraining(){
 
     uploadedImage=null;
     card.querySelector('#tr_image_preview').innerHTML='';
-    card.querySelector('#tr_image_file').value='';
+    card.querySelector('#tr_image_url').value='';
     card.querySelector('#tr_lit').value='';
     card.querySelector('#tr_lit_preview').textContent='';
     card.querySelector('#tr_link').value='';
@@ -1713,8 +1703,8 @@ function buildShowLogForm(){
     <hr style="border:none;border-top:1px solid #4a392a;margin:14px 0;" />
 
     <label>Show Art / Photo <span class="small">(optional — the artwork or photo from this show)</span></label>
-    <p class="small" style="margin:2px 0 6px;">This image appears in the art log and on the ribbon wall for placed entries.</p>
-    <input type="file" id="cs_art_file" accept="image/*" />
+    <p class="small" style="margin:2px 0 6px;">This image appears in the art log and on the ribbon wall for placed entries. Paste a direct image link (not the page it's posted on) — see the note at the top of the page for how to get one.</p>
+    <input type="text" id="cs_art_url" placeholder="https://…jpg / .png / .gif" />
     <div id="cs_art_preview" style="margin-top:6px;"></div>
 
     ${Object.keys(ART_EXP).length ? `
@@ -1742,8 +1732,8 @@ function buildShowLogForm(){
 
     <hr style="border:none;border-top:1px solid #4a392a;margin:14px 0;" />
 
-    <label>Prizes, Ribbons & Trophies <span class="small">(upload as many as you like)</span></label>
-    <p class="small" style="margin:2px 0 6px;">Upload photos of your ribbons, trophies, sashes, prize tack, or any awards from this show. Each gets a label.</p>
+    <label>Prizes, Ribbons & Trophies <span class="small">(add as many as you like)</span></label>
+    <p class="small" style="margin:2px 0 6px;">Paste direct image links for your ribbons, trophies, sashes, prize tack, or any awards from this show. Each gets a label.</p>
     <div id="cs_prize_area"></div>
     <button id="cs_add_prize" class="secondary" style="margin-top:6px;font-size:.85em;">➕ Add Prize / Ribbon</button>
 
@@ -1775,26 +1765,27 @@ function buildShowLogForm(){
     else{selectedBonuses.add(k);p.classList.add('active');}
   });
 
-  // FIX (this was the show-art part of the bug): previously raw
-  // FileReader.readAsDataURL — full-res show art photos were too large for
-  // the GET/JSONP sync, so the whole show record (placement, notes, etc,
-  // all bundled into the same request as the image) failed to save
-  // silently. Now compressed via resizeImageFile() first.
-  card.querySelector('#cs_art_file').onchange=async e=>{
-    const f=e.target.files[0]; if(!f) return;
-    try{
-      artImage = await resizeImageFile(f);
-      card.querySelector('#cs_art_preview').innerHTML=`<img src="${artImage}" style="max-height:120px;border-radius:6px;border:1px solid #4a392a;object-fit:contain;cursor:zoom-in;" onclick="openLightbox('${artImage}','Show Art')" />`;
-    }catch(err){ alert('Could not process that image: '+err.message); }
+  // FIX (this was the show-art part of the bug): show art photos were
+  // almost always full-res phone/screenshot uploads, embedded as base64,
+  // which blew past the GET/JSONP request size and/or the Sheets cell
+  // limit and failed the whole show record's save. Now it's a pasted link
+  // instead — just a short string, nothing to compress or chunk.
+  card.querySelector('#cs_art_url').oninput=()=>{
+    artImage = card.querySelector('#cs_art_url').value.trim() || null;
+  };
+  card.querySelector('#cs_art_url').onblur=()=>{
+    card.querySelector('#cs_art_preview').innerHTML = urlImagePreviewHTML(artImage, 'Show Art');
   };
 
   function refreshPrizeArea(){
     const area=card.querySelector('#cs_prize_area');
     area.innerHTML=prizeImages.length ? prizeImages.map((p,i)=>`
-      <div style="display:flex;align-items:center;gap:8px;padding:8px;background:#15100c;border-radius:6px;margin-bottom:6px;">
-        <img src="${p.dataUrl}" style="width:56px;height:56px;object-fit:cover;border-radius:5px;border:1px solid #4a392a;flex:none;" />
+      <div style="display:flex;align-items:flex-start;gap:8px;padding:8px;background:#15100c;border-radius:6px;margin-bottom:6px;">
+        <div data-prize-thumb="${i}">${prizeThumbHTML(p.dataUrl)}</div>
         <div style="flex:1;">
-          <input data-prize-label="${i}" value="${p.label}" placeholder="e.g. 1st Place Ribbon, Championship Trophy, Prize Saddle Pad…"
+          <input data-prize-url="${i}" value="${p.dataUrl||''}" placeholder="Direct image URL (https://…jpg)"
+            style="width:100%;padding:5px;background:#1b1410;border:1px solid #4a392a;color:#f1e6d8;border-radius:4px;box-sizing:border-box;margin-bottom:4px;" />
+          <input data-prize-label="${i}" value="${p.label||''}" placeholder="e.g. 1st Place Ribbon, Championship Trophy, Prize Saddle Pad…"
             style="width:100%;padding:5px;background:#1b1410;border:1px solid #4a392a;color:#f1e6d8;border-radius:4px;box-sizing:border-box;" />
         </div>
         <button data-remove-prize="${i}" class="danger" style="font-size:.75em;padding:3px 8px;flex:none;">✕</button>
@@ -1803,29 +1794,28 @@ function buildShowLogForm(){
     area.querySelectorAll('[data-prize-label]').forEach(inp=>{
       inp.oninput=()=>{ prizeImages[Number(inp.dataset.prizeLabel)].label=inp.value; };
     });
+    // FIX (prize photo part of the bug): prize/ribbon photos were uploaded
+    // files embedded as base64 — same problem as show art above, and there
+    // were often several per show, compounding it. Now pasted links; the
+    // thumbnail only re-renders on blur (not every keystroke) so typing in
+    // the field doesn't lose focus.
+    area.querySelectorAll('[data-prize-url]').forEach(inp=>{
+      inp.oninput=()=>{ prizeImages[Number(inp.dataset.prizeUrl)].dataUrl=inp.value.trim(); };
+      inp.onblur=()=>{
+        const i=Number(inp.dataset.prizeUrl);
+        const thumb=area.querySelector(`[data-prize-thumb="${i}"]`);
+        if(thumb) thumb.innerHTML=prizeThumbHTML(prizeImages[i].dataUrl);
+      };
+    });
     area.querySelectorAll('[data-remove-prize]').forEach(b=>{
       b.onclick=()=>{ prizeImages.splice(Number(b.dataset.removePrize),1); refreshPrizeArea(); };
     });
   }
   refreshPrizeArea();
 
-  // FIX (this was the prize/ribbon part of the bug): same raw-FileReader
-  // problem as above — ribbon/trophy/prize photos are almost always
-  // full-res phone photos, and they were never compressed, so any show
-  // with a prize photo attached would blow the request size and fail to
-  // persist. Now goes through resizeImageFile() too.
   card.querySelector('#cs_add_prize').onclick=()=>{
-    const inp=document.createElement('input');
-    inp.type='file'; inp.accept='image/*';
-    inp.onchange=async e=>{
-      const f=e.target.files[0]; if(!f) return;
-      try{
-        const dataUrl = await resizeImageFile(f);
-        prizeImages.push({dataUrl, label:""});
-        refreshPrizeArea();
-      }catch(err){ alert('Could not process that image: '+err.message); }
-    };
-    inp.click();
+    prizeImages.push({dataUrl:"", label:""});
+    refreshPrizeArea();
   };
 
   card.querySelector('#cs_go').onclick=async()=>{
@@ -1899,7 +1889,7 @@ function buildShowLogForm(){
 
     artImage=null; prizeImages.length=0;
     card.querySelector('#cs_art_preview').innerHTML='';
-    card.querySelector('#cs_art_file').value='';
+    card.querySelector('#cs_art_url').value='';
     ['#cs_venue','#cs_date','#cs_note','#cs_class','#cs_link'].forEach(s=>{ const el=card.querySelector(s); if(el)el.value=''; });
     card.querySelector('#cs_place').value='';
     if(card.querySelector('#cs_art_type')) card.querySelector('#cs_art_type').value='';
@@ -1930,7 +1920,7 @@ function buildShowHistory(){
             const prizes=c.prizes||[];
             const mainImg=c.image||( prizes[0]?.dataUrl||null);
             return `<div style="background:#15100c;border:1px solid #4a392a;border-radius:8px;padding:8px;text-align:center;min-width:80px;max-width:110px;">
-              ${mainImg?`<img src="${mainImg}" style="width:70px;height:70px;object-fit:cover;border-radius:5px;display:block;margin:0 auto 4px;cursor:zoom-in;" onclick="openLightbox('${mainImg}','${c.discipline} — ${placeStr}')" />`:`<div style="font-size:2.2em;margin-bottom:4px;">${icon}</div>`}
+              ${mainImg?`<img src="${mainImg}" style="width:70px;height:70px;object-fit:cover;border-radius:5px;display:block;margin:0 auto 4px;cursor:zoom-in;" onclick="openLightbox('${mainImg}','${c.discipline} — ${placeStr}')" onerror="this.style.display='none'" />`:`<div style="font-size:2.2em;margin-bottom:4px;">${icon}</div>`}
               <div style="font-size:.78em;">${icon} ${placeStr}</div>
               <div style="font-size:.72em;opacity:.7;">${c.discipline}</div>
               ${c.venue?`<div style="font-size:.68em;opacity:.5;">${c.venue}</div>`:""}
@@ -1956,14 +1946,14 @@ function buildShowHistory(){
           const prizes=c.prizes||[];
           return `<div class="artlog-entry">
             <div style="display:flex;gap:8px;align-items:flex-start;">
-              ${c.image?`<img src="${c.image}" class="artlog-thumb" style="cursor:zoom-in;" onclick="openLightbox('${c.image}','${c.discipline}')" />`:""}
+              ${c.image?`<img src="${c.image}" class="artlog-thumb" style="cursor:zoom-in;" onclick="openLightbox('${c.image}','${c.discipline}')" onerror="this.style.display='none'" />`:""}
               <div style="flex:1;">
                 ${icon} <b>${c.discipline}</b>${c.difficulty?` — ${c.difficulty}`:""} <span class="tag">${placeLabel}</span>
                 ${c.venue?`<div class="small">${c.venue}${c.date?` · ${c.date}`:""}</div>`:(c.date?`<div class="small">${c.date}</div>`:"")}
                 ${c.note?`<div class="small" style="opacity:.8;">${c.note}</div>`:""}
                 ${prizes.length?`<div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px;">
                   ${prizes.map(p=>`<div style="text-align:center;">
-                    <img src="${p.dataUrl}" style="width:40px;height:40px;object-fit:cover;border-radius:4px;border:1px solid #4a392a;cursor:zoom-in;display:block;" onclick="openLightbox('${p.dataUrl}','${p.label||"Prize"}')" />
+                    <img src="${p.dataUrl}" style="width:40px;height:40px;object-fit:cover;border-radius:4px;border:1px solid #4a392a;cursor:zoom-in;display:block;" onclick="openLightbox('${p.dataUrl}','${p.label||"Prize"}')" onerror="this.style.display='none'" />
                     ${p.label?`<div style="font-size:.65em;opacity:.6;max-width:44px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${p.label}</div>`:""}
                   </div>`).join("")}
                 </div>`:""}
@@ -2009,8 +1999,12 @@ function showEditCompModal(h, recId){
       <option value="">— Not yet judged / no placement —</option>
       ${["1st","2nd","3rd","4th","5th","6th"].map((l,i)=>`<option value="${i+1}" ${rec.placement===i+1?"selected":""}>${l}</option>`).join("")}
     </select>
-    <label>Add Prize Photo(s)</label>
-    <input type="file" id="ec_prize_file" accept="image/*" multiple style="margin-bottom:6px;" />
+    <label>Add Prize Photo URL(s)</label>
+    <p class="small" style="margin:2px 0 6px;color:#b5a392;">Paste a direct image link, click Add, repeat for more. See the note at the top of the page for how to get one.</p>
+    <div style="display:flex;gap:6px;margin-bottom:6px;">
+      <input type="text" id="ec_prize_url" placeholder="https://…jpg / .png / .gif" style="flex:1;padding:7px;background:#15100c;border:1px solid #4a392a;color:#f1e6d8;border-radius:5px;box-sizing:border-box;" />
+      <button id="ec_prize_add" style="padding:7px 14px;background:#2c2118;color:#f1e6d8;border:1px solid #4a392a;border-radius:5px;cursor:pointer;">Add</button>
+    </div>
     <div id="ec_prize_preview" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;"></div>
     ${rec.artLogId?`<p class="small" style="color:#b5a392;">This show has art logged — changing the placement will recalculate its EXP and your horse's stats/level.</p>`:`<p class="small" style="color:#b5a392;">No art was logged for this show, so there's no EXP to recalculate — this just updates the record.</p>`}
     <button id="ec_save" style="margin-top:8px;width:100%;background:#c98a3a;color:#241a14;border:none;padding:10px;border-radius:6px;font-weight:bold;cursor:pointer;">💾 Save</button>
@@ -2018,14 +2012,13 @@ function showEditCompModal(h, recId){
   </div>`;
   document.body.appendChild(overlay);
 
-  overlay.querySelector('#ec_prize_file').onchange=async e=>{
-    for(const f of e.target.files){
-      try{
-        const dataUrl=await resizeImageFile(f);
-        newPrizes.push({dataUrl,label:""});
-      }catch(err){}
-    }
-    overlay.querySelector('#ec_prize_preview').innerHTML=newPrizes.map(p=>`<img src="${p.dataUrl}" style="width:44px;height:44px;object-fit:cover;border-radius:5px;border:1px solid #4a392a;" />`).join("");
+  overlay.querySelector('#ec_prize_add').onclick=()=>{
+    const inp=overlay.querySelector('#ec_prize_url');
+    const url=inp.value.trim();
+    if(!url) return;
+    newPrizes.push({dataUrl:url, label:""});
+    inp.value='';
+    overlay.querySelector('#ec_prize_preview').innerHTML=newPrizes.map(p=>prizeThumbHTML(p.dataUrl)).join("");
   };
 
   overlay.querySelector('#ec_cancel').onclick=()=>overlay.remove();
@@ -2593,13 +2586,13 @@ function renderHorseProfilePage(app, h){
       const prizes=c.prizes||[];
       const mainImg=c.image||(prizes[0]?.dataUrl||null);
       return `<div style="background:#15100c;border:1px solid #4a392a;border-radius:8px;padding:8px;text-align:center;min-width:80px;max-width:120px;">
-        ${mainImg?`<img src="${mainImg}" style="width:70px;height:70px;object-fit:cover;border-radius:5px;display:block;margin:0 auto 4px;cursor:zoom-in;" onclick="openLightbox('${mainImg}','${c.discipline} — ${placeStr}')" />`:`<div style="font-size:2.2em;margin-bottom:4px;">${icon}</div>`}
+        ${mainImg?`<img src="${mainImg}" style="width:70px;height:70px;object-fit:cover;border-radius:5px;display:block;margin:0 auto 4px;cursor:zoom-in;" onclick="openLightbox('${mainImg}','${c.discipline} — ${placeStr}')" onerror="this.style.display='none'" />`:`<div style="font-size:2.2em;margin-bottom:4px;">${icon}</div>`}
         <div style="font-size:.78em;">${icon} ${placeStr}</div>
         <div style="font-size:.72em;opacity:.7;">${c.discipline}</div>
         ${c.venue?`<div style="font-size:.68em;opacity:.5;">${c.venue}</div>`:""}
         ${c.date?`<div style="font-size:.65em;opacity:.4;">${c.date}</div>`:""}
         ${prizes.length>1?`<div style="display:flex;gap:2px;justify-content:center;margin-top:4px;flex-wrap:wrap;">
-          ${prizes.slice(0,4).map(p=>`<img src="${p.dataUrl}" style="width:20px;height:20px;object-fit:cover;border-radius:2px;cursor:zoom-in;" onclick="openLightbox('${p.dataUrl}','${p.label||'Prize'}')" title="${p.label||'Prize'}" />`).join("")}
+          ${prizes.slice(0,4).map(p=>`<img src="${p.dataUrl}" style="width:20px;height:20px;object-fit:cover;border-radius:2px;cursor:zoom-in;" onclick="openLightbox('${p.dataUrl}','${p.label||'Prize'}')" title="${p.label||'Prize'}" onerror="this.style.display='none'" />`).join("")}
         </div>`:""}
       </div>`;
     }).join("")}
@@ -2611,14 +2604,14 @@ function renderHorseProfilePage(app, h){
     const label=pl?["1st","2nd","3rd","4th","5th","6th"][pl-1]||pl+"th":"Participant";
     const prizes=c.prizes||[];
     return `<div class="artlog-entry" style="display:flex;gap:8px;align-items:flex-start;">
-      ${c.image?`<img src="${c.image}" class="artlog-thumb" style="flex:none;cursor:zoom-in;" onclick="openLightbox('${c.image}','${c.discipline}')" />`:""}
+      ${c.image?`<img src="${c.image}" class="artlog-thumb" style="flex:none;cursor:zoom-in;" onclick="openLightbox('${c.image}','${c.discipline}')" onerror="this.style.display='none'" />`:""}
       <div style="flex:1;">
         ${icon} <b>${c.discipline}</b>${c.difficulty?" — "+c.difficulty:""} <span class="tag">${label}</span>
         ${c.venue?`<div class="small">${c.venue}${c.date?" · "+c.date:""}</div>`:(c.date?`<div class="small">${c.date}</div>`:"")}
         ${c.note?`<div class="small" style="opacity:.8;">${c.note}</div>`:""}
         ${prizes.length?`<div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px;">
           ${prizes.map(p=>`<div style="text-align:center;">
-            <img src="${p.dataUrl}" style="width:36px;height:36px;object-fit:cover;border-radius:4px;border:1px solid #4a392a;cursor:zoom-in;display:block;" onclick="openLightbox('${p.dataUrl}','${p.label||'Prize'}')" />
+            <img src="${p.dataUrl}" style="width:36px;height:36px;object-fit:cover;border-radius:4px;border:1px solid #4a392a;cursor:zoom-in;display:block;" onclick="openLightbox('${p.dataUrl}','${p.label||'Prize'}')" onerror="this.style.display='none'" />
             ${p.label?`<div style="font-size:.62em;opacity:.6;max-width:40px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${p.label}</div>`:""}
           </div>`).join("")}
         </div>`:""}
