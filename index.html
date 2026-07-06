@@ -197,6 +197,13 @@ function calcLitExp(wc){
 // STATE
 // ============================================
 
+// Show Earnings rule: 1st +1,000 / 2nd +500 / 3rd +250 / 4th-or-below +100
+// to a horse's net worth. This only affects the displayed net worth number
+// on the horse's profile — it is NOT connected to the bank/currency system
+// (BANK_URL) and does not move any real currency.
+const SHOW_EARNING_VALUES = {1:1000, 2:500, 3:250};
+const SHOW_EARNING_OTHER = 100;
+
 const BANK_URL = 'https://script.google.com/macros/s/AKfycby9WLxUPDAPg9EH5aTPATzTkHd8XeSKXuQ0WYqyQoHusEbws85qxwaML6cSovDod80/exec';
 const DEFAULT_STABLE_URL = 'https://script.google.com/macros/s/AKfycbwNF02tC8_U9MjAvJJzjVLNgHUyAf2ND-drxjhQPnOikJdw_seUIIxrYEsTsAlhG-o/exec';
 let STABLE_URL = localStorage.getItem('equi_stable_url') || DEFAULT_STABLE_URL;
