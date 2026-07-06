@@ -2609,9 +2609,9 @@ function renderHorseProfilePage(app, h){
   const statBars = STATS.map(s=>{
     const base=h.stats[s]||0, bonus=getEquippedStatBonus(h,s), eff=base+bonus;
     return `<div class="statbar-wrap">
-      <span style="width:80px;font-size:1em;">${STAT_LABELS[s]}</span>
+      <span style="min-width:100px;flex:0 0 auto;white-space:nowrap;font-size:1em;">${STAT_LABELS[s]}</span>
       <div class="statbar-bg"><div class="statbar-fill" style="width:${Math.min(100,eff)}%"></div></div>
-      <span style="font-size:.98em;width:60px;text-align:right;">${eff}${bonus?` <span style="color:#7a9b6e;">(+${bonus})</span>`:""}</span>
+      <span style="font-size:.98em;min-width:60px;flex:0 0 auto;white-space:nowrap;text-align:right;">${eff}${bonus?` <span style="color:#7a9b6e;">(+${bonus})</span>`:""}</span>
     </div>`;
   }).join("");
 
