@@ -1166,7 +1166,6 @@ function renderRoster(){
       <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">
         <button class="secondary" data-act="toggle-log" data-id="${h.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">${open?"Hide":"Show"} Art Log (${h.artLog.length})</button>
         <button class="secondary" data-act="edit-lineage" data-id="${h.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">Lineage</button>
-        <button class="secondary" data-act="edit-profile" data-id="${h.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">Edit Profile</button>
         <button class="secondary" data-act="edit-worth" data-id="${h.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">Net Worth</button>
         <button class="danger" data-act="del" data-id="${h.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">Remove</button>
       </div>
@@ -1206,7 +1205,6 @@ function renderRoster(){
     showBreedingSlotModal(slot.dataset.id, Number(slot.dataset.slot));
   });
   wrap.querySelectorAll('[data-act="edit-lineage"]').forEach(b=>b.onclick=()=>showLineageModal(b.dataset.id));
-  wrap.querySelectorAll('[data-act="edit-profile"]').forEach(b=>b.onclick=()=>showProfileModal(b.dataset.id));
   wrap.querySelectorAll('[data-act="edit-worth"]').forEach(b=>b.onclick=()=>showNetWorthModal(b.dataset.id));
   wrap.querySelectorAll('[data-act="view-profile"]').forEach(b=>b.onclick=()=>goToProfile(b.dataset.id));
   wrap.querySelectorAll('[data-act="delete-artlog"]').forEach(b=>b.onclick=()=>{
@@ -2765,6 +2763,7 @@ function renderHorseProfilePage(app, h){
           <div style="margin-top:8px;"><span class="tag" style="font-size:1.02em;">Level ${h.level}</span> <span class="tag" style="font-size:1.02em;">${h.exp} EXP</span></div>
           <div class="expbar-bg" style="margin-top:6px;max-width:260px;"><div class="expbar-fill" style="width:${pct}%"></div></div>
           <div style="margin-top:12px;font-size:.98em;color:#b5a392;">Net Worth: <b style="color:#c98a3a;">฿${netWorth.toLocaleString()}</b> &nbsp;|&nbsp; Breeding Slot: <b style="color:#c98a3a;">฿${slotPrice.toLocaleString()}</b></div>
+          <button id="pp_edit_profile_btn" class="secondary" style="margin-top:12px;font-size:.95em;padding:6px 14px;">Edit Profile</button>
         </div>
       </div>
 
@@ -2826,6 +2825,9 @@ function renderHorseProfilePage(app, h){
 
   const backLink = app.querySelector('[data-act="back-to-roster"]');
   if(backLink) backLink.onclick = goToRoster;
+
+  const editProfileBtn = app.querySelector('#pp_edit_profile_btn');
+  if(editProfileBtn) editProfileBtn.onclick = ()=>showProfileModal(h.id);
 
   // FIX: profile photo used to be a file upload run through resizeImageFile
   // and base64-encoded, which could still blow past the JSONP/Sheets size
