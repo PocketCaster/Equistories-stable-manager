@@ -2673,12 +2673,12 @@ function renderHorseProfilePage(app, h){
     `<div class="small" style="opacity:.6;">No art logged yet.</div>`;
 
   const photoHtml = h.profileImage
-    ? `<img src="${h.profileImage}" onclick="openLightbox('${jsStr(h.profileImage)}','${jsStr(h.name)}')" style="width:min(220px,42vw);height:min(220px,42vw);border-radius:10px;object-fit:cover;border:3px solid #c98a3a;cursor:zoom-in;" />`
-    : `<div style="width:min(220px,42vw);height:min(220px,42vw);border-radius:10px;border:3px solid #4a392a;display:flex;align-items:center;justify-content:center;font-size:3.5em;background:#15100c;"></div>`;
+    ? `<img src="${h.profileImage}" onclick="openLightbox('${jsStr(h.profileImage)}','${jsStr(h.name)}')" style="width:min(300px,55vw);height:min(300px,55vw);border-radius:10px;object-fit:cover;border:3px solid #c98a3a;cursor:zoom-in;" />`
+    : `<div style="width:min(300px,55vw);height:min(300px,55vw);border-radius:10px;border:3px solid #4a392a;display:flex;align-items:center;justify-content:center;font-size:3.5em;background:#15100c;"></div>`;
 
   const refHtml = h.referenceImage
     ? `<div style="text-align:center;">
-       <img src="${h.referenceImage}" onclick="openLightbox('${jsStr(h.referenceImage)}','${jsStr(h.name+' — Reference Sheet')}')" style="max-width:min(420px,90%);max-height:320px;border-radius:10px;border:2px solid #4a392a;object-fit:contain;cursor:zoom-in;box-shadow:0 6px 20px rgba(0,0,0,.45);" />
+       <img src="${h.referenceImage}" onclick="openLightbox('${jsStr(h.referenceImage)}','${jsStr(h.name+' — Reference Sheet')}')" style="max-width:min(560px,92%);max-height:460px;border-radius:10px;border:2px solid #4a392a;object-fit:contain;cursor:zoom-in;box-shadow:0 6px 20px rgba(0,0,0,.45);" />
        ${h.referenceLink?`<div class="small" style="margin-top:8px;"><a href="${h.referenceLink}" target="_blank" style="color:#c98a3a;">View on site</a></div>`:""}</div>`
     : (bankAccount.linked ? `<div class="small" style="text-align:center;opacity:.7;">No reference sheet uploaded yet.</div>` : "");
   const refUploadHtml = bankAccount.linked
