@@ -2673,16 +2673,16 @@ function renderHorseProfilePage(app, h){
     `<div class="small" style="opacity:.6;">No art logged yet.</div>`;
 
   const photoHtml = h.profileImage
-    ? `<img src="${h.profileImage}" onclick="openLightbox('${jsStr(h.profileImage)}','${jsStr(h.name)}')" style="width:min(150px,38vw);height:min(150px,38vw);border-radius:10px;object-fit:cover;border:3px solid #c98a3a;cursor:zoom-in;" />`
-    : `<div style="width:min(150px,38vw);height:min(150px,38vw);border-radius:10px;border:3px solid #4a392a;display:flex;align-items:center;justify-content:center;font-size:3.5em;background:#15100c;"></div>`;
+    ? `<img src="${h.profileImage}" onclick="openLightbox('${jsStr(h.profileImage)}','${jsStr(h.name)}')" style="width:min(220px,42vw);height:min(220px,42vw);border-radius:10px;object-fit:cover;border:3px solid #c98a3a;cursor:zoom-in;" />`
+    : `<div style="width:min(220px,42vw);height:min(220px,42vw);border-radius:10px;border:3px solid #4a392a;display:flex;align-items:center;justify-content:center;font-size:3.5em;background:#15100c;"></div>`;
 
   const refHtml = h.referenceImage
-    ? `<div style="margin-top:10px;"><div class="small" style="margin-bottom:4px;">Reference / Registration</div>
-       <img src="${h.referenceImage}" onclick="openLightbox('${jsStr(h.referenceImage)}','${jsStr(h.name+' — Reference Sheet')}')" style="max-width:100%;max-height:220px;border-radius:8px;border:1px solid #4a392a;object-fit:contain;cursor:zoom-in;" />
-       ${h.referenceLink?`<div class="small" style="margin-top:4px;"><a href="${h.referenceLink}" target="_blank" style="color:#c98a3a;">View on site</a></div>`:""}</div>`
-    : "";
+    ? `<div style="text-align:center;">
+       <img src="${h.referenceImage}" onclick="openLightbox('${jsStr(h.referenceImage)}','${jsStr(h.name+' — Reference Sheet')}')" style="max-width:min(420px,90%);max-height:320px;border-radius:10px;border:2px solid #4a392a;object-fit:contain;cursor:zoom-in;box-shadow:0 6px 20px rgba(0,0,0,.45);" />
+       ${h.referenceLink?`<div class="small" style="margin-top:8px;"><a href="${h.referenceLink}" target="_blank" style="color:#c98a3a;">View on site</a></div>`:""}</div>`
+    : (bankAccount.linked ? `<div class="small" style="text-align:center;opacity:.7;">No reference sheet uploaded yet.</div>` : "");
   const refUploadHtml = bankAccount.linked
-    ? `<div style="margin-top:8px;">
+    ? `<div style="text-align:center;margin-top:12px;">
         <input type="file" accept="image/*" id="pp_ref_input" style="display:none;" />
         <button class="secondary" id="pp_ref_btn" style="font-size:.98em;">${h.referenceImage?"Replace Reference Sheet":"Upload Reference Sheet"}</button>
       </div>`
@@ -2743,7 +2743,7 @@ function renderHorseProfilePage(app, h){
         ${h.horseHistory?`<h3>History</h3><p style="font-size:1.06em;line-height:1.7;white-space:pre-wrap;">${h.horseHistory}</p>`:""}
       </div>` : ""}
 
-      ${(refHtml || refUploadHtml) ? `<div class="pcard">${refHtml}${refUploadHtml}</div>` : ""}
+      ${(refHtml || refUploadHtml) ? `<div class="pcard"><h3 style="text-align:center;">Reference / Registration</h3>${refHtml}${refUploadHtml}</div>` : ""}
 
       <div class="pcard">
         <h3>Stats</h3>
