@@ -1061,9 +1061,9 @@ function renderRoster(){
     const statBars = STATS.map(s=>{
       const base=h.stats[s]||0, bonus=getEquippedStatBonus(h,s);
       return `<div class="statbar-wrap">
-        <span style="width:92px;flex:none;white-space:nowrap;font-size:.98em;">${STAT_LABELS[s]}</span>
+        <span style="min-width:100px;flex:0 0 auto;white-space:nowrap;font-size:.98em;">${STAT_LABELS[s]}</span>
         <div class="statbar-bg"><div class="statbar-fill" style="width:${Math.min(100,base+bonus)}%"></div></div>
-        <span style="font-size:.98em;width:44px;flex:none;text-align:right;">${base+bonus}${bonus?`<span style="color:var(--good);">+${bonus}</span>`:""}</span>
+        <span style="font-size:.98em;min-width:44px;flex:0 0 auto;white-space:nowrap;text-align:right;">${base+bonus}${bonus?`<span style="color:var(--good);">+${bonus}</span>`:""}</span>
       </div>`;
     }).join("");
 
