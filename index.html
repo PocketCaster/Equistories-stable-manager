@@ -399,11 +399,11 @@ async function save(){
   if(!bankAccount.linked || !STABLE_URL) return;
   const userId = bankAccount.userId;
   const tasks = [
-    stableGas({ action:'saveStableState', userId,
-      stateJson: JSON.stringify({ log:state.log, tackInventory:state.tackInventory }) }),
+    sendTextChunked(userId, 'stateJson', 'stable',
+      JSON.stringify({ log:state.log, tackInventory:state.tackInventory })),
     ...state.horses.map(h=>{
       const {artLog, profileImage, referenceImage, ...horseData}=h;
-      return stableGas({ action:'saveHorse', userId, horseId:h.id, horseJson:JSON.stringify(horseData) });
+      return sendTextChunked(userId, 'horseJson', h.id, JSON.stringify(horseData));
     }),
   ];
   await Promise.all(tasks);
@@ -415,6 +415,29 @@ async function saveHorseImageChunked(userId, horseId, imageKey, imageData){
   for(let i=0;i<totalChunks;i++){
     const chunk = imageData.slice(i*IMAGE_CHUNK_SIZE, (i+1)*IMAGE_CHUNK_SIZE);
     const res = await stableGas({ action:'saveHorseImageChunk', userId, horseId, imageKey,
+      chunk, chunkIndex:i, totalChunks });
+    if(!res?.success) return false;
+  }
+  return true;
+}
+
+// FIX: saveHorse/saveStableState used to send the horse's (or the whole
+// stable log's) entire JSON as one GET/JSONP request. That request is
+// carried in the URL, and once a horse builds up enough competition
+// history, breeding records, etc., the URL crosses a length ceiling
+// specific to Google Apps Script's web app endpoint (roughly 6-8k
+// characters) and the request fails outright with a network error —
+// even though the same data would be totally fine written to the sheet.
+// This mirrors the same chunking trick already used for images: split the
+// JSON text into small pieces, send them one at a time, and let the
+// backend (saveTextChunk) stitch them back together once the last one
+// arrives. No single request is ever big enough to hit the ceiling.
+const TEXT_CHUNK_SIZE = 3000;
+async function sendTextChunked(userId, scope, refId, text){
+  const totalChunks = Math.ceil(text.length / TEXT_CHUNK_SIZE) || 1;
+  for(let i=0;i<totalChunks;i++){
+    const chunk = text.slice(i*TEXT_CHUNK_SIZE, (i+1)*TEXT_CHUNK_SIZE);
+    const res = await stableGas({ action:'saveTextChunk', userId, scope, refId,
       chunk, chunkIndex:i, totalChunks });
     if(!res?.success) return false;
   }
@@ -505,8 +528,8 @@ async function saveHorse(horse){
       return clean;
     });
   }
-  const res = await stableGas({ action:'saveHorse', userId:bankAccount.userId, horseId:horse.id, horseJson:JSON.stringify(horseData) });
-  if(!res?.success) allOk = false;
+  const ok = await sendTextChunked(bankAccount.userId, 'horseJson', horse.id, JSON.stringify(horseData));
+  if(!ok) allOk = false;
   return allOk;
 }
 
