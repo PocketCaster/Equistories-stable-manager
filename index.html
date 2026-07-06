@@ -2814,6 +2814,11 @@ function showProfileModal(horseId){
 
   overlay.innerHTML=`<div style="background:#2c1f16;border:2px solid #c98a3a;border-radius:10px;padding:24px;max-width:520px;width:100%;color:#f1e6d8;font-family:Georgia,serif;margin:auto;">
     <h3 style="margin-top:0;color:#c98a3a;">✏️ Edit Profile — ${h.name}</h3>
+    <div style="display:flex;gap:10px;">
+      <div style="flex:1;">${field('pm_breed','Breed',h.breed,'e.g. Thoroughbred')}</div>
+      <div style="width:110px;">${field('pm_age','Age',h.age,'e.g. 5')}</div>
+    </div>
+    <div class="small" style="margin:-4px 0 10px;opacity:.7;">Changing age here won't skip training age-up milestones — the horse's stage (foal/yearling/adult) still updates from those. Changing breed won't recompute existing genetics.</div>
     ${field('pm_owner','Owner Name',h.ownerName,'e.g. @YourUsername')}
     ${field('pm_ownerlink','Owner Link (optional)',h.ownerLink,'https://… (DeviantArt, Toyhouse…)')}
     ${field('pm_rider','Rider Name (optional)',h.riderName,'e.g. Jane Smith')}
@@ -2828,6 +2833,9 @@ function showProfileModal(horseId){
 
   overlay.querySelector('#pm_cancel').onclick=()=>overlay.remove();
   overlay.querySelector('#pm_save').onclick=async()=>{
+    h.breed = overlay.querySelector('#pm_breed').value.trim() || h.breed;
+    const newAge = Number(overlay.querySelector('#pm_age').value);
+    if(!isNaN(newAge) && newAge >= 0) h.age = newAge;
     h.ownerName  = overlay.querySelector('#pm_owner').value.trim();
     h.ownerLink  = overlay.querySelector('#pm_ownerlink').value.trim();
     h.riderName  = overlay.querySelector('#pm_rider').value.trim();
