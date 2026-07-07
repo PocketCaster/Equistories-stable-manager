@@ -260,7 +260,7 @@ let imageLinkHelpOpen = true; // starts expanded once so the new paste-a-link in
 let expandedLogs = new Set();
 let adminPanelUnlocked = false; // gates the "Configure Stable Data URL" admin panel on the login screen behind ADMIN_PASSCODE
 
-const ADMIN_PASSCODE = 'Eqistories123';
+const ADMIN_PASSCODE = 'Equistories123';
 
 function uid(){ return 'h_'+Math.random().toString(36).slice(2,9); }
 function rand(a,b){ return Math.floor(Math.random()*(b-a+1))+a; }
@@ -627,21 +627,23 @@ async function deleteHorseFromSheets(horseId){
 }
 
 async function loadGlobalBreeds(){
-  if(!STABLE_URL){ state.customBreeds=[]; state.customGenes=[]; return; }
+  if(!STABLE_URL){ state.customBreeds=[]; state.customGenes=[]; state.customMarkings=[]; return; }
   const res = await stableGas({ action:'loadStableState', userId:GLOBAL_CONFIG_USER_ID });
   if(res?.success && res.data){
-    state.customBreeds = Array.isArray(res.data.customBreeds) ? res.data.customBreeds : [];
-    state.customGenes  = Array.isArray(res.data.customGenes)  ? res.data.customGenes  : [];
+    state.customBreeds   = Array.isArray(res.data.customBreeds)   ? res.data.customBreeds   : [];
+    state.customGenes    = Array.isArray(res.data.customGenes)    ? res.data.customGenes    : [];
+    state.customMarkings = Array.isArray(res.data.customMarkings) ? res.data.customMarkings : [];
   } else {
     state.customBreeds = [];
     state.customGenes = [];
+    state.customMarkings = [];
   }
 }
 
 async function saveGlobalBreeds(){
   if(!STABLE_URL) return false;
   return await sendTextChunked(GLOBAL_CONFIG_USER_ID, 'stateJson', 'stable',
-    JSON.stringify({ customBreeds: state.customBreeds, customGenes: state.customGenes }));
+    JSON.stringify({ customBreeds: state.customBreeds, customGenes: state.customGenes, customMarkings: state.customMarkings }));
 }
 
 async function loadFromSheets(){
@@ -1070,19 +1072,10 @@ function renderRoster(){
     <div style="display:flex;gap:6px;margin-bottom:10px;">
       <select id="nh_mod_pick" style="flex:1;">
         <option value="">— Pick a marking/trait —</option>
-        ${Object.entries(GENO_MODIFIERS).filter(([g])=>g!=="Mane Type").map(([group,items])=>`
-          <optgroup label="— ${group} —">
-            ${items.map(m=>`<option value="${m.value}|${m.label}">${m.label} (+฿${m.value})</option>`).join("")}
-          </optgroup>`).join("")}
       </select>
       <button id="nh_add_mod" class="secondary" style="white-space:nowrap;">+ Add</button>
     </div>
     <div id="nh_mod_list" class="prompt-box" style="margin-bottom:10px;"></div>
-
-    <h4 style="margin:14px 0 4px;color:var(--accent);">Mane Type <span class="small">(optional)</span></h4>
-    <select id="nh_mane" style="margin-bottom:8px;">
-      ${GENO_MODIFIERS["Mane Type"].map(m=>`<option value="${m.value}|${m.label}">${m.label}${m.value>0?` (+฿${m.value})`:""}</option>`).join("")}
-    </select>
 
     <div id="nh_geno_preview" class="prompt-box" style="margin-top:8px;"></div>
     <button id="nh_add" style="margin-top:10px;">Add to Stable</button>
@@ -1109,8 +1102,29 @@ function renderRoster(){
     const isOther=form.querySelector('#nh_breed_select').value==='__other__';
     form.querySelector('#nh_breed_other').style.display = isOther ? 'block' : 'none';
     renderGeneticsPicker();
+    renderModPicker();
   };
-  form.querySelector('#nh_breed_other').oninput=renderGeneticsPicker;
+  form.querySelector('#nh_breed_other').oninput=()=>{ renderGeneticsPicker(); renderModPicker(); };
+
+  // Rare Markings is universal to every breed (plus any Custom Rare Markings
+  // added in the Admin panel); Line Features is ILB-line-exclusive, so it
+  // only shows up once the selected breed is in LINE_FEATURE_BREEDS.
+  function renderModPicker(){
+    const breed=(currentBreedKey()||"").trim().toLowerCase();
+    const groups={
+      "Rare Markings":[...GENO_MODIFIERS["Rare Markings"], ...(state.customMarkings||[])],
+    };
+    if(LINE_FEATURE_BREEDS.includes(breed)) groups["Line Features"]=GENO_MODIFIERS["Line Features"];
+    const pick=form.querySelector('#nh_mod_pick');
+    const prevVal=pick.value;
+    pick.innerHTML=`<option value="">— Pick a marking/trait —</option>`+
+      Object.entries(groups).map(([group,items])=>`
+        <optgroup label="— ${group} —">
+          ${items.map(m=>`<option value="${m.value}|${m.label}">${m.label} (+฿${m.value})</option>`).join("")}
+        </optgroup>`).join("");
+    if([...pick.options].some(o=>o.value===prevVal)) pick.value=prevVal;
+  }
+  renderModPicker();
 
   function refreshModList(){
     const list=form.querySelector('#nh_mod_list');
@@ -1131,13 +1145,12 @@ function renderRoster(){
     if(!val) return;
     const [price, ...labelParts]=val.split('|');
     const label=labelParts.join('|');
-    const def=Object.values(GENO_MODIFIERS).flat().find(m=>m.label===label);
+    const def=[...Object.values(GENO_MODIFIERS).flat(), ...(state.customMarkings||[])].find(m=>m.label===label);
     extraModifiers.push({label, value:Number(price), genoTag:def&&def.genoTag||null});
     refreshModList();
     refreshGenoPreview();
     form.querySelector('#nh_mod_pick').value='';
   };
-  form.querySelector('#nh_mane').onchange=refreshGenoPreview;
   refreshModList();
 
   function renderGeneticsPicker(){
@@ -1178,14 +1191,7 @@ function renderRoster(){
     refreshGenoPreview();
   }
   function collectExtraModifiers(){
-    const mods=[...extraModifiers];
-    const maneVal=form.querySelector('#nh_mane').value;
-    if(maneVal){
-      const [price, ...labelParts]=maneVal.split('|');
-      const label=labelParts.join('|');
-      if(Number(price)>0) mods.push({label, value:Number(price)});
-    }
-    return mods;
+    return [...extraModifiers];
   }
   function refreshGenoPreview(){
     const breed=currentBreedKey();
@@ -2418,6 +2424,7 @@ function renderTackInventory(){
 
 let editingBreedId = null;
 let editingGeneId = null;
+let editingMarkingId = null;
 
 function renderAdmin(){
   const wrap = el('div');
@@ -2680,6 +2687,88 @@ function renderAdmin(){
     render();
   });
 
+  // ============================================
+  // ADMIN — CUSTOM RARE MARKINGS
+  // (arbitrary user-defined entries added to the "Rare Markings" group in
+  // the marking/trait picker on the Roster tab — universal, available on
+  // every horse regardless of breed, same as the built-in Rare Markings)
+  // ============================================
+
+  const editingMarking = editingMarkingId ? (state.customMarkings||[]).find(m=>m.id===editingMarkingId) : null;
+
+  const markingForm = el('div','card',`
+    <h3>${editingMarking?`Edit Custom Rare Marking — ${editingMarking.label}`:"Add Custom Rare Marking"}</h3>
+    <p class="small" style="margin:0 0 8px;">Shows up under "— Rare Markings —" in the marking/trait picker on the Roster tab for every affiliate, alongside the built-in list — available on every horse regardless of breed.</p>
+    <div class="row" style="align-items:flex-end;">
+      <div style="flex:2;"><label>Marking Name</label><input id="am_label" placeholder="e.g. Cryptic" value="${editingMarking?editingMarking.label.replace(/"/g,"&quot;"):""}" /></div>
+      <div style="max-width:140px;"><label>Price (฿)</label><input id="am_price" type="number" min="0" value="${editingMarking?editingMarking.value:0}" /></div>
+    </div>
+    <div style="margin-top:14px;">
+      <button id="am_save_marking">${editingMarking?"Save Changes":"Add Marking"}</button>
+      ${editingMarking?`<button id="am_cancel_marking" class="secondary">Cancel</button>`:""}
+    </div>
+    <div id="am_save_status" class="small" style="margin-top:6px;"></div>
+  `);
+  wrap.appendChild(markingForm);
+
+  markingForm.querySelector('#am_save_marking').onclick=async()=>{
+    const label=markingForm.querySelector('#am_label').value.trim();
+    const value=Number(markingForm.querySelector('#am_price').value)||0;
+    if(!label){ alert("Give the marking a name first."); return; }
+    if(!state.customMarkings) state.customMarkings=[];
+    const dupe=state.customMarkings.find(m=>m.label.toLowerCase()===label.toLowerCase() && m.id!==editingMarkingId)
+      || GENO_MODIFIERS["Rare Markings"].find(m=>m.label.toLowerCase()===label.toLowerCase());
+    if(dupe){ alert("A rare marking with that name already exists."); return; }
+    if(editingMarking){
+      editingMarking.label=label; editingMarking.value=value;
+    } else {
+      state.customMarkings.push({id:uid2(), label, value});
+    }
+    editingMarkingId=null;
+    const status=markingForm.querySelector('#am_save_status');
+    status.textContent='Saving…';
+    const ok=await saveGlobalBreeds();
+    status.textContent = ok ? 'Saved — visible to all affiliates now.' : '⚠ Saved here, but failed to sync to Stable Data. Try again.';
+    render();
+  };
+  const markingCancelBtn=markingForm.querySelector('#am_cancel_marking');
+  if(markingCancelBtn) markingCancelBtn.onclick=()=>{ editingMarkingId=null; render(); };
+
+  const markingListCard = el('div','card');
+  const markings=(state.customMarkings||[]).slice().sort((a,b)=>a.label.localeCompare(b.label));
+  markingListCard.innerHTML=`<h3>Custom Rare Markings (${markings.length})</h3>`;
+  if(!markings.length){
+    markingListCard.innerHTML+=`<div class="small">None added yet.</div>`;
+  } else {
+    markings.forEach(m=>{
+      const row=el('div');
+      row.style.cssText='display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #2c2118;';
+      row.innerHTML=`
+        <div style="flex:1;">
+          <div style="font-weight:bold;">${m.label}</div>
+          <div class="small" style="opacity:.8;">+฿${m.value.toLocaleString()}</div>
+        </div>
+        <button class="secondary" data-edit-marking="${m.id}" style="font-size:.96em;padding:3px 10px;margin-top:0;">Edit</button>
+        <button class="danger" data-remove-marking="${m.id}" style="font-size:.96em;padding:3px 10px;margin-top:0;">Remove</button>
+      `;
+      markingListCard.appendChild(row);
+    });
+  }
+  wrap.appendChild(markingListCard);
+
+  markingListCard.querySelectorAll('[data-edit-marking]').forEach(b=>b.onclick=()=>{
+    editingMarkingId=b.dataset.editMarking;
+    render();
+    window.scrollTo(0,0);
+  });
+  markingListCard.querySelectorAll('[data-remove-marking]').forEach(b=>b.onclick=async()=>{
+    const target=state.customMarkings.find(x=>x.id===b.dataset.removeMarking);
+    if(!confirm(`Remove custom rare marking "${target?.label}"? It'll disappear from the marking picker (horses already carrying it keep their saved Net Worth value).`)) return;
+    state.customMarkings=(state.customMarkings||[]).filter(x=>x.id!==b.dataset.removeMarking);
+    await saveGlobalBreeds();
+    render();
+  });
+
   return wrap;
 }
 
@@ -2698,7 +2787,6 @@ const GENO_MODIFIERS = {
     {label:"Birdcatcher Spots", value:0},
     {label:"Gulastra Plume", value:200, genoTag:"nSb"},
     {label:"Bloodmark", value:600},
-    {label:"Cryptic", value:700},
     {label:"Brindle", value:900},
     {label:"Somatic Mutation", value:900},
     {label:"Lacing", value:900},
@@ -2714,15 +2802,14 @@ const GENO_MODIFIERS = {
     {label:"Circe Line — Circe Ears", value:9000},
     {label:"Wolf Line — Unrelated Bleu", value:9000},
   ],
-  "Mane Type": [
-    {label:"Standard Mane (free)", value:0},
-    {label:"Single Bald Mane", value:100},
-    {label:"Double Bald Mane", value:200},
-    {label:"Bald Mane Long Tail", value:150},
-    {label:"Double Long Mane", value:200},
-    {label:"Single Long Mane", value:100},
-  ],
 };
+
+// Breeds (by lowercased name) whose horses can access the "Line Features"
+// group of rare markings/traits. Line Features are ILB-line-exclusive, so
+// they're hidden from the picker entirely unless the selected breed is one
+// of these — everything else in GENO_MODIFIERS is a universal mutation
+// available to every breed.
+const LINE_FEATURE_BREEDS = ["irish lightblood"];
 
 const GENETIC_LOCI = [
   { key:"extension", label:"Extension (E) — base pigment", base:true,
@@ -3050,7 +3137,19 @@ function getAllowedLoci(breed){
   const optionalKeys=allLoci().filter(l=>!l.base).map(l=>l.key);
   const custom=(state.customBreeds||[]).find(b=>(b.name||"").trim().toLowerCase()===key);
   const restricted = custom ? custom.loci : breedLociList(BREED_GENETICS[key]);
-  if(!restricted) return optionalKeys;
+  if(!restricted){
+    // No matching breed found — either nothing's been picked yet in the
+    // "— Select a breed —" dropdown, or a freeform "Other" name was typed
+    // that doesn't match anything on record. Either way, genes that were
+    // built exclusively for a specific Custom/Created breed (Custom Genes,
+    // ILB Exclusive Genetics) should never leak in here — they should only
+    // ever show up once the breed they were made for is actually selected.
+    const exclusiveKeys = new Set([
+      ...customGeneLoci().map(l=>l.key),
+      ...GENETIC_LOCI.filter(l=>l.label.includes("ILB Exclusive")).map(l=>l.key),
+    ]);
+    return optionalKeys.filter(k=>!exclusiveKeys.has(k));
+  }
   // Silver and Flaxen are the same underlying trait complex, just visible
   // on opposite base colors (Silver on black-based, Flaxen on chestnut).
   // Breed lists were only ever written with "silver" in mind, so carry
