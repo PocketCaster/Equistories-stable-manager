@@ -35,6 +35,10 @@
   #app .gene-cell { display:flex; flex-direction:column; min-width:0; }
   #app .gene-cell label { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; cursor:help; }
   #app .gene-cell select { width:100%; }
+  #app .loci-check-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(180px,1fr)); gap:6px 14px; }
+  #app .loci-check-grid label { display:flex; align-items:center; gap:7px; cursor:pointer; min-width:0; }
+  #app .loci-check-grid input[type=checkbox] { flex-shrink:0; margin:0; }
+  #app .loci-check-grid span { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; cursor:help; }
   #app label { font-size:.92em; color:var(--dim); display:block; margin-bottom:6px; text-transform:uppercase; letter-spacing:.5px; }
   #app input, #app select, #app textarea {
     width:100%; padding:12px 14px; background:#15100c; border:1px solid #4a392a;
@@ -256,7 +260,7 @@ let imageLinkHelpOpen = true; // starts expanded once so the new paste-a-link in
 let expandedLogs = new Set();
 let adminPanelUnlocked = false; // gates the "Configure Stable Data URL" admin panel on the login screen behind ADMIN_PASSCODE
 
-const ADMIN_PASSCODE = 'Equistories123';
+const ADMIN_PASSCODE = 'Eqistories123';
 
 function uid(){ return 'h_'+Math.random().toString(36).slice(2,9); }
 function rand(a,b){ return Math.floor(Math.random()*(b-a+1))+a; }
@@ -2435,18 +2439,18 @@ function renderAdmin(){
     <input id="ad_breed_name" placeholder="e.g. Gulastra Line" value="${editing?editing.name.replace(/"/g,"&quot;"):""}" style="max-width:320px;" />
 
     <h4 style="margin:14px 0 4px;color:var(--accent);">Common Genetics</h4>
-    <div class="gene-grid">
+    <div class="loci-check-grid">
       ${commonLoci.map(l=>`
-        <label class="small" style="display:flex;align-items:center;gap:6px;">
-          <input type="checkbox" data-loci="${l.key}" ${editing&&editing.loci.includes(l.key)?"checked":""} /> ${l.label}
+        <label class="small" title="${l.label.replace(/"/g,"&quot;")}">
+          <input type="checkbox" data-loci="${l.key}" ${editing&&editing.loci.includes(l.key)?"checked":""} /> <span>${shortLocusLabel(l)}</span>
         </label>`).join("")}
     </div>
 
     <h4 style="margin:14px 0 4px;color:var(--accent);">ILB Exclusive Genetics</h4>
-    <div class="gene-grid">
+    <div class="loci-check-grid">
       ${ilbLoci.map(l=>`
-        <label class="small" style="display:flex;align-items:center;gap:6px;">
-          <input type="checkbox" data-loci="${l.key}" ${editing&&editing.loci.includes(l.key)?"checked":""} /> ${l.label}
+        <label class="small" title="${l.label.replace(/"/g,"&quot;")}">
+          <input type="checkbox" data-loci="${l.key}" ${editing&&editing.loci.includes(l.key)?"checked":""} /> <span>${shortLocusLabel(l)}</span>
         </label>`).join("")}
     </div>
 
@@ -2802,6 +2806,13 @@ const BREED_DISPLAY_OVERRIDES = {
 function breedDisplayName(key){
   if(BREED_DISPLAY_OVERRIDES[key]) return BREED_DISPLAY_OVERRIDES[key];
   return key.replace(/\b\w/g, c=>c.toUpperCase());
+}
+
+// Locus labels carry a lot of descriptive text after " — " (dominance
+// notes, what it's exclusive to, etc). Great as a hover tooltip, too long
+// for a checkbox row — this trims it down to just the name + gene code.
+function shortLocusLabel(locus){
+  return locus.label.split(" — ")[0].trim();
 }
 
 // Builds the full Breed dropdown: hardcoded common real-world breeds, plus
