@@ -2699,25 +2699,19 @@ function renderHorseProfilePage(app, h){
     ? `<img src="${h.profileImage}" onclick="openLightbox('${jsStr(h.profileImage)}','${jsStr(h.name)}')" style="width:min(300px,55vw);height:min(300px,55vw);border-radius:10px;object-fit:cover;border:3px solid #c98a3a;cursor:zoom-in;" />`
     : `<div style="width:min(300px,55vw);height:min(300px,55vw);border-radius:10px;border:3px solid #4a392a;display:flex;align-items:center;justify-content:center;font-size:3.5em;background:#15100c;"></div>`;
 
-  const refColumnHtml = h.referenceImage
+  const refColumnHtml = (h.referenceImage || bankAccount.linked)
     ? `<div style="display:flex;flex-direction:column;align-items:center;gap:6px;flex:none;">
-        <img src="${h.referenceImage}" onclick="openLightbox('${jsStr(h.referenceImage)}','${jsStr(h.name+' — Reference / Registration')}')" style="width:min(300px,55vw);max-height:280px;border-radius:10px;object-fit:contain;border:3px solid var(--accent, #c98a3a);cursor:zoom-in;background:#15100c;" />
+        ${h.referenceImage
+          ? `<img src="${h.referenceImage}" onclick="openLightbox('${jsStr(h.referenceImage)}','${jsStr(h.name+' — Reference / Registration')}')" style="width:min(300px,55vw);max-height:280px;border-radius:10px;object-fit:contain;border:3px solid var(--accent, #c98a3a);cursor:zoom-in;background:#15100c;" />`
+          : `<div style="width:min(300px,55vw);height:180px;border-radius:10px;border:3px solid #4a392a;display:flex;align-items:center;justify-content:center;font-size:.9em;background:#15100c;color:#8a7a6a;text-align:center;padding:10px;">No reference sheet uploaded yet.</div>`}
         <div class="small" style="text-align:center;">Reference / Registration${h.referenceLink?` · <a href="${h.referenceLink}" target="_blank">View on site</a>`:""}</div>
-      </div>`
-    : "";
-
-  const refHtml = h.referenceImage
-    ? `<div style="text-align:center;">
-       <img src="${h.referenceImage}" onclick="openLightbox('${jsStr(h.referenceImage)}','${jsStr(h.name+' — Reference Sheet')}')" style="max-width:min(560px,92%);max-height:460px;border-radius:10px;border:2px solid #4a392a;object-fit:contain;cursor:zoom-in;box-shadow:0 6px 20px rgba(0,0,0,.45);" />
-       ${h.referenceLink?`<div class="small" style="margin-top:8px;"><a href="${h.referenceLink}" target="_blank" style="color:#c98a3a;">View on site</a></div>`:""}</div>`
-    : (bankAccount.linked ? `<div class="small" style="text-align:center;opacity:.7;">No reference sheet uploaded yet.</div>` : "");
-  const refUploadHtml = bankAccount.linked
-    ? `<div style="text-align:center;margin-top:12px;">
-        <button id="pp_ref_change_btn" class="secondary" style="font-size:.92em;">Change Image</button>
-        <div id="pp_ref_url_wrap" style="display:none;margin-top:10px;">
-          <input type="text" id="pp_ref_url" placeholder="Paste a direct link to the reference sheet image (.jpg/.png/.gif)" value="${escAttr(h.referenceImage||"")}" style="max-width:420px;width:100%;" />
-          <div id="pp_ref_preview" style="margin-top:8px;">${h.referenceImage?urlImagePreviewHTML(h.referenceImage, h.name+' — Reference Sheet'):''}</div>
-        </div>
+        ${bankAccount.linked?`
+          <button id="pp_ref_change_btn" class="secondary" style="width:min(300px,55vw);font-size:.85em;">Change Image</button>
+          <div id="pp_ref_url_wrap" style="display:none;width:100%;">
+            <input type="text" id="pp_ref_url" placeholder="Paste a direct link to the reference sheet image (.jpg/.png/.gif)" value="${escAttr(h.referenceImage||"")}" style="max-width:min(300px,55vw);width:100%;font-size:.9em;" />
+            <div id="pp_ref_preview" style="margin-top:8px;">${h.referenceImage?urlImagePreviewHTML(h.referenceImage, h.name+' — Reference Sheet'):''}</div>
+          </div>
+        `:""}
       </div>`
     : "";
 
@@ -2775,6 +2769,17 @@ function renderHorseProfilePage(app, h){
             <h3 style="margin-bottom:8px;">Stats</h3>
             <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:4px;">${statBars}</div>
           </div>
+          <div style="margin-top:16px;">
+            <h3 style="margin-bottom:8px;">Net Worth Breakdown</h3>
+            <div class="small" style="margin-bottom:8px;">Based on Lightblood Pricing Guide. Breeding slot price = Net Worth × 5%.</div>
+            <div class="worth-row"><span>Genotype Base Price</span><span>฿${(h.genoBasePrice||0).toLocaleString()}</span></div>
+            ${(h.genoModifiers||[]).map(m=>`<div class="worth-row"><span>${m.label}</span><span>฿${(m.value||0).toLocaleString()}</span></div>`).join("")}
+            <div class="worth-row"><span>Total Genotype Value</span><span>฿${genoPrice.toLocaleString()}</span></div>
+            <div class="worth-row"><span>Show Earnings</span><span>฿${showEarnings.toLocaleString()}</span></div>
+            ${h.customNetWorth!==null&&h.customNetWorth!==undefined&&h.customNetWorth!==""?`<div class="worth-row"><span style="color:#d4a030;">⚠ Custom override applied</span><span>฿${Number(h.customNetWorth).toLocaleString()}</span></div>`:""}
+            <div class="worth-row" style="margin-top:4px;padding-top:8px;border-top:1px solid #4a392a;"><span>NET WORTH</span><span>฿${netWorth.toLocaleString()}</span></div>
+            <div class="worth-row"><span>Breeding Slot Price (5%)</span><span>฿${slotPrice.toLocaleString()}</span></div>
+          </div>
         </div>
         ${refColumnHtml}
       </div>
@@ -2784,27 +2789,12 @@ function renderHorseProfilePage(app, h){
         ${h.horseHistory?`<h3>History</h3><p style="font-size:1.06em;line-height:1.7;white-space:pre-wrap;">${h.horseHistory}</p>`:""}
       </div>` : ""}
 
-      ${(refHtml || refUploadHtml) ? `<div class="pcard"><h3 style="text-align:center;">Reference / Registration</h3>${refHtml}${refUploadHtml}</div>` : ""}
-
-
       <div class="pcard">
         <h3>Pedigree</h3>
         ${renderPedigreeChart(h)}
         <h3 style="margin-top:16px;">Breeding Slots</h3>
         <div class="breedslots">${slotsHtml||'<span class="small">none yet</span>'}</div>
         <div style="margin-top:10px;">${breedingRecHtml}</div>
-      </div>
-
-      <div class="pcard">
-        <h3>Net Worth Breakdown</h3>
-        <div class="small" style="margin-bottom:8px;">Based on Lightblood Pricing Guide. Breeding slot price = Net Worth × 5%.</div>
-        <div class="worth-row"><span>Genotype Base Price</span><span>฿${(h.genoBasePrice||0).toLocaleString()}</span></div>
-        ${(h.genoModifiers||[]).map(m=>`<div class="worth-row"><span>${m.label}</span><span>฿${(m.value||0).toLocaleString()}</span></div>`).join("")}
-        <div class="worth-row"><span>Total Genotype Value</span><span>฿${genoPrice.toLocaleString()}</span></div>
-        <div class="worth-row"><span>Show Earnings</span><span>฿${showEarnings.toLocaleString()}</span></div>
-        ${h.customNetWorth!==null&&h.customNetWorth!==undefined&&h.customNetWorth!==""?`<div class="worth-row"><span style="color:#d4a030;">⚠ Custom override applied</span><span>฿${Number(h.customNetWorth).toLocaleString()}</span></div>`:""}
-        <div class="worth-row" style="margin-top:4px;padding-top:8px;border-top:1px solid #4a392a;"><span>NET WORTH</span><span>฿${netWorth.toLocaleString()}</span></div>
-        <div class="worth-row"><span>Breeding Slot Price (5%)</span><span>฿${slotPrice.toLocaleString()}</span></div>
       </div>
 
       <div class="pcard">
