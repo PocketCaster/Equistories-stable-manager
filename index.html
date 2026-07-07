@@ -1086,9 +1086,9 @@ function renderRoster(){
       : `<div class="horse-photo-placeholder"></div>`;
     const statBars = STATS.map(s=>{
       const base=h.stats[s]||0, bonus=getEquippedStatBonus(h,s), eff=base+bonus;
-      return `<div style="padding:4px 0;white-space:nowrap;">
-        <span style="font-size:.98em;color:var(--dim);">${STAT_LABELS[s]}:</span>
-        <span style="font-size:.98em;font-weight:bold;color:var(--accent);margin-left:6px;">${eff}${bonus?` <span style="color:var(--good);font-weight:normal;">(+${bonus})</span>`:""}</span>
+      return `<div style="padding:1px 0;white-space:nowrap;">
+        <span style="font-size:.92em;color:var(--dim);">${STAT_LABELS[s]}:</span>
+        <span style="font-size:.92em;font-weight:bold;color:var(--accent);margin-left:4px;">${eff}${bonus?` <span style="color:var(--good);font-weight:normal;">(+${bonus})</span>`:""}</span>
       </div>`;
     }).join("");
 
@@ -1138,9 +1138,9 @@ function renderRoster(){
           <div class="small">${h.breed} · Age ${h.age} (${h.stage})${h.gender?` · ${h.gender}`:""}</div>
           <div class="small">EXP: ${h.exp} / ${h.level<10?LEVEL_TABLE[h.level+1].exp:"MAX"}</div>
           <div class="expbar-bg"><div class="expbar-fill" style="width:${pct}%"></div></div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:0 8px;margin-top:6px;">${statBars}</div>
         </div>
       </div>
-      <div class="statgrid" style="margin-top:10px;">${statBars}</div>
 
       <div style="margin-top:8px;">
         <div class="small" style="margin-bottom:3px;">Equipped Tack:</div>
