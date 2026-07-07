@@ -1022,12 +1022,61 @@ function renderRoster(){
     <h4 style="margin:14px 0 4px;color:var(--accent);">Genetics</h4>
     <p class="small" style="margin:0 0 8px;">Pick alleles for each gene — the loci shown update based on Breed. This feeds directly into Net Worth.</p>
     <div id="nh_genetics_wrap"></div>
+
+    <h4 style="margin:14px 0 4px;color:var(--accent);">Rare Markings & ILB Traits <span class="small">(optional)</span></h4>
+    <p class="small" style="margin:0 0 8px;">Add any rare markings or ILB-exclusive line traits this horse carries. Each one adds to its Net Worth.</p>
+    <div style="display:flex;gap:6px;margin-bottom:10px;">
+      <select id="nh_mod_pick" style="flex:1;">
+        <option value="">— Pick a marking/trait —</option>
+        ${Object.entries(GENO_MODIFIERS).filter(([g])=>g!=="Mane Type").map(([group,items])=>`
+          <optgroup label="— ${group} —">
+            ${items.map(m=>`<option value="${m.value}|${m.label}">${m.label} (+฿${m.value})</option>`).join("")}
+          </optgroup>`).join("")}
+      </select>
+      <button id="nh_add_mod" class="secondary" style="white-space:nowrap;">+ Add</button>
+    </div>
+    <div id="nh_mod_list" class="prompt-box" style="margin-bottom:10px;"></div>
+
+    <h4 style="margin:14px 0 4px;color:var(--accent);">Mane Type <span class="small">(optional)</span></h4>
+    <select id="nh_mane" style="margin-bottom:8px;">
+      ${GENO_MODIFIERS["Mane Type"].map(m=>`<option value="${m.value}|${m.label}">${m.label}${m.value>0?` (+฿${m.value})`:""}</option>`).join("")}
+    </select>
+
     <div id="nh_geno_preview" class="prompt-box" style="margin-top:8px;"></div>
     <button id="nh_add" style="margin-top:10px;">Add to Stable</button>
   `);
   wrap.appendChild(form);
 
   const genoSelections={extension:"EE", agouti:"AA"};
+  const extraModifiers=[];
+
+  function refreshModList(){
+    const list=form.querySelector('#nh_mod_list');
+    list.innerHTML=extraModifiers.length ? extraModifiers.map((m,i)=>`
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
+        <span style="flex:1;">${m.label}</span>
+        <span class="small" style="color:var(--accent);">+฿${m.value.toLocaleString()}</span>
+        <button data-remove="${i}" class="secondary" style="padding:2px 8px;font-size:.9em;">✕</button>
+      </div>`).join("") : `<div class="small" style="opacity:.6;">No rare markings or traits added.</div>`;
+    list.querySelectorAll('[data-remove]').forEach(b=>b.onclick=()=>{
+      extraModifiers.splice(Number(b.dataset.remove),1);
+      refreshModList();
+      refreshGenoPreview();
+    });
+  }
+  form.querySelector('#nh_add_mod').onclick=()=>{
+    const val=form.querySelector('#nh_mod_pick').value;
+    if(!val) return;
+    const [price, ...labelParts]=val.split('|');
+    const label=labelParts.join('|');
+    extraModifiers.push({label, value:Number(price)});
+    refreshModList();
+    refreshGenoPreview();
+    form.querySelector('#nh_mod_pick').value='';
+  };
+  form.querySelector('#nh_mane').onchange=refreshGenoPreview;
+  refreshModList();
+
   function renderGeneticsPicker(){
     const breed=form.querySelector('#nh_breed').value;
     const loci=[GENETIC_LOCI.find(l=>l.key==="extension"), GENETIC_LOCI.find(l=>l.key==="agouti"),
@@ -1056,11 +1105,26 @@ function renderRoster(){
     });
     refreshGenoPreview();
   }
+  function collectExtraModifiers(){
+    const mods=[...extraModifiers];
+    const maneVal=form.querySelector('#nh_mane').value;
+    if(maneVal){
+      const [price, ...labelParts]=maneVal.split('|');
+      const label=labelParts.join('|');
+      if(Number(price)>0) mods.push({label, value:Number(price)});
+    }
+    return mods;
+  }
   function refreshGenoPreview(){
     const breed=form.querySelector('#nh_breed').value;
     const result=computeGenoResult(genoSelections, breed);
+    const extras=collectExtraModifiers();
+    const extrasTotal=extras.reduce((s,m)=>s+m.value,0);
+    const grandTotal=result.totalPrice+extrasTotal;
     form.querySelector('#nh_geno_preview').innerHTML=
-      `<b>Phenotype:</b> ${result.phenotype}<br><b>Genotype:</b> ${result.genotype}<br><span class="small">Genetics value: ฿${result.totalPrice.toLocaleString()}</span>`;
+      `<b>Phenotype:</b> ${result.phenotype}<br><b>Genotype:</b> ${result.genotype}<br>`+
+      (extras.length?`<span class="small">+ ${extras.map(m=>m.label).join(", ")}</span><br>`:"")+
+      `<span class="small">Genetics value: ฿${grandTotal.toLocaleString()}</span>`;
   }
   renderGeneticsPicker();
   form.querySelector('#nh_breed').oninput=renderGeneticsPicker;
@@ -1071,8 +1135,9 @@ function renderRoster(){
     const gender=form.querySelector('#nh_gender').value;
     if(!name){alert("Give your horse a name first!"); return;}
     const geno=computeGenoResult(genoSelections, breed);
+    const allModifiers=[...geno.genoModifiers, ...collectExtraModifiers()];
     const h=newHorse({name,age,breed,gender,phenotype:geno.phenotype,genotype:geno.genotype,
-      genoBasePrice:geno.genoBasePrice, genoModifiers:geno.genoModifiers});
+      genoBasePrice:geno.genoBasePrice, genoModifiers:allModifiers});
     state.horses.push(h);
     addLog(`${h.name} (${breed}) joined the stable.`);
     saveHorse(h); save(); render();
@@ -2281,7 +2346,11 @@ const GENO_BASE_PRICES = [
 
 const GENO_MODIFIERS = {
   "Rare Markings": [
-    {label:"Fairylock", value:600},
+    {label:"Sooty", value:100},
+    {label:"Pangare", value:100},
+    {label:"Bend or Spots", value:100},
+    {label:"Birdcatcher Spots", value:0},
+    {label:"Gulastra Plume", value:200},
     {label:"Bloodmark", value:600},
     {label:"Cryptic", value:700},
     {label:"Brindle", value:900},
@@ -2293,6 +2362,7 @@ const GENO_MODIFIERS = {
     {label:"Vitiligo", value:900},
   ],
   "Line Features": [
+    {label:"Fairylock (flfl)", value:600},
     {label:"Jewel Line — Glossy Coat", value:5000},
     {label:"Historical Romance — Sealspot Roan", value:6000},
     {label:"Hallowed Line — Silken", value:9000},
