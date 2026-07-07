@@ -2430,7 +2430,8 @@ function renderAdmin(){
     return wrap;
   }
 
-  const commonLoci = GENETIC_LOCI.filter(l=>!l.base && l.key!=="sooty" && l.key!=="pangare" && !l.label.includes("ILB Exclusive"));
+  const ALWAYS_ON_LOCI = ["extension","agouti","sooty","pangare"];
+  const commonLoci = GENETIC_LOCI.filter(l=>!l.label.includes("ILB Exclusive"));
   const ilbLoci    = GENETIC_LOCI.filter(l=>l.label.includes("ILB Exclusive"));
   const customLoci = customGeneLoci();
 
@@ -2438,16 +2439,19 @@ function renderAdmin(){
 
   const form = el('div','card',`
     <h3>${editing?`Edit Breed — ${editing.name}`:"Add Custom/Created Breed"}</h3>
-    <p class="small" style="margin:0 0 8px;">These show up in the Breed dropdown on the Roster tab (under "Custom/Created Breeds") for every affiliate, alongside the common real-world breeds. Sooty and Pangare are always available and don't need to be listed here.</p>
+    <p class="small" style="margin:0 0 8px;">These show up in the Breed dropdown on the Roster tab (under "Custom/Created Breeds") for every affiliate, alongside the common real-world breeds. Greyed-out genes are on every horse automatically and can't be turned off.</p>
     <label>Breed Name</label>
     <input id="ad_breed_name" placeholder="e.g. Gulastra Line" value="${editing?editing.name.replace(/"/g,"&quot;"):""}" style="max-width:320px;" />
 
     <h4 style="margin:14px 0 4px;color:var(--accent);">Common Genetics</h4>
     <div class="loci-check-grid">
-      ${commonLoci.map(l=>`
-        <label class="small" title="${l.label.replace(/"/g,"&quot;")}">
-          <input type="checkbox" data-loci="${l.key}" ${editing&&editing.loci.includes(l.key)?"checked":""} /> <span>${shortLocusLabel(l)}</span>
-        </label>`).join("")}
+      ${commonLoci.map(l=>{
+        const alwaysOn=ALWAYS_ON_LOCI.includes(l.key);
+        const checked = alwaysOn || (editing&&editing.loci.includes(l.key));
+        return `
+        <label class="small" title="${l.label.replace(/"/g,"&quot;")}${alwaysOn?" — always on for every horse":""}" style="${alwaysOn?"opacity:.55;":""}">
+          <input type="checkbox" data-loci="${l.key}" ${checked?"checked":""} ${alwaysOn?"disabled":""} /> <span>${shortLocusLabel(l)}${alwaysOn?" ✓":""}</span>
+        </label>`;}).join("")}
     </div>
 
     <h4 style="margin:14px 0 4px;color:var(--accent);">ILB Exclusive Genetics</h4>
@@ -2477,7 +2481,7 @@ function renderAdmin(){
   form.querySelector('#ad_save_breed').onclick=async()=>{
     const name=form.querySelector('#ad_breed_name').value.trim();
     if(!name){ alert("Give the breed a name first."); return; }
-    const loci=[...form.querySelectorAll('[data-loci]')].filter(c=>c.checked).map(c=>c.dataset.loci);
+    const loci=[...form.querySelectorAll('[data-loci]')].filter(c=>c.checked && !ALWAYS_ON_LOCI.includes(c.dataset.loci)).map(c=>c.dataset.loci);
     if(!state.customBreeds) state.customBreeds=[];
     const dupe=state.customBreeds.find(b=>b.name.toLowerCase()===name.toLowerCase() && b.id!==editingBreedId);
     if(dupe){ alert("A breed with that name already exists."); return; }
