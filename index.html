@@ -245,7 +245,7 @@ const DEFAULT_STABLE_URL = 'https://script.google.com/macros/s/AKfycbwNF02tC8_U9
 let STABLE_URL = localStorage.getItem('equi_stable_url') || DEFAULT_STABLE_URL;
 
 let state = { horses:[], log:[], tackInventory:[], customBreeds:[], loaded:false };
-// Custom (ILB-exclusive) breeds are shared config, visible to every affiliate
+// Custom (Custom) breeds are shared config, visible to every affiliate
 // regardless of who's logged in — they're stored under this reserved userId
 // in the same Stable Data backend everyone already uses, rather than in any
 // one person's own stable data. It's not a real login, just a fixed bucket.
@@ -1060,7 +1060,7 @@ function renderRoster(){
     <div id="nh_genetics_wrap"></div>
 
     <h4 style="margin:14px 0 4px;color:var(--accent);">Rare Markings & ILB Traits <span class="small">(optional)</span></h4>
-    <p class="small" style="margin:0 0 8px;">Add any rare markings or ILB-exclusive line traits this horse carries. Each one adds to its Net Worth.</p>
+    <p class="small" style="margin:0 0 8px;">Add any rare markings or Custom line traits this horse carries. Each one adds to its Net Worth.</p>
     <div style="display:flex;gap:6px;margin-bottom:10px;">
       <select id="nh_mod_pick" style="flex:1;">
         <option value="">— Pick a marking/trait —</option>
@@ -2406,7 +2406,7 @@ function renderAdmin(){
   if(!adminPanelUnlocked){
     const gate = el('div','card',`
       <h3>Admin</h3>
-      <p class="small">Enter the admin passcode to manage ILB-exclusive breeds.</p>
+      <p class="small">Enter the admin passcode to manage Custom breeds.</p>
       <input id="ad_pass" type="password" placeholder="Admin passcode" style="max-width:280px;" />
       <button id="ad_unlock" style="margin-top:8px;">Unlock</button>
       <div id="ad_pass_err" class="small" style="color:#e08080;margin-top:6px;"></div>
@@ -2429,7 +2429,7 @@ function renderAdmin(){
   const editing = editingBreedId ? (state.customBreeds||[]).find(b=>b.id===editingBreedId) : null;
 
   const form = el('div','card',`
-    <h3>${editing?`Edit Breed — ${editing.name}`:"Add ILB-Exclusive Breed"}</h3>
+    <h3>${editing?`Edit Breed — ${editing.name}`:"Add Custom Breed"}</h3>
     <p class="small" style="margin:0 0 8px;">These show up in the Breed dropdown on the Roster tab for every affiliate, alongside the common real-world breeds. Sooty and Pangare are always available and don't need to be listed here.</p>
     <label>Breed Name</label>
     <input id="ad_breed_name" placeholder="e.g. Gulastra Line" value="${editing?editing.name.replace(/"/g,"&quot;"):""}" style="max-width:320px;" />
@@ -2480,7 +2480,7 @@ function renderAdmin(){
 
   const listCard = el('div','card');
   const breeds=(state.customBreeds||[]).slice().sort((a,b)=>a.name.localeCompare(b.name));
-  listCard.innerHTML=`<h3>ILB-Exclusive Breeds (${breeds.length})</h3>`;
+  listCard.innerHTML=`<h3>Custom Breeds (${breeds.length})</h3>`;
   if(!breeds.length){
     listCard.innerHTML+=`<div class="small">None added yet.</div>`;
   } else {
@@ -2695,7 +2695,7 @@ const GENETIC_LOCI = [
       {code:"PATN2patn2", desc:"Carries Pattern-2", price:0},
       {code:"PATN2PATN2", desc:"Homozygous Pattern-2", price:0},
     ]},
-  // ILB-exclusive loci below. These are only shown for breeds/lines whose
+  // Custom loci below. These are only shown for breeds/lines whose
   // BREED_GENETICS entry includes the key — none do by default. Add the
   // key to a breed's list (Admin panel or BREED_GENETICS) to unlock it.
   { key:"fairylock", label:"Fairylock (Fl) — ILB Exclusive, recessive",
@@ -2805,7 +2805,7 @@ function breedDisplayName(key){
 }
 
 // Builds the full Breed dropdown: hardcoded common real-world breeds, plus
-// whatever ILB-exclusive breeds have been added via the Admin panel.
+// whatever Custom breeds have been added via the Admin panel.
 function getBreedOptionGroups(){
   const common = Object.keys(BREED_GENETICS).sort().map(key=>({key, name:breedDisplayName(key)}));
   const custom = (state.customBreeds||[]).slice().sort((a,b)=>a.name.localeCompare(b.name));
