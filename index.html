@@ -1085,11 +1085,10 @@ function renderRoster(){
       ? `<img src="${h.profileImage}" class="horse-photo" />`
       : `<div class="horse-photo-placeholder"></div>`;
     const statBars = STATS.map(s=>{
-      const base=h.stats[s]||0, bonus=getEquippedStatBonus(h,s);
-      return `<div class="statbar-wrap">
-        <span style="min-width:100px;flex:0 0 auto;white-space:nowrap;font-size:.98em;">${STAT_LABELS[s]}</span>
-        <div class="statbar-bg"><div class="statbar-fill" style="width:${Math.min(100,base+bonus)}%"></div></div>
-        <span style="font-size:.98em;min-width:44px;flex:0 0 auto;white-space:nowrap;text-align:right;">${base+bonus}${bonus?`<span style="color:var(--good);">+${bonus}</span>`:""}</span>
+      const base=h.stats[s]||0, bonus=getEquippedStatBonus(h,s), eff=base+bonus;
+      return `<div style="padding:4px 0;white-space:nowrap;">
+        <span style="font-size:.98em;color:var(--dim);">${STAT_LABELS[s]}:</span>
+        <span style="font-size:.98em;font-weight:bold;color:var(--accent);margin-left:6px;">${eff}${bonus?` <span style="color:var(--good);font-weight:normal;">(+${bonus})</span>`:""}</span>
       </div>`;
     }).join("");
 
@@ -2631,9 +2630,9 @@ function renderHorseProfilePage(app, h){
 
   const statBars = STATS.map(s=>{
     const base=h.stats[s]||0, bonus=getEquippedStatBonus(h,s), eff=base+bonus;
-    return `<div style="display:flex;justify-content:space-between;padding:4px 0;">
-      <span style="font-size:1em;">${STAT_LABELS[s]}</span>
-      <span style="font-size:1em;font-weight:bold;color:#c98a3a;">${eff}${bonus?` <span style="color:#7a9b6e;font-weight:normal;">(+${bonus})</span>`:""}</span>
+    return `<div style="padding:4px 0;white-space:nowrap;">
+      <span style="font-size:1em;color:#b5a392;">${STAT_LABELS[s]}:</span>
+      <span style="font-size:1em;font-weight:bold;color:#c98a3a;margin-left:6px;">${eff}${bonus?` <span style="color:#7a9b6e;font-weight:normal;">(+${bonus})</span>`:""}</span>
     </div>`;
   }).join("");
 
