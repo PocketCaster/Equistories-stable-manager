@@ -248,8 +248,8 @@ const BANK_URL = 'https://script.google.com/macros/s/AKfycby9WLxUPDAPg9EH5aTPATz
 const DEFAULT_STABLE_URL = 'https://script.google.com/macros/s/AKfycbwNF02tC8_U9MjAvJJzjVLNgHUyAf2ND-drxjhQPnOikJdw_seUIIxrYEsTsAlhG-o/exec';
 let STABLE_URL = localStorage.getItem('equi_stable_url') || DEFAULT_STABLE_URL;
 
-let state = { horses:[], log:[], tackInventory:[], customBreeds:[], loaded:false };
-// Custom (ILB-exclusive) breeds are shared config, visible to every affiliate
+let state = { horses:[], log:[], tackInventory:[], customBreeds:[], customGenes:[], loaded:false };
+// Custom/Created breeds (and custom genes) are shared config, visible to every affiliate
 // regardless of who's logged in — they're stored under this reserved userId
 // in the same Stable Data backend everyone already uses, rather than in any
 // one person's own stable data. It's not a real login, just a fixed bucket.
@@ -627,19 +627,21 @@ async function deleteHorseFromSheets(horseId){
 }
 
 async function loadGlobalBreeds(){
-  if(!STABLE_URL){ state.customBreeds=[]; return; }
+  if(!STABLE_URL){ state.customBreeds=[]; state.customGenes=[]; return; }
   const res = await stableGas({ action:'loadStableState', userId:GLOBAL_CONFIG_USER_ID });
-  if(res?.success && res.data && Array.isArray(res.data.customBreeds)){
-    state.customBreeds = res.data.customBreeds;
+  if(res?.success && res.data){
+    state.customBreeds = Array.isArray(res.data.customBreeds) ? res.data.customBreeds : [];
+    state.customGenes  = Array.isArray(res.data.customGenes)  ? res.data.customGenes  : [];
   } else {
     state.customBreeds = [];
+    state.customGenes = [];
   }
 }
 
 async function saveGlobalBreeds(){
   if(!STABLE_URL) return false;
   return await sendTextChunked(GLOBAL_CONFIG_USER_ID, 'stateJson', 'stable',
-    JSON.stringify({ customBreeds: state.customBreeds }));
+    JSON.stringify({ customBreeds: state.customBreeds, customGenes: state.customGenes }));
 }
 
 async function loadFromSheets(){
@@ -1040,7 +1042,7 @@ function renderRoster(){
           <option value="">— Select a breed —</option>
           ${(()=>{ const {common,custom}=getBreedOptionGroups();
             const commonOpts=common.map(b=>`<option value="${b.key}">${b.name}</option>`).join("");
-            const customOpts=custom.length?`<optgroup label="— ILB Exclusive Breeds —">
+            const customOpts=custom.length?`<optgroup label="— Custom/Created Breeds —">
               ${custom.map(b=>`<option value="${b.name.toLowerCase()}">${b.name}</option>`).join("")}
             </optgroup>`:"";
             return `<optgroup label="— Common Breeds —">${commonOpts}</optgroup>${customOpts}
@@ -1140,9 +1142,9 @@ function renderRoster(){
 
   function renderGeneticsPicker(){
     const breed=currentBreedKey();
-    const loci=[GENETIC_LOCI.find(l=>l.key==="extension"), GENETIC_LOCI.find(l=>l.key==="agouti"),
-      GENETIC_LOCI.find(l=>l.key==="sooty"), GENETIC_LOCI.find(l=>l.key==="pangare"),
-      ...getAllowedLoci(breed).map(k=>GENETIC_LOCI.find(l=>l.key===k))].filter(Boolean);
+    const loci=[allLoci().find(l=>l.key==="extension"), allLoci().find(l=>l.key==="agouti"),
+      allLoci().find(l=>l.key==="sooty"), allLoci().find(l=>l.key==="pangare"),
+      ...getAllowedLoci(breed).map(k=>allLoci().find(l=>l.key===k))].filter(Boolean);
     const wrapEl=form.querySelector('#nh_genetics_wrap');
     wrapEl.innerHTML=`<div class="gene-grid">
       ${loci.map(locus=>{
@@ -2403,6 +2405,7 @@ function renderTackInventory(){
 // ============================================
 
 let editingBreedId = null;
+let editingGeneId = null;
 
 function renderAdmin(){
   const wrap = el('div');
@@ -2410,7 +2413,7 @@ function renderAdmin(){
   if(!adminPanelUnlocked){
     const gate = el('div','card',`
       <h3>Admin</h3>
-      <p class="small">Enter the admin passcode to manage ILB-exclusive breeds.</p>
+      <p class="small">Enter the admin passcode to manage Custom/Created breeds and genes.</p>
       <input id="ad_pass" type="password" placeholder="Admin passcode" style="max-width:280px;" />
       <button id="ad_unlock" style="margin-top:8px;">Unlock</button>
       <div id="ad_pass_err" class="small" style="color:#e08080;margin-top:6px;"></div>
@@ -2429,12 +2432,13 @@ function renderAdmin(){
 
   const commonLoci = GENETIC_LOCI.filter(l=>!l.base && l.key!=="sooty" && l.key!=="pangare" && !l.label.includes("ILB Exclusive"));
   const ilbLoci    = GENETIC_LOCI.filter(l=>l.label.includes("ILB Exclusive"));
+  const customLoci = customGeneLoci();
 
   const editing = editingBreedId ? (state.customBreeds||[]).find(b=>b.id===editingBreedId) : null;
 
   const form = el('div','card',`
-    <h3>${editing?`Edit Breed — ${editing.name}`:"Add ILB-Exclusive Breed"}</h3>
-    <p class="small" style="margin:0 0 8px;">These show up in the Breed dropdown on the Roster tab for every affiliate, alongside the common real-world breeds. Sooty and Pangare are always available and don't need to be listed here.</p>
+    <h3>${editing?`Edit Breed — ${editing.name}`:"Add Custom/Created Breed"}</h3>
+    <p class="small" style="margin:0 0 8px;">These show up in the Breed dropdown on the Roster tab (under "Custom/Created Breeds") for every affiliate, alongside the common real-world breeds. Sooty and Pangare are always available and don't need to be listed here.</p>
     <label>Breed Name</label>
     <input id="ad_breed_name" placeholder="e.g. Gulastra Line" value="${editing?editing.name.replace(/"/g,"&quot;"):""}" style="max-width:320px;" />
 
@@ -2453,6 +2457,16 @@ function renderAdmin(){
           <input type="checkbox" data-loci="${l.key}" ${editing&&editing.loci.includes(l.key)?"checked":""} /> <span>${shortLocusLabel(l)}</span>
         </label>`).join("")}
     </div>
+
+    <h4 style="margin:14px 0 4px;color:var(--accent);">Custom Genes</h4>
+    ${customLoci.length?`
+    <div class="loci-check-grid">
+      ${customLoci.map(l=>`
+        <label class="small" title="${l.label.replace(/"/g,"&quot;")}">
+          <input type="checkbox" data-loci="${l.key}" ${editing&&editing.loci.includes(l.key)?"checked":""} /> <span>${shortLocusLabel(l)}</span>
+        </label>`).join("")}
+    </div>`:`
+    <p class="small" style="opacity:.7;margin:0 0 8px;">None defined yet — add one in the "Custom Genes" section below, then come back here to attach it to a breed.</p>`}
 
     <button id="ad_save_breed" style="margin-top:12px;">${editing?"Save Changes":"Add Breed"}</button>
     ${editing?`<button id="ad_cancel_edit" class="secondary" style="margin-top:12px;">Cancel</button>`:""}
@@ -2484,14 +2498,14 @@ function renderAdmin(){
 
   const listCard = el('div','card');
   const breeds=(state.customBreeds||[]).slice().sort((a,b)=>a.name.localeCompare(b.name));
-  listCard.innerHTML=`<h3>ILB-Exclusive Breeds (${breeds.length})</h3>`;
+  listCard.innerHTML=`<h3>Custom/Created Breeds (${breeds.length})</h3>`;
   if(!breeds.length){
     listCard.innerHTML+=`<div class="small">None added yet.</div>`;
   } else {
     breeds.forEach(b=>{
       const row=el('div');
       row.style.cssText='display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #2c2118;';
-      const lociLabels=b.loci.map(k=>{ const l=GENETIC_LOCI.find(x=>x.key===k); return l?l.label.split(" — ")[0].split(" (")[0]:k; }).join(", ");
+      const lociLabels=b.loci.map(k=>{ const l=allLoci().find(x=>x.key===k); return l?l.label.split(" — ")[0].split(" (")[0]:k; }).join(", ");
       row.innerHTML=`
         <div style="flex:1;">
           <div style="font-weight:bold;">${b.name}</div>
@@ -2514,6 +2528,133 @@ function renderAdmin(){
     const target=state.customBreeds.find(x=>x.id===b.dataset.remove);
     if(!confirm(`Remove "${target?.name}"? Horses already using it keep their genetics, but it'll disappear from the dropdown.`)) return;
     state.customBreeds=(state.customBreeds||[]).filter(x=>x.id!==b.dataset.remove);
+    await saveGlobalBreeds();
+    render();
+  });
+
+  // ============================================
+  // ADMIN — CUSTOM GENES
+  // (arbitrary user-defined loci that can be attached to any Custom/Created
+  // breed above, alongside the built-in Common/ILB Exclusive genetics)
+  // ============================================
+
+  const editingGene = editingGeneId ? (state.customGenes||[]).find(g=>g.id===editingGeneId) : null;
+
+  const geneForm = el('div','card',`
+    <h3>${editingGene?`Edit Custom Gene — ${editingGene.label}`:"Add Custom Gene"}</h3>
+    <p class="small" style="margin:0 0 8px;">Define a brand-new gene locus — with its own alleles and Net Worth pricing — that can be attached to any Custom/Created breed above.</p>
+    <label>Gene Name</label>
+    <input id="ag_gene_label" placeholder="e.g. Glimmer Coat (Gl)" value="${editingGene?editingGene.label.replace(/"/g,"&quot;"):""}" style="max-width:320px;" />
+
+    <h4 style="margin:14px 0 4px;color:var(--accent);">Alleles / Outcomes</h4>
+    <p class="small" style="margin:0 0 8px;">One row per possible genotype at this locus (e.g. "no gene", "carrier", "homozygous"). Give each a short code, a display description, and the Net Worth it adds when expressed.</p>
+    <div id="ag_option_rows"></div>
+    <button id="ag_add_row" class="secondary" style="margin-top:4px;">+ Add Allele</button>
+
+    <div style="margin-top:14px;">
+      <button id="ag_save_gene">${editingGene?"Save Changes":"Add Gene"}</button>
+      ${editingGene?`<button id="ag_cancel_gene" class="secondary">Cancel</button>`:""}
+    </div>
+    <div id="ag_save_status" class="small" style="margin-top:6px;"></div>
+  `);
+  wrap.appendChild(geneForm);
+
+  let geneOptionRows = editingGene ? editingGene.options.map(o=>({...o})) : [{code:"",desc:"",price:0}];
+
+  function refreshGeneOptionRows(){
+    const rowsWrap = geneForm.querySelector('#ag_option_rows');
+    rowsWrap.innerHTML = geneOptionRows.map((o,i)=>`
+      <div class="row" style="align-items:flex-end;margin-bottom:6px;" data-row="${i}">
+        <div style="max-width:140px;"><label>Code</label><input data-field="code" value="${(o.code||"").replace(/"/g,"&quot;")}" placeholder="e.g. glgl" /></div>
+        <div style="flex:2;"><label>Description</label><input data-field="desc" value="${(o.desc||"").replace(/"/g,"&quot;")}" placeholder="e.g. No Glimmer Coat" /></div>
+        <div style="max-width:120px;"><label>Price (฿)</label><input data-field="price" type="number" value="${o.price||0}" /></div>
+        <div><button data-remove-row="${i}" class="danger" style="padding:9px 12px;margin-top:0;">✕</button></div>
+      </div>`).join("");
+    rowsWrap.querySelectorAll('[data-row]').forEach(rowEl=>{
+      const idx=Number(rowEl.dataset.row);
+      rowEl.querySelectorAll('[data-field]').forEach(inp=>{
+        inp.oninput=()=>{
+          const field=inp.dataset.field;
+          geneOptionRows[idx][field] = field==="price" ? Number(inp.value)||0 : inp.value;
+        };
+      });
+    });
+    rowsWrap.querySelectorAll('[data-remove-row]').forEach(b=>b.onclick=()=>{
+      if(geneOptionRows.length<=1){ alert("A gene needs at least one allele row."); return; }
+      geneOptionRows.splice(Number(b.dataset.removeRow),1);
+      refreshGeneOptionRows();
+    });
+  }
+  refreshGeneOptionRows();
+
+  geneForm.querySelector('#ag_add_row').onclick=()=>{
+    geneOptionRows.push({code:"",desc:"",price:0});
+    refreshGeneOptionRows();
+  };
+
+  geneForm.querySelector('#ag_save_gene').onclick=async()=>{
+    const label=geneForm.querySelector('#ag_gene_label').value.trim();
+    if(!label){ alert("Give the gene a name first."); return; }
+    const options=geneOptionRows
+      .filter(o=>(o.code||"").trim() && (o.desc||"").trim())
+      .map(o=>({code:o.code.trim(), desc:o.desc.trim(), price:Number(o.price)||0}));
+    if(!options.length){ alert("Add at least one allele with both a code and a description."); return; }
+    if(!state.customGenes) state.customGenes=[];
+    const dupe=state.customGenes.find(g=>g.label.toLowerCase()===label.toLowerCase() && g.id!==editingGeneId);
+    if(dupe){ alert("A custom gene with that name already exists."); return; }
+    if(editingGene){
+      editingGene.label=label; editingGene.options=options;
+    } else {
+      const key=slugifyGeneKey(label, state.customGenes);
+      state.customGenes.push({id:uid2(), key, label, options});
+    }
+    editingGeneId=null;
+    const status=geneForm.querySelector('#ag_save_status');
+    status.textContent='Saving…';
+    const ok=await saveGlobalBreeds();
+    status.textContent = ok ? 'Saved — visible to all affiliates now.' : '⚠ Saved here, but failed to sync to Stable Data. Try again.';
+    render();
+  };
+  const geneCancelBtn=geneForm.querySelector('#ag_cancel_gene');
+  if(geneCancelBtn) geneCancelBtn.onclick=()=>{ editingGeneId=null; render(); };
+
+  const geneListCard = el('div','card');
+  const genes=(state.customGenes||[]).slice().sort((a,b)=>a.label.localeCompare(b.label));
+  geneListCard.innerHTML=`<h3>Custom Genes (${genes.length})</h3>`;
+  if(!genes.length){
+    geneListCard.innerHTML+=`<div class="small">None added yet.</div>`;
+  } else {
+    genes.forEach(g=>{
+      const row=el('div');
+      row.style.cssText='display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #2c2118;';
+      const usedBy=(state.customBreeds||[]).filter(b=>(b.loci||[]).includes(g.key)).map(b=>b.name);
+      row.innerHTML=`
+        <div style="flex:1;">
+          <div style="font-weight:bold;">${g.label}</div>
+          <div class="small" style="opacity:.8;">${g.options.map(o=>o.desc).join(", ")}</div>
+          ${usedBy.length?`<div class="small" style="opacity:.6;">Used by: ${usedBy.join(", ")}</div>`:""}
+        </div>
+        <button class="secondary" data-edit-gene="${g.id}" style="font-size:.96em;padding:3px 10px;margin-top:0;">Edit</button>
+        <button class="danger" data-remove-gene="${g.id}" style="font-size:.96em;padding:3px 10px;margin-top:0;">Remove</button>
+      `;
+      geneListCard.appendChild(row);
+    });
+  }
+  wrap.appendChild(geneListCard);
+
+  geneListCard.querySelectorAll('[data-edit-gene]').forEach(b=>b.onclick=()=>{
+    editingGeneId=b.dataset.editGene;
+    render();
+    window.scrollTo(0,0);
+  });
+  geneListCard.querySelectorAll('[data-remove-gene]').forEach(b=>b.onclick=async()=>{
+    const target=state.customGenes.find(x=>x.id===b.dataset.removeGene);
+    if(!confirm(`Remove custom gene "${target?.label}"? It'll be unchecked from any breeds using it and disappear from the gene picker (horses already carrying it keep their saved Net Worth value).`)) return;
+    state.customGenes=(state.customGenes||[]).filter(x=>x.id!==b.dataset.removeGene);
+    // Also strip the removed gene's key from every breed's loci list so the
+    // breed editor above doesn't show a stray checkmark for a gene that no
+    // longer exists.
+    (state.customBreeds||[]).forEach(br=>{ br.loci=(br.loci||[]).filter(k=>k!==target?.key); });
     await saveGlobalBreeds();
     render();
   });
@@ -2743,6 +2884,36 @@ const GENETIC_LOCI = [
     ]},
 ];
 
+// Custom genes are defined by affiliates via Admin > Custom Genes, stored in
+// state.customGenes as {id, key, label, options:[{code,desc,price}]}. This
+// wraps each one in the same shape as an entry in GENETIC_LOCI (a simple
+// optional locus, no requiresAny/base flags) so every place that reads
+// GENETIC_LOCI can instead read allLoci() and treat built-in and custom
+// genes identically — same gene grid, same Net Worth pricing, same breed
+// attach/detach checkboxes.
+function customGeneLoci(){
+  return (state.customGenes||[]).map(g=>({
+    key: g.key,
+    label: `${g.label} — Custom Gene`,
+    isCustomGene: true,
+    options: g.options,
+  }));
+}
+function allLoci(){
+  return [...GENETIC_LOCI, ...customGeneLoci()];
+}
+
+// Generates a unique, storage-safe key for a new custom gene from its
+// display name (e.g. "Glimmer Coat (Gl)" -> "custom_glimmer_coat_gl"),
+// avoiding collisions with built-in loci keys or other custom genes.
+function slugifyGeneKey(label, existingGenes){
+  const base = 'custom_' + (label.toLowerCase().replace(/[^a-z0-9]+/g,'_').replace(/^_+|_+$/g,'') || 'gene');
+  const taken = new Set([...GENETIC_LOCI.map(l=>l.key), ...(existingGenes||[]).map(g=>g.key)]);
+  let key = base, n = 1;
+  while(taken.has(key)){ n++; key = `${base}_${n}`; }
+  return key;
+}
+
 function computeAppaloosaPattern(lp, patn1, patn2){
   const hasP1  = patn1 && patn1!=="patn1patn1";
   const hasP2  = patn2 && patn2!=="patn2patn2";
@@ -2816,7 +2987,7 @@ function shortLocusLabel(locus){
 }
 
 // Builds the full Breed dropdown: hardcoded common real-world breeds, plus
-// whatever ILB-exclusive breeds have been added via the Admin panel.
+// whatever Custom/Created breeds have been added via the Admin panel.
 function getBreedOptionGroups(){
   const common = Object.keys(BREED_GENETICS).sort().map(key=>({key, name:breedDisplayName(key)}));
   const custom = (state.customBreeds||[]).slice().sort((a,b)=>a.name.localeCompare(b.name));
@@ -2825,7 +2996,7 @@ function getBreedOptionGroups(){
 
 function getAllowedLoci(breed){
   const key=(breed||"").trim().toLowerCase();
-  const optionalKeys=GENETIC_LOCI.filter(l=>!l.base).map(l=>l.key);
+  const optionalKeys=allLoci().filter(l=>!l.base).map(l=>l.key);
   const custom=(state.customBreeds||[]).find(b=>(b.name||"").trim().toLowerCase()===key);
   const restricted = custom ? custom.loci : BREED_GENETICS[key];
   if(!restricted) return optionalKeys;
@@ -2849,7 +3020,7 @@ function computeGenoResult(selections, breed){
   if(selections.extension) genoParts.push(selections.extension);
   if(selections.agouti && selections.extension!=="ee") genoParts.push(selections.agouti);
 
-  GENETIC_LOCI.filter(l=>!l.base).forEach(locus=>{
+  allLoci().filter(l=>!l.base).forEach(locus=>{
     if(!allowed.has(locus.key)) return;
     const code = selections[locus.key];
     if(!code) return;
