@@ -244,7 +244,12 @@ const BANK_URL = 'https://script.google.com/macros/s/AKfycby9WLxUPDAPg9EH5aTPATz
 const DEFAULT_STABLE_URL = 'https://script.google.com/macros/s/AKfycbwNF02tC8_U9MjAvJJzjVLNgHUyAf2ND-drxjhQPnOikJdw_seUIIxrYEsTsAlhG-o/exec';
 let STABLE_URL = localStorage.getItem('equi_stable_url') || DEFAULT_STABLE_URL;
 
-let state = { horses:[], log:[], tackInventory:[], loaded:false };
+let state = { horses:[], log:[], tackInventory:[], customBreeds:[], loaded:false };
+// Custom (ILB-exclusive) breeds are shared config, visible to every affiliate
+// regardless of who's logged in — they're stored under this reserved userId
+// in the same Stable Data backend everyone already uses, rather than in any
+// one person's own stable data. It's not a real login, just a fixed bucket.
+const GLOBAL_CONFIG_USER_ID = '__ilb_global_config__';
 let bankAccount = { userId:'', password:'', linked:false };
 let activeTab = "roster";
 let imageLinkHelpOpen = true; // starts expanded once so the new paste-a-link instructions are seen; user can collapse it
@@ -617,11 +622,28 @@ async function deleteHorseFromSheets(horseId){
   await stableGas({ action:'deleteHorse', userId:bankAccount.userId, horseId });
 }
 
+async function loadGlobalBreeds(){
+  if(!STABLE_URL){ state.customBreeds=[]; return; }
+  const res = await stableGas({ action:'loadStableState', userId:GLOBAL_CONFIG_USER_ID });
+  if(res?.success && res.data && Array.isArray(res.data.customBreeds)){
+    state.customBreeds = res.data.customBreeds;
+  } else {
+    state.customBreeds = [];
+  }
+}
+
+async function saveGlobalBreeds(){
+  if(!STABLE_URL) return false;
+  return await sendTextChunked(GLOBAL_CONFIG_USER_ID, 'stateJson', 'stable',
+    JSON.stringify({ customBreeds: state.customBreeds }));
+}
+
 async function loadFromSheets(){
   const userId = bankAccount.userId;
   const [stateRes, horsesRes] = await Promise.all([
     stableGas({ action:'loadStableState', userId }),
     stableGas({ action:'loadStable', userId }),
+    loadGlobalBreeds(),
   ]);
   if(stateRes?.success && stateRes.data){
     state.log           = stateRes.data.log || [];
@@ -872,9 +894,9 @@ function render(){
       </div>
     </details>
     <div class="tabs" style="align-items:center;">
-      ${["roster","train","compete","tack"].map(t=>`
+      ${["roster","train","compete","tack","admin"].map(t=>`
         <div class="tab${activeTab===t?' active':''}" data-tab="${t}">
-          ${t==="roster"?"Stable Roster":t==="train"?"Training":t==="compete"?"Competitions":"Tack Inventory"}
+          ${t==="roster"?"Stable Roster":t==="train"?"Training":t==="compete"?"Competitions":t==="tack"?"Tack Inventory":"Admin"}
         </div>`).join("")}
       <div style="flex:1;"></div>
       <span class="small" style="color:var(--dim);margin-right:6px;">${bankAccount.userId}</span>
@@ -903,6 +925,7 @@ function render(){
   else if(activeTab==="train")   content.appendChild(renderTraining());
   else if(activeTab==="compete") content.appendChild(renderCompete());
   else if(activeTab==="tack")    content.appendChild(renderTackInventory());
+  else if(activeTab==="admin")   content.appendChild(renderAdmin());
 }
 
 // ============================================
@@ -1008,7 +1031,20 @@ function renderRoster(){
     <div class="row">
       <div><label>Name</label><input id="nh_name" placeholder="e.g. Banshee" /></div>
       <div><label>Age</label><input id="nh_age" type="number" min="0" value="3" style="max-width:80px;" /></div>
-      <div><label>Breed</label><input id="nh_breed" placeholder="e.g. Thoroughbred" /></div>
+      <div><label>Breed</label>
+        <select id="nh_breed_select">
+          <option value="">— Select a breed —</option>
+          ${(()=>{ const {common,custom}=getBreedOptionGroups();
+            const commonOpts=common.map(b=>`<option value="${b.key}">${b.name}</option>`).join("");
+            const customOpts=custom.length?`<optgroup label="— ILB Exclusive Breeds —">
+              ${custom.map(b=>`<option value="${b.name.toLowerCase()}">${b.name}</option>`).join("")}
+            </optgroup>`:"";
+            return `<optgroup label="— Common Breeds —">${commonOpts}</optgroup>${customOpts}
+              <option value="__other__">Other (type it in)…</option>`;
+          })()}
+        </select>
+        <input id="nh_breed_other" placeholder="Type breed name" style="display:none;margin-top:4px;" />
+      </div>
     </div>
     <div class="row" style="margin-top:8px;">
       <div><label>Gender <span class="small">(optional)</span></label>
@@ -1050,6 +1086,26 @@ function renderRoster(){
   const genoSelections={extension:"EE", agouti:"AA"};
   const extraModifiers=[];
 
+  function currentBreedKey(){
+    const sel=form.querySelector('#nh_breed_select').value;
+    if(sel==='__other__') return form.querySelector('#nh_breed_other').value.trim().toLowerCase();
+    return sel;
+  }
+  function currentBreedDisplay(){
+    const sel=form.querySelector('#nh_breed_select').value;
+    if(sel==='__other__') return form.querySelector('#nh_breed_other').value.trim()||"Unspecified";
+    if(!sel) return "Unspecified";
+    const {common,custom}=getBreedOptionGroups();
+    const found = common.find(b=>b.key===sel) || custom.find(b=>b.name.toLowerCase()===sel);
+    return found ? found.name : sel;
+  }
+  form.querySelector('#nh_breed_select').onchange=()=>{
+    const isOther=form.querySelector('#nh_breed_select').value==='__other__';
+    form.querySelector('#nh_breed_other').style.display = isOther ? 'block' : 'none';
+    renderGeneticsPicker();
+  };
+  form.querySelector('#nh_breed_other').oninput=renderGeneticsPicker;
+
   function refreshModList(){
     const list=form.querySelector('#nh_mod_list');
     list.innerHTML=extraModifiers.length ? extraModifiers.map((m,i)=>`
@@ -1069,7 +1125,8 @@ function renderRoster(){
     if(!val) return;
     const [price, ...labelParts]=val.split('|');
     const label=labelParts.join('|');
-    extraModifiers.push({label, value:Number(price)});
+    const def=Object.values(GENO_MODIFIERS).flat().find(m=>m.label===label);
+    extraModifiers.push({label, value:Number(price), genoTag:def&&def.genoTag||null});
     refreshModList();
     refreshGenoPreview();
     form.querySelector('#nh_mod_pick').value='';
@@ -1078,8 +1135,9 @@ function renderRoster(){
   refreshModList();
 
   function renderGeneticsPicker(){
-    const breed=form.querySelector('#nh_breed').value;
+    const breed=currentBreedKey();
     const loci=[GENETIC_LOCI.find(l=>l.key==="extension"), GENETIC_LOCI.find(l=>l.key==="agouti"),
+      GENETIC_LOCI.find(l=>l.key==="sooty"), GENETIC_LOCI.find(l=>l.key==="pangare"),
       ...getAllowedLoci(breed).map(k=>GENETIC_LOCI.find(l=>l.key===k))].filter(Boolean);
     const wrapEl=form.querySelector('#nh_genetics_wrap');
     wrapEl.innerHTML=`<div class="gene-grid">
@@ -1116,27 +1174,32 @@ function renderRoster(){
     return mods;
   }
   function refreshGenoPreview(){
-    const breed=form.querySelector('#nh_breed').value;
+    const breed=currentBreedKey();
     const result=computeGenoResult(genoSelections, breed);
     const extras=collectExtraModifiers();
     const extrasTotal=extras.reduce((s,m)=>s+m.value,0);
     const grandTotal=result.totalPrice+extrasTotal;
+    const tags=extras.filter(m=>m.genoTag).map(m=>m.genoTag);
+    const genotypeStr=tags.length?`${result.genotype} ${tags.join(" ")}`:result.genotype;
     form.querySelector('#nh_geno_preview').innerHTML=
-      `<b>Phenotype:</b> ${result.phenotype}<br><b>Genotype:</b> ${result.genotype}<br>`+
+      `<b>Phenotype:</b> ${result.phenotype}<br><b>Genotype:</b> ${genotypeStr}<br>`+
       (extras.length?`<span class="small">+ ${extras.map(m=>m.label).join(", ")}</span><br>`:"")+
       `<span class="small">Genetics value: ฿${grandTotal.toLocaleString()}</span>`;
   }
   renderGeneticsPicker();
-  form.querySelector('#nh_breed').oninput=renderGeneticsPicker;
   form.querySelector('#nh_add').onclick=()=>{
     const name=form.querySelector('#nh_name').value.trim();
     const age=form.querySelector('#nh_age').value;
-    const breed=form.querySelector('#nh_breed').value.trim()||"Unspecified";
+    const breedKey=currentBreedKey();
+    const breed=currentBreedDisplay();
     const gender=form.querySelector('#nh_gender').value;
     if(!name){alert("Give your horse a name first!"); return;}
-    const geno=computeGenoResult(genoSelections, breed);
-    const allModifiers=[...geno.genoModifiers, ...collectExtraModifiers()];
-    const h=newHorse({name,age,breed,gender,phenotype:geno.phenotype,genotype:geno.genotype,
+    const geno=computeGenoResult(genoSelections, breedKey);
+    const allExtras=collectExtraModifiers();
+    const allModifiers=[...geno.genoModifiers, ...allExtras];
+    const tags=allExtras.filter(m=>m.genoTag).map(m=>m.genoTag);
+    const genotype=tags.length?`${geno.genotype} ${tags.join(" ")}`:geno.genotype;
+    const h=newHorse({name,age,breed,gender,phenotype:geno.phenotype,genotype,
       genoBasePrice:geno.genoBasePrice, genoModifiers:allModifiers});
     state.horses.push(h);
     addLog(`${h.name} (${breed}) joined the stable.`);
@@ -2332,8 +2395,127 @@ function renderTackInventory(){
 }
 
 // ============================================
-// LIGHTBLOOD PRICING DATA
+// ADMIN — MANAGE BREEDS
 // ============================================
+
+let editingBreedId = null;
+
+function renderAdmin(){
+  const wrap = el('div');
+
+  if(!adminPanelUnlocked){
+    const gate = el('div','card',`
+      <h3>Admin</h3>
+      <p class="small">Enter the admin passcode to manage ILB-exclusive breeds.</p>
+      <input id="ad_pass" type="password" placeholder="Admin passcode" style="max-width:280px;" />
+      <button id="ad_unlock" style="margin-top:8px;">Unlock</button>
+      <div id="ad_pass_err" class="small" style="color:#e08080;margin-top:6px;"></div>
+    `);
+    wrap.appendChild(gate);
+    gate.querySelector('#ad_unlock').onclick=()=>{
+      if(gate.querySelector('#ad_pass').value===ADMIN_PASSCODE){
+        adminPanelUnlocked=true;
+        render();
+      } else {
+        gate.querySelector('#ad_pass_err').textContent='Incorrect passcode.';
+      }
+    };
+    return wrap;
+  }
+
+  const commonLoci = GENETIC_LOCI.filter(l=>!l.base && l.key!=="sooty" && l.key!=="pangare" && !l.label.includes("ILB Exclusive"));
+  const ilbLoci    = GENETIC_LOCI.filter(l=>l.label.includes("ILB Exclusive"));
+
+  const editing = editingBreedId ? (state.customBreeds||[]).find(b=>b.id===editingBreedId) : null;
+
+  const form = el('div','card',`
+    <h3>${editing?`Edit Breed — ${editing.name}`:"Add ILB-Exclusive Breed"}</h3>
+    <p class="small" style="margin:0 0 8px;">These show up in the Breed dropdown on the Roster tab for every affiliate, alongside the common real-world breeds. Sooty and Pangare are always available and don't need to be listed here.</p>
+    <label>Breed Name</label>
+    <input id="ad_breed_name" placeholder="e.g. Gulastra Line" value="${editing?editing.name.replace(/"/g,"&quot;"):""}" style="max-width:320px;" />
+
+    <h4 style="margin:14px 0 4px;color:var(--accent);">Common Genetics</h4>
+    <div class="gene-grid">
+      ${commonLoci.map(l=>`
+        <label class="small" style="display:flex;align-items:center;gap:6px;">
+          <input type="checkbox" data-loci="${l.key}" ${editing&&editing.loci.includes(l.key)?"checked":""} /> ${l.label}
+        </label>`).join("")}
+    </div>
+
+    <h4 style="margin:14px 0 4px;color:var(--accent);">ILB Exclusive Genetics</h4>
+    <div class="gene-grid">
+      ${ilbLoci.map(l=>`
+        <label class="small" style="display:flex;align-items:center;gap:6px;">
+          <input type="checkbox" data-loci="${l.key}" ${editing&&editing.loci.includes(l.key)?"checked":""} /> ${l.label}
+        </label>`).join("")}
+    </div>
+
+    <button id="ad_save_breed" style="margin-top:12px;">${editing?"Save Changes":"Add Breed"}</button>
+    ${editing?`<button id="ad_cancel_edit" class="secondary" style="margin-top:12px;">Cancel</button>`:""}
+    <div id="ad_save_status" class="small" style="margin-top:6px;"></div>
+  `);
+  wrap.appendChild(form);
+
+  form.querySelector('#ad_save_breed').onclick=async()=>{
+    const name=form.querySelector('#ad_breed_name').value.trim();
+    if(!name){ alert("Give the breed a name first."); return; }
+    const loci=[...form.querySelectorAll('[data-loci]')].filter(c=>c.checked).map(c=>c.dataset.loci);
+    if(!state.customBreeds) state.customBreeds=[];
+    const dupe=state.customBreeds.find(b=>b.name.toLowerCase()===name.toLowerCase() && b.id!==editingBreedId);
+    if(dupe){ alert("A breed with that name already exists."); return; }
+    if(editing){
+      editing.name=name; editing.loci=loci;
+    } else {
+      state.customBreeds.push({id:uid2(), name, loci});
+    }
+    editingBreedId=null;
+    const status=form.querySelector('#ad_save_status');
+    status.textContent='Saving…';
+    const ok=await saveGlobalBreeds();
+    status.textContent = ok ? 'Saved — visible to all affiliates now.' : '⚠ Saved here, but failed to sync to Stable Data. Try again.';
+    render();
+  };
+  const cancelBtn=form.querySelector('#ad_cancel_edit');
+  if(cancelBtn) cancelBtn.onclick=()=>{ editingBreedId=null; render(); };
+
+  const listCard = el('div','card');
+  const breeds=(state.customBreeds||[]).slice().sort((a,b)=>a.name.localeCompare(b.name));
+  listCard.innerHTML=`<h3>ILB-Exclusive Breeds (${breeds.length})</h3>`;
+  if(!breeds.length){
+    listCard.innerHTML+=`<div class="small">None added yet.</div>`;
+  } else {
+    breeds.forEach(b=>{
+      const row=el('div');
+      row.style.cssText='display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #2c2118;';
+      const lociLabels=b.loci.map(k=>{ const l=GENETIC_LOCI.find(x=>x.key===k); return l?l.label.split(" — ")[0].split(" (")[0]:k; }).join(", ");
+      row.innerHTML=`
+        <div style="flex:1;">
+          <div style="font-weight:bold;">${b.name}</div>
+          <div class="small" style="opacity:.8;">${lociLabels||"No extra genetics enabled"}</div>
+        </div>
+        <button class="secondary" data-edit="${b.id}" style="font-size:.96em;padding:3px 10px;margin-top:0;">Edit</button>
+        <button class="danger" data-remove="${b.id}" style="font-size:.96em;padding:3px 10px;margin-top:0;">Remove</button>
+      `;
+      listCard.appendChild(row);
+    });
+  }
+  wrap.appendChild(listCard);
+
+  listCard.querySelectorAll('[data-edit]').forEach(b=>b.onclick=()=>{
+    editingBreedId=b.dataset.edit;
+    render();
+    window.scrollTo(0,0);
+  });
+  listCard.querySelectorAll('[data-remove]').forEach(b=>b.onclick=async()=>{
+    const target=state.customBreeds.find(x=>x.id===b.dataset.remove);
+    if(!confirm(`Remove "${target?.name}"? Horses already using it keep their genetics, but it'll disappear from the dropdown.`)) return;
+    state.customBreeds=(state.customBreeds||[]).filter(x=>x.id!==b.dataset.remove);
+    await saveGlobalBreeds();
+    render();
+  });
+
+  return wrap;
+}
 
 const GENO_BASE_PRICES = [
   {label:"Bay", value:500},
@@ -2346,11 +2528,9 @@ const GENO_BASE_PRICES = [
 
 const GENO_MODIFIERS = {
   "Rare Markings": [
-    {label:"Sooty", value:100},
-    {label:"Pangare", value:100},
     {label:"Bend or Spots", value:100},
     {label:"Birdcatcher Spots", value:0},
-    {label:"Gulastra Plume", value:200},
+    {label:"Gulastra Plume", value:200, genoTag:"nSb"},
     {label:"Bloodmark", value:600},
     {label:"Cryptic", value:700},
     {label:"Brindle", value:900},
@@ -2362,17 +2542,11 @@ const GENO_MODIFIERS = {
     {label:"Vitiligo", value:900},
   ],
   "Line Features": [
-    {label:"Fairylock (flfl)", value:600},
     {label:"Jewel Line — Glossy Coat", value:5000},
-    {label:"Historical Romance — Sealspot Roan", value:6000},
     {label:"Hallowed Line — Silken", value:9000},
     {label:"Light Years Line — Indigo Eyes", value:9000},
     {label:"Circe Line — Circe Ears", value:9000},
-    {label:"Tiger Line — Tiger Dun", value:9000},
     {label:"Wolf Line — Unrelated Bleu", value:9000},
-    {label:"Steel Poppy — Restricted Dapple", value:10000},
-    {label:"Dove Line — Dove Dilute", value:11000},
-    {label:"Church Mouse Line — Mouse Dilute", value:12000},
   ],
   "Mane Type": [
     {label:"Standard Mane (free)", value:0},
@@ -2400,6 +2574,18 @@ const GENETIC_LOCI = [
       {code:"Ata", desc:"Liver Chestnut / Wild bay"},
       {code:"AtAt", desc:"Black Chestnut / Seal Bay"},
       {code:"Atat", desc:"Liver Chestnut / Seal Bay"},           
+    ]},
+  { key:"sooty", label:"Sooty (Sty)",
+    options:[
+      {code:"stysty", desc:"No Sooty", price:0},
+      {code:"Stysty", desc:"Sooty", price:100},
+      {code:"StySty", desc:"Sooty (homozygous)", price:100},
+    ]},
+  { key:"pangare", label:"Pangare (Png)",
+    options:[
+      {code:"pngpng", desc:"No Pangare", price:0},
+      {code:"Pngpng", desc:"Pangare", price:100},
+      {code:"PngPng", desc:"Pangare (homozygous)", price:100},
     ]},
   { key:"cream", label:"Cream (Cr)",
     options:[
@@ -2509,6 +2695,48 @@ const GENETIC_LOCI = [
       {code:"PATN2patn2", desc:"Carries Pattern-2", price:0},
       {code:"PATN2PATN2", desc:"Homozygous Pattern-2", price:0},
     ]},
+  // ILB-exclusive loci below. These are only shown for breeds/lines whose
+  // BREED_GENETICS entry includes the key — none do by default. Add the
+  // key to a breed's list (Admin panel or BREED_GENETICS) to unlock it.
+  { key:"fairylock", label:"Fairylock (Fl) — ILB Exclusive, recessive",
+    options:[
+      {code:"FlFl", desc:"No Fairylock", price:0},
+      {code:"Flfl", desc:"Fairylock (carrier, not expressed)", price:0},
+      {code:"flfl", desc:"Fairylock", price:600},
+    ]},
+  { key:"dove", label:"Dove Dilute (Dv) — ILB Exclusive",
+    options:[
+      {code:"dvdv", desc:"No Dove Dilute", price:0},
+      {code:"Dvdv", desc:"Dove Dilute", price:11000},
+      {code:"DvDv", desc:"Dove Dilute (homozygous)", price:11000},
+    ]},
+  { key:"mouse", label:"Mouse Dilute (Mo) — ILB Exclusive",
+    options:[
+      {code:"momo", desc:"No Mouse Dilute", price:0},
+      {code:"Momo", desc:"Mouse Dilute", price:12000},
+      {code:"MoMo", desc:"Mouse Dilute (homozygous)", price:12000},
+    ]},
+  // These three replace their "normal genetics" counterpart on a
+  // breed/line rather than stacking with it — give a breed EITHER
+  // "roan" OR "sealspotroan" in BREED_GENETICS, not both, and so on.
+  { key:"sealspotroan", label:"Sealspot Roan (Rns) — ILB Exclusive, replaces Roan",
+    options:[
+      {code:"rnsrns", desc:"No Sealspot Roan", price:0},
+      {code:"Rnsrns", desc:"Sealspot Roan", price:6000},
+      {code:"RnsRns", desc:"Sealspot Roan (homozygous)", price:6000},
+    ]},
+  { key:"restricteddapple", label:"Restricted Dapple (G+) — ILB Exclusive, replaces Grey",
+    options:[
+      {code:"g+g+", desc:"No Restricted Dapple", price:0},
+      {code:"G+g+", desc:"Restricted Dapple", price:10000},
+      {code:"G+G+", desc:"Restricted Dapple (homozygous)", price:10000},
+    ]},
+  { key:"tigerdun", label:"Tiger Dun (Dt) — ILB Exclusive, replaces Dun",
+    options:[
+      {code:"dtdt", desc:"No Tiger Dun", price:0},
+      {code:"Dtdt", desc:"Tiger Dun", price:9000},
+      {code:"DtDt", desc:"Tiger Dun (homozygous)", price:9000},
+    ]},
 ];
 
 function computeAppaloosaPattern(lp, patn1, patn2){
@@ -2565,10 +2793,30 @@ const BREED_GENETICS = {
   "warmblood":       ["grey","roan"],
 };
 
+// A handful of breed names don't title-case cleanly (acronyms, hyphenation).
+const BREED_DISPLAY_OVERRIDES = {
+  "pre": "PRE (Pura Raza Española)",
+  "akhal-teke": "Akhal-Teke",
+};
+
+function breedDisplayName(key){
+  if(BREED_DISPLAY_OVERRIDES[key]) return BREED_DISPLAY_OVERRIDES[key];
+  return key.replace(/\b\w/g, c=>c.toUpperCase());
+}
+
+// Builds the full Breed dropdown: hardcoded common real-world breeds, plus
+// whatever ILB-exclusive breeds have been added via the Admin panel.
+function getBreedOptionGroups(){
+  const common = Object.keys(BREED_GENETICS).sort().map(key=>({key, name:breedDisplayName(key)}));
+  const custom = (state.customBreeds||[]).slice().sort((a,b)=>a.name.localeCompare(b.name));
+  return {common, custom};
+}
+
 function getAllowedLoci(breed){
   const key=(breed||"").trim().toLowerCase();
-  const restricted=BREED_GENETICS[key];
   const optionalKeys=GENETIC_LOCI.filter(l=>!l.base).map(l=>l.key);
+  const custom=(state.customBreeds||[]).find(b=>(b.name||"").trim().toLowerCase()===key);
+  const restricted = custom ? custom.loci : BREED_GENETICS[key];
   if(!restricted) return optionalKeys;
   // Silver and Flaxen are the same underlying trait complex, just visible
   // on opposite base colors (Silver on black-based, Flaxen on chestnut).
@@ -2582,7 +2830,7 @@ function getAllowedLoci(breed){
 }
 
 function computeGenoResult(selections, breed){
-  const allowed = new Set(["extension","agouti", ...getAllowedLoci(breed)]);
+  const allowed = new Set(["extension","agouti","sooty","pangare", ...getAllowedLoci(breed)]);
   const base = computeBaseColor(selections.extension, selections.agouti);
   const phenoParts = [base.label];
   const modifiers = [];
