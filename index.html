@@ -35,10 +35,10 @@
   #app .gene-cell { display:flex; flex-direction:column; min-width:0; }
   #app .gene-cell label { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; cursor:help; }
   #app .gene-cell select { width:100%; }
-  #app .loci-check-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(180px,1fr)); gap:6px 14px; }
+  #app .loci-check-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(220px,1fr)); gap:8px 14px; }
   #app .loci-check-grid label { display:flex; align-items:center; gap:7px; cursor:pointer; min-width:0; }
   #app .loci-check-grid input[type=checkbox] { flex-shrink:0; margin:0; width:20px; height:20px; min-height:0; padding:0; }
-  #app .loci-check-grid span { flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; cursor:help; }
+  #app .loci-check-grid span { flex:1; cursor:help; }
   #app label { font-size:.92em; color:var(--dim); display:block; margin-bottom:6px; text-transform:uppercase; letter-spacing:.5px; }
   #app input, #app select, #app textarea {
     width:100%; padding:12px 14px; background:#15100c; border:1px solid #4a392a;
@@ -1142,8 +1142,8 @@ function renderRoster(){
 
   function renderGeneticsPicker(){
     const breed=currentBreedKey();
+    const fixedBase=getFixedBase(breed);
     const loci=[allLoci().find(l=>l.key==="extension"), allLoci().find(l=>l.key==="agouti"),
-      allLoci().find(l=>l.key==="sooty"), allLoci().find(l=>l.key==="pangare"),
       ...getAllowedLoci(breed).map(k=>allLoci().find(l=>l.key===k))].filter(Boolean);
     const wrapEl=form.querySelector('#nh_genetics_wrap');
     wrapEl.innerHTML=`<div class="gene-grid">
@@ -1152,9 +1152,17 @@ function renderRoster(){
           const satisfiesAll=Object.entries(locus.requiresAny).every(([reqKey,reqCodes])=>reqCodes.includes(genoSelections[reqKey]));
           if(!satisfiesAll) return "";
         }
-        const current=genoSelections[locus.key]||locus.options[0].code;
+        const fixedCode = fixedBase && (locus.key==="extension"||locus.key==="agouti") ? fixedBase[locus.key] : null;
+        const current = fixedCode || genoSelections[locus.key] || locus.options[0].code;
         genoSelections[locus.key]=current;
         const labelAttr=locus.label.replace(/"/g,"&quot;");
+        if(fixedCode){
+          const opt=locus.options.find(o=>o.code===fixedCode);
+          return `<div class="gene-cell">
+            <label class="small" title="${labelAttr} — fixed for this breed">${locus.label}</label>
+            <div class="small" style="padding:7px 0;opacity:.75;">${fixedCode} — ${opt?opt.desc:""} <span style="opacity:.65;">(fixed for breed)</span></div>
+          </div>`;
+        }
         return `<div class="gene-cell">
           <label class="small" title="${labelAttr}">${locus.label}</label>
           <select data-locus="${locus.key}">
@@ -1187,10 +1195,14 @@ function renderRoster(){
     const grandTotal=result.totalPrice+extrasTotal;
     const tags=extras.filter(m=>m.genoTag).map(m=>m.genoTag);
     const genotypeStr=tags.length?`${result.genotype} ${tags.join(" ")}`:result.genotype;
+    const base=computeBaseColor(genoSelections.extension, genoSelections.agouti);
+    const friesianNote = (breed==="friesian" && base.label!=="Black")
+      ? `<div class="small" style="opacity:.8;margin-top:4px;">🐴 Bay and chestnut ("Fire Friesian") only make up about 20% of real Friesians — rare, but far from impossible. Have fun with it!</div>`
+      : "";
     form.querySelector('#nh_geno_preview').innerHTML=
       `<b>Phenotype:</b> ${result.phenotype}<br><b>Genotype:</b> ${genotypeStr}<br>`+
       (extras.length?`<span class="small">+ ${extras.map(m=>m.label).join(", ")}</span><br>`:"")+
-      `<span class="small">Genetics value: ฿${grandTotal.toLocaleString()}</span>`;
+      `<span class="small">Genetics value: ฿${grandTotal.toLocaleString()}</span>${friesianNote}`;
   }
   renderGeneticsPicker();
   form.querySelector('#nh_add').onclick=()=>{
@@ -2430,8 +2442,9 @@ function renderAdmin(){
     return wrap;
   }
 
-  const ALWAYS_ON_LOCI = ["extension","agouti","sooty","pangare"];
-  const commonLoci = GENETIC_LOCI.filter(l=>!l.label.includes("ILB Exclusive"));
+  const ALWAYS_ON_LOCI = ["extension","agouti"];
+  const APPALOOSA_COMBO_KEYS = ["leopard","patn1","patn2"];
+  const commonLoci = GENETIC_LOCI.filter(l=>!l.label.includes("ILB Exclusive") && !APPALOOSA_COMBO_KEYS.includes(l.key));
   const ilbLoci    = GENETIC_LOCI.filter(l=>l.label.includes("ILB Exclusive"));
   const customLoci = customGeneLoci();
 
@@ -2445,6 +2458,9 @@ function renderAdmin(){
 
     <h4 style="margin:14px 0 4px;color:var(--accent);">Common Genetics</h4>
     <div class="loci-check-grid">
+      <label class="small" title="Turns on Leopard Complex (Lp) plus Pattern-1 and Pattern-2 together — these three always travel as a set.">
+        <input type="checkbox" data-combo="appaloosa" ${editing&&APPALOOSA_COMBO_KEYS.every(k=>editing.loci.includes(k))?"checked":""} /> <span>Leopard Complex + Patterns (Lp/PATN1/PATN2)</span>
+      </label>
       ${commonLoci.map(l=>{
         const alwaysOn=ALWAYS_ON_LOCI.includes(l.key);
         const checked = alwaysOn || (editing&&editing.loci.includes(l.key));
@@ -2482,6 +2498,7 @@ function renderAdmin(){
     const name=form.querySelector('#ad_breed_name').value.trim();
     if(!name){ alert("Give the breed a name first."); return; }
     const loci=[...form.querySelectorAll('[data-loci]')].filter(c=>c.checked && !ALWAYS_ON_LOCI.includes(c.dataset.loci)).map(c=>c.dataset.loci);
+    if(form.querySelector('[data-combo="appaloosa"]').checked) loci.push(...APPALOOSA_COMBO_KEYS);
     if(!state.customBreeds) state.customBreeds=[];
     const dupe=state.customBreeds.find(b=>b.name.toLowerCase()===name.toLowerCase() && b.id!==editingBreedId);
     if(dupe){ alert("A breed with that name already exists."); return; }
@@ -2948,29 +2965,59 @@ function computeBaseColor(extension, agouti){
   return {label:"Bay", price:500};
 }
 
+// Sooty and Pangare are both well-documented as invisible on black-based
+// coats (they only affect red pigment), so breeds fixed to solid black
+// don't get them. Pangare is also specifically documented as much less
+// common in refined "hot-blooded" and sport/warmblood breeds, and very
+// common in ponies, drafts, and primitive-leaning breeds — so it's
+// included/excluded per breed below rather than blanket-applied to all.
+// Sources: Wikipedia (Pangaré, Sooty), TheEquinest, AQHA, Horse Reality Wiki.
+//
+// A breed entry can be a plain array of extra locus keys, OR an object
+// { loci:[...], fixedExtension:"ee", fixedAgouti:"AA" } for breeds that
+// are fixed to one base color (e.g. Friesian is always black, Haflinger
+// is always chestnut) — see getFixedBase().
 const BREED_GENETICS = {
-  "thoroughbred":    ["grey","roan","sabino1"],
-  "quarter horse":   ["cream","dun","tobiano","sabino1","splash","frame","roan","grey","pearl"],
-  "paint":           ["cream","tobiano","sabino1","splash","frame","roan","grey","pearl"],
-  "appaloosa":       ["cream","leopard","patn1","patn2","roan","sabino1","grey"],
-  "knabstrupper":    ["leopard","patn1","patn2","grey"],
-  "arabian":         ["grey","sabino1"],
-  "friesian":        [],
-  "andalusian":      ["grey","dun","pearl"],
-  "pre":             ["grey","dun","pearl"],
-  "lipizzaner":      ["grey"],
-  "clydesdale":      ["roan","tobiano","sabino1"],
-  "percheron":       ["grey","roan"],
-  "shetland pony":   ["cream","dun","tobiano","splash","sabino1","roan","grey"],
-  "welsh pony":      ["cream","dun","tobiano","splash","sabino1","roan","grey"],
-  "mustang":         ["cream","dun","roan","tobiano","sabino1","splash","frame","leopard","patn1","patn2","grey","pearl"],
-  "akhal-teke":      ["cream","dun"],
-  "icelandic":       ["dun","silver","roan","tobiano"],
-  "gypsy vanner":    ["tobiano","sabino1","splash","roan"],
-  "dutch warmblood": ["grey","roan"],
-  "hanoverian":      ["grey","roan"],
-  "warmblood":       ["grey","roan"],
+  "thoroughbred":    ["sooty","grey","roan","sabino1"],
+  "quarter horse":   ["sooty","pangare","cream","dun","tobiano","sabino1","splash","frame","roan","grey","pearl"],
+  "paint":           ["sooty","pangare","cream","tobiano","sabino1","splash","frame","roan","grey","pearl"],
+  "appaloosa":       ["sooty","pangare","cream","leopard","patn1","patn2","roan","sabino1","grey"],
+  "knabstrupper":    ["sooty","pangare","leopard","patn1","patn2","grey"],
+  "arabian":         ["sooty","grey","sabino1"],
+  // Friesians are overwhelmingly black (KFPS studbook requires homozygous
+  // black, EE, to fully register), but real bay/chestnut ("Fire Friesian")
+  // lines do exist as a rarer separately-registered variant. Rather than
+  // locking the breed to black only, Extension/Agouti are left open here —
+  // a flavor note nudges toward black being the norm without blocking fun.
+  "friesian":        ["sooty","sabino1","flaxen"],
+  "haflinger":       { loci:["pangare","sabino1","flaxen"], fixedExtension:"ee", fixedAgouti:"AA" },
+  "andalusian":      ["sooty","pangare","grey","dun","pearl"],
+  "pre":             ["sooty","pangare","grey","dun","pearl"],
+  "lipizzaner":      ["sooty","pangare","grey"],
+  "clydesdale":      ["sooty","pangare","roan","tobiano","sabino1"],
+  "percheron":       ["sooty","pangare","grey","roan"],
+  "shetland pony":   ["sooty","pangare","cream","dun","tobiano","splash","sabino1","roan","grey"],
+  "welsh pony":      ["sooty","pangare","cream","dun","tobiano","splash","sabino1","roan","grey"],
+  "mustang":         ["sooty","pangare","cream","dun","roan","tobiano","sabino1","splash","frame","leopard","patn1","patn2","grey","pearl"],
+  "akhal-teke":      ["sooty","cream","dun"],
+  "icelandic":       ["sooty","pangare","dun","silver","roan","tobiano"],
+  "gypsy vanner":    ["sooty","pangare","tobiano","sabino1","splash","roan"],
+  "dutch warmblood": ["sooty","grey","roan"],
+  "hanoverian":      ["sooty","grey","roan"],
+  "warmblood":       ["sooty","grey","roan"],
 };
+
+function breedLociList(entry){
+  return Array.isArray(entry) ? entry : (entry ? entry.loci : null);
+}
+function getFixedBase(breed){
+  const key=(breed||"").trim().toLowerCase();
+  const entry=BREED_GENETICS[key];
+  if(entry && !Array.isArray(entry) && (entry.fixedExtension || entry.fixedAgouti)){
+    return { extension: entry.fixedExtension||null, agouti: entry.fixedAgouti||null };
+  }
+  return null;
+}
 
 // A handful of breed names don't title-case cleanly (acronyms, hyphenation).
 const BREED_DISPLAY_OVERRIDES = {
@@ -3002,7 +3049,7 @@ function getAllowedLoci(breed){
   const key=(breed||"").trim().toLowerCase();
   const optionalKeys=allLoci().filter(l=>!l.base).map(l=>l.key);
   const custom=(state.customBreeds||[]).find(b=>(b.name||"").trim().toLowerCase()===key);
-  const restricted = custom ? custom.loci : BREED_GENETICS[key];
+  const restricted = custom ? custom.loci : breedLociList(BREED_GENETICS[key]);
   if(!restricted) return optionalKeys;
   // Silver and Flaxen are the same underlying trait complex, just visible
   // on opposite base colors (Silver on black-based, Flaxen on chestnut).
@@ -3016,7 +3063,7 @@ function getAllowedLoci(breed){
 }
 
 function computeGenoResult(selections, breed){
-  const allowed = new Set(["extension","agouti","sooty","pangare", ...getAllowedLoci(breed)]);
+  const allowed = new Set(["extension","agouti", ...getAllowedLoci(breed)]);
   const base = computeBaseColor(selections.extension, selections.agouti);
   const phenoParts = [base.label];
   const modifiers = [];
