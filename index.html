@@ -37,8 +37,8 @@
   #app .gene-cell select { width:100%; }
   #app .loci-check-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(180px,1fr)); gap:6px 14px; }
   #app .loci-check-grid label { display:flex; align-items:center; gap:7px; cursor:pointer; min-width:0; }
-  #app .loci-check-grid input[type=checkbox] { flex-shrink:0; margin:0; }
-  #app .loci-check-grid span { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; cursor:help; }
+  #app .loci-check-grid input[type=checkbox] { flex-shrink:0; margin:0; width:20px; height:20px; min-height:0; padding:0; }
+  #app .loci-check-grid span { flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; cursor:help; }
   #app label { font-size:.92em; color:var(--dim); display:block; margin-bottom:6px; text-transform:uppercase; letter-spacing:.5px; }
   #app input, #app select, #app textarea {
     width:100%; padding:12px 14px; background:#15100c; border:1px solid #4a392a;
@@ -260,7 +260,7 @@ let imageLinkHelpOpen = true; // starts expanded once so the new paste-a-link in
 let expandedLogs = new Set();
 let adminPanelUnlocked = false; // gates the "Configure Stable Data URL" admin panel on the login screen behind ADMIN_PASSCODE
 
-const ADMIN_PASSCODE = 'Equistories123';
+const ADMIN_PASSCODE = 'Eqistories123';
 
 function uid(){ return 'h_'+Math.random().toString(36).slice(2,9); }
 function rand(a,b){ return Math.floor(Math.random()*(b-a+1))+a; }
