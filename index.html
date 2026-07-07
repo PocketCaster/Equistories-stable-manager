@@ -1111,13 +1111,6 @@ function renderRoster(){
           </div>`).join("") : '<div class="small">No entries yet.</div>'}
       </div>` : "";
 
-    const refHtml = h.referenceImage
-      ? `<div style="margin-top:8px;">
-          <div class="small" style="margin-bottom:3px;">Reference Sheet ${h.referenceLink?`<a href="${h.referenceLink}" target="_blank" class="artlog-link">View</a>`:""}</div>
-          <img src="${h.referenceImage}" style="max-width:100%;max-height:200px;border-radius:6px;border:1px solid #4a392a;object-fit:contain;" />
-        </div>`
-      : `<div class="small" style="margin-top:6px;color:#5a4a3a;">No reference sheet uploaded.</div>`;
-
     const inv = state.tackInventory||[];
     const equippedHtml = (h.tackEquipped||[]).length
       ? (h.tackEquipped||[]).map(tid=>{
@@ -1168,7 +1161,6 @@ function renderRoster(){
         <button class="secondary" data-act="edit-worth" data-id="${h.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">Net Worth</button>
         <button class="danger" data-act="del" data-id="${h.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">Remove</button>
       </div>
-      ${refHtml}
       ${artLogHtml}
     `;
     wrap.appendChild(card);
@@ -2699,10 +2691,10 @@ function renderHorseProfilePage(app, h){
 
   const refColumnHtml = (h.referenceImage || bankAccount.linked)
     ? `<div style="display:flex;flex-direction:column;align-items:center;gap:8px;margin-top:20px;padding-top:20px;border-top:1px solid #4a392a;">
+        <div class="small" style="text-align:center;">Reference / Registration${h.referenceLink?` · <a href="${h.referenceLink}" target="_blank">View on site</a>`:""}</div>
         ${h.referenceImage
           ? `<img src="${h.referenceImage}" onclick="openLightbox('${jsStr(h.referenceImage)}','${jsStr(h.name+' — Reference / Registration')}')" style="width:min(560px,92%);max-height:460px;border-radius:10px;object-fit:contain;border:3px solid var(--accent, #c98a3a);cursor:zoom-in;background:#15100c;box-shadow:0 6px 20px rgba(0,0,0,.45);" />`
           : `<div style="width:min(560px,92%);height:260px;border-radius:10px;border:3px solid #4a392a;display:flex;align-items:center;justify-content:center;font-size:1em;background:#15100c;color:#8a7a6a;text-align:center;padding:10px;">No reference sheet uploaded yet.</div>`}
-        <div class="small" style="text-align:center;">Reference / Registration${h.referenceLink?` · <a href="${h.referenceLink}" target="_blank">View on site</a>`:""}</div>
         ${bankAccount.linked?`
           <button id="pp_ref_change_btn" class="secondary" style="font-size:.92em;">Change Image</button>
           <div id="pp_ref_url_wrap" style="display:none;width:100%;max-width:420px;">
