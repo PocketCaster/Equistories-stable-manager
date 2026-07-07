@@ -2349,6 +2349,12 @@ const GENETIC_LOCI = [
       {code:"Chch", desc:"Champagne", price:700},
       {code:"ChCh", desc:"Champagne (homozygous)", price:700},
     ]},
+  { key:"pearl", label:"Pearl (Prl)",
+    options:[
+      {code:"prlprl", desc:"No Pearl", price:0},
+      {code:"Prlprl", desc:"Pearl (carrier)", price:150},
+      {code:"PrlPrl", desc:"Pearl (Apricot dilute)", price:400},
+    ]},
   // Silver and Flaxen can each be CARRIED on either base color, but only
   // VISUALLY EXPRESSED on one: Silver shows on black-based horses
   // (EE/Ee), Flaxen shows on chestnut (ee). A chestnut can carry Silver
@@ -2467,20 +2473,20 @@ function computeBaseColor(extension, agouti){
 
 const BREED_GENETICS = {
   "thoroughbred":    ["grey","roan","sabino1"],
-  "quarter horse":   ["cream","dun","tobiano","sabino1","splash","frame","roan","grey"],
-  "paint":           ["cream","tobiano","sabino1","splash","frame","roan","grey"],
+  "quarter horse":   ["cream","dun","tobiano","sabino1","splash","frame","roan","grey","pearl"],
+  "paint":           ["cream","tobiano","sabino1","splash","frame","roan","grey","pearl"],
   "appaloosa":       ["cream","leopard","patn1","patn2","roan","sabino1","grey"],
   "knabstrupper":    ["leopard","patn1","patn2","grey"],
   "arabian":         ["grey","sabino1"],
   "friesian":        [],
-  "andalusian":      ["grey","dun"],
-  "pre":             ["grey","dun"],
+  "andalusian":      ["grey","dun","pearl"],
+  "pre":             ["grey","dun","pearl"],
   "lipizzaner":      ["grey"],
   "clydesdale":      ["roan","tobiano","sabino1"],
   "percheron":       ["grey","roan"],
   "shetland pony":   ["cream","dun","tobiano","splash","sabino1","roan","grey"],
   "welsh pony":      ["cream","dun","tobiano","splash","sabino1","roan","grey"],
-  "mustang":         ["cream","dun","roan","tobiano","sabino1","splash","frame","leopard","patn1","patn2","grey"],
+  "mustang":         ["cream","dun","roan","tobiano","sabino1","splash","frame","leopard","patn1","patn2","grey","pearl"],
   "akhal-teke":      ["cream","dun"],
   "icelandic":       ["dun","silver","roan","tobiano"],
   "gypsy vanner":    ["tobiano","sabino1","splash","roan"],
