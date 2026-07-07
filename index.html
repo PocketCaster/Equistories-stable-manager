@@ -2631,10 +2631,9 @@ function renderHorseProfilePage(app, h){
 
   const statBars = STATS.map(s=>{
     const base=h.stats[s]||0, bonus=getEquippedStatBonus(h,s), eff=base+bonus;
-    return `<div class="statbar-wrap">
-      <span style="min-width:100px;flex:0 0 auto;white-space:nowrap;font-size:1em;">${STAT_LABELS[s]}</span>
-      <div class="statbar-bg"><div class="statbar-fill" style="width:${Math.min(100,eff)}%"></div></div>
-      <span style="font-size:.98em;min-width:60px;flex:0 0 auto;white-space:nowrap;text-align:right;">${eff}${bonus?` <span style="color:#7a9b6e;">(+${bonus})</span>`:""}</span>
+    return `<div style="display:flex;justify-content:space-between;padding:4px 0;">
+      <span style="font-size:1em;">${STAT_LABELS[s]}</span>
+      <span style="font-size:1em;font-weight:bold;color:#c98a3a;">${eff}${bonus?` <span style="color:#7a9b6e;font-weight:normal;">(+${bonus})</span>`:""}</span>
     </div>`;
   }).join("");
 
@@ -2764,7 +2763,11 @@ function renderHorseProfilePage(app, h){
           ${h.genotype?`<div class="small">Genotype: ${h.genotype}</div>`:""}
           <div style="margin-top:8px;"><span class="tag" style="font-size:1.02em;">Level ${h.level}</span> <span class="tag" style="font-size:1.02em;">${h.exp} EXP</span></div>
           <div class="expbar-bg" style="margin-top:6px;max-width:260px;"><div class="expbar-fill" style="width:${pct}%"></div></div>
-          <div style="margin-top:12px;font-size:.98em;color:#b5a392;">Net Worth: <b style="color:#c98a3a;">฿${netWorth.toLocaleString()}</b> &nbsp;|&nbsp; Breeding Slot: <b style="color:#c98a3a;">฿${slotPrice.toLocaleString()}</b></div>
+          <div style="margin-top:12px;">
+            <h3 style="margin-bottom:8px;">Stats</h3>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:4px;">${statBars}</div>
+          </div>
+          <div style="margin-top:16px;font-size:.98em;color:#b5a392;">Net Worth: <b style="color:#c98a3a;">฿${netWorth.toLocaleString()}</b> &nbsp;|&nbsp; Breeding Slot: <b style="color:#c98a3a;">฿${slotPrice.toLocaleString()}</b></div>
           <details style="margin-top:4px;">
             <summary style="cursor:pointer;font-size:.85em;color:#8a7a6a;">Breakdown</summary>
             <div style="margin-top:6px;font-size:.85em;max-width:280px;">
@@ -2779,10 +2782,6 @@ function renderHorseProfilePage(app, h){
             </div>
           </details>
           <button id="pp_edit_profile_btn" class="secondary" style="margin-top:12px;font-size:.95em;padding:6px 14px;">Edit Profile</button>
-          <div style="margin-top:16px;">
-            <h3 style="margin-bottom:8px;">Stats</h3>
-            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:4px;">${statBars}</div>
-          </div>
         </div>
         </div>
         ${refColumnHtml}
