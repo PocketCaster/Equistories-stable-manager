@@ -2460,7 +2460,7 @@ function renderAdmin(){
     return wrap;
   }
 
-  const ALWAYS_ON_LOCI = ["extension","agouti"];
+  const ALWAYS_ON_LOCI = []; // unlocked for testing — Extension/Agouti can now be toggled per breed like any other gene
   const APPALOOSA_COMBO_KEYS = ["leopard","patn1","patn2"];
   const commonLoci = GENETIC_LOCI.filter(l=>!l.label.includes("ILB Exclusive") && !APPALOOSA_COMBO_KEYS.includes(l.key));
   const ilbLoci    = GENETIC_LOCI.filter(l=>l.label.includes("ILB Exclusive"));
@@ -3139,33 +3139,10 @@ const GENETIC_LOCI = [
       {code:"PATN2patn2", desc:"Carries Pattern-2", price:0},
       {code:"PATN2PATN2", desc:"Homozygous Pattern-2", price:0},
     ]},
-  // ILB-exclusive loci below. These are only shown for breeds/lines whose
-  // BREED_GENETICS entry includes the key — none do by default. Add the
-  // key to a breed's list (Admin panel or BREED_GENETICS) to unlock it.
-  { key:"fairylock", label:"Fairylock (Fl) — ILB Exclusive, recessive",
-    options:[
-      {code:"FlFl", desc:"No Fairylock", price:0},
-      {code:"Flfl", desc:"Fairylock (carrier, not expressed)", price:0},
-      {code:"flfl", desc:"Fairylock", price:600},
-    ]},
-  { key:"dove", label:"Dove Dilute (Dv) — ILB Exclusive",
-    options:[
-      {code:"dvdv", desc:"No Dove Dilute", price:0},
-      {code:"Dvdv", desc:"Dove Dilute", price:11000},
-      {code:"DvDv", desc:"Dove Dilute (homozygous)", price:11000},
-    ]},
-  { key:"mouse", label:"Mouse Dilute (Mo) — ILB Exclusive",
-    options:[
-      {code:"momo", desc:"No Mouse Dilute", price:0},
-      {code:"Momo", desc:"Mouse Dilute", price:12000},
-      {code:"MoMo", desc:"Mouse Dilute (homozygous)", price:12000},
-    ]},
-  // Sealspot Roan, Restricted Dapple, and Tiger Dun used to live here as
-  // their own standalone loci. They're mutations of Roan/Grey/Dun rather
-  // than independent genes, though, so they've moved to the
-  // GENE_MUTATIONS system below — see BUILTIN_MUTATIONS — where they
-  // extend the base gene's own option list for a specific breed instead
-  // of showing up as a separate gene-cell.
+  // The built-in ILB Exclusive loci (Fairylock, Dove Dilute, Mouse Dilute)
+  // have been removed for testing — add them back yourself via
+  // Admin > Custom Genes to confirm the whole pipeline (breed checkbox,
+  // gene grid, Net Worth pricing) still works end-to-end.
 ];
 
 // Custom genes are defined by affiliates via Admin > Custom Genes, stored in
@@ -3198,26 +3175,10 @@ function allLoci(){
 // Shape: {id, breedName (lowercased Custom/Created breed name), locusKey
 // (which GENETIC_LOCI key it extends), label, options:[{code,desc,price}]}
 // ============================================
-const BUILTIN_MUTATIONS = [
-  { id:"builtin_sealspotroan", breedName:"irish lightblood", locusKey:"roan",
-    label:"Sealspot Roan (Rns)", builtin:true,
-    options:[
-      {code:"Rnsrns", desc:"Sealspot Roan", price:6000},
-      {code:"RnsRns", desc:"Sealspot Roan (homozygous)", price:6000},
-    ]},
-  { id:"builtin_restricteddapple", breedName:"irish lightblood", locusKey:"grey",
-    label:"Restricted Dapple (G+)", builtin:true,
-    options:[
-      {code:"G+g+", desc:"Restricted Dapple", price:10000},
-      {code:"G+G+", desc:"Restricted Dapple (homozygous)", price:10000},
-    ]},
-  { id:"builtin_tigerdun", breedName:"irish lightblood", locusKey:"dun",
-    label:"Tiger Dun (Dt)", builtin:true,
-    options:[
-      {code:"Dtdt", desc:"Tiger Dun", price:9000},
-      {code:"DtDt", desc:"Tiger Dun (homozygous)", price:9000},
-    ]},
-];
+// Built-in mutations (Sealspot Roan, Restricted Dapple, Tiger Dun) removed
+// for testing — add them back yourself via Admin > Gene Mutations/Overrides
+// to confirm the extend-an-existing-gene pipeline still works end-to-end.
+const BUILTIN_MUTATIONS = [];
 function allMutations(){
   return [...BUILTIN_MUTATIONS, ...(state.customMutations||[])];
 }
