@@ -260,7 +260,7 @@ let imageLinkHelpOpen = true; // starts expanded once so the new paste-a-link in
 let expandedLogs = new Set();
 let adminPanelUnlocked = false; // gates the "Configure Stable Data URL" admin panel on the login screen behind ADMIN_PASSCODE
 
-const ADMIN_PASSCODE = 'Equistories123';
+const ADMIN_PASSCODE = 'Eqistories123';
 
 function uid(){ return 'h_'+Math.random().toString(36).slice(2,9); }
 function rand(a,b){ return Math.floor(Math.random()*(b-a+1))+a; }
@@ -627,23 +627,25 @@ async function deleteHorseFromSheets(horseId){
 }
 
 async function loadGlobalBreeds(){
-  if(!STABLE_URL){ state.customBreeds=[]; state.customGenes=[]; state.customMarkings=[]; return; }
+  if(!STABLE_URL){ state.customBreeds=[]; state.customGenes=[]; state.customMarkings=[]; state.customMutations=[]; return; }
   const res = await stableGas({ action:'loadStableState', userId:GLOBAL_CONFIG_USER_ID });
   if(res?.success && res.data){
-    state.customBreeds   = Array.isArray(res.data.customBreeds)   ? res.data.customBreeds   : [];
-    state.customGenes    = Array.isArray(res.data.customGenes)    ? res.data.customGenes    : [];
-    state.customMarkings = Array.isArray(res.data.customMarkings) ? res.data.customMarkings : [];
+    state.customBreeds    = Array.isArray(res.data.customBreeds)    ? res.data.customBreeds    : [];
+    state.customGenes     = Array.isArray(res.data.customGenes)     ? res.data.customGenes     : [];
+    state.customMarkings  = Array.isArray(res.data.customMarkings)  ? res.data.customMarkings  : [];
+    state.customMutations = Array.isArray(res.data.customMutations) ? res.data.customMutations : [];
   } else {
     state.customBreeds = [];
     state.customGenes = [];
     state.customMarkings = [];
+    state.customMutations = [];
   }
 }
 
 async function saveGlobalBreeds(){
   if(!STABLE_URL) return false;
   return await sendTextChunked(GLOBAL_CONFIG_USER_ID, 'stateJson', 'stable',
-    JSON.stringify({ customBreeds: state.customBreeds, customGenes: state.customGenes, customMarkings: state.customMarkings }));
+    JSON.stringify({ customBreeds: state.customBreeds, customGenes: state.customGenes, customMarkings: state.customMarkings, customMutations: state.customMutations }));
 }
 
 async function loadFromSheets(){
@@ -1166,11 +1168,13 @@ function renderRoster(){
           if(!satisfiesAll) return "";
         }
         const fixedCode = fixedBase && (locus.key==="extension"||locus.key==="agouti") ? fixedBase[locus.key] : null;
-        const current = fixedCode || genoSelections[locus.key] || locus.options[0].code;
+        const options = getLocusOptions(locus, breed);
+        let current = fixedCode || genoSelections[locus.key] || options[0].code;
+        if(!options.some(o=>o.code===current)) current = options[0].code;
         genoSelections[locus.key]=current;
         const labelAttr=locus.label.replace(/"/g,"&quot;");
         if(fixedCode){
-          const opt=locus.options.find(o=>o.code===fixedCode);
+          const opt=options.find(o=>o.code===fixedCode);
           return `<div class="gene-cell">
             <label class="small" title="${labelAttr} — fixed for this breed">${locus.label}</label>
             <div class="small" style="padding:7px 0;opacity:.75;">${fixedCode} — ${opt?opt.desc:""} <span style="opacity:.65;">(fixed for breed)</span></div>
@@ -1179,7 +1183,7 @@ function renderRoster(){
         return `<div class="gene-cell">
           <label class="small" title="${labelAttr}">${locus.label}</label>
           <select data-locus="${locus.key}">
-            ${locus.options.map(o=>`<option value="${o.code}" ${o.code===current?"selected":""}>${o.code} — ${o.desc}</option>`).join("")}
+            ${options.map(o=>`<option value="${o.code}" ${o.code===current?"selected":""}>${o.code} — ${o.desc}</option>`).join("")}
           </select>
         </div>`;
       }).join("")}
@@ -2425,6 +2429,7 @@ function renderTackInventory(){
 let editingBreedId = null;
 let editingGeneId = null;
 let editingMarkingId = null;
+let editingMutationId = null;
 
 function renderAdmin(){
   const wrap = el('div');
@@ -2769,6 +2774,151 @@ function renderAdmin(){
     render();
   });
 
+  // ============================================
+  // ADMIN — GENE MUTATIONS / OVERRIDES
+  // Extends an existing base gene (Roan, Grey, Dun, etc.) with extra
+  // allele options, but only for horses of one specific Custom/Created
+  // breed — e.g. Sealspot Roan extends Roan, but only shows up once
+  // Irish Lightblood is selected on the Roster tab.
+  // ============================================
+
+  const editingMutation = editingMutationId ? (state.customMutations||[]).find(m=>m.id===editingMutationId) : null;
+  const mutationTargetLoci = [...commonLoci, ...ilbLoci];
+  const mutationBreeds = (state.customBreeds||[]).slice().sort((a,b)=>a.name.localeCompare(b.name));
+
+  const mutationForm = el('div','card',`
+    <h3>${editingMutation?`Edit Gene Mutation/Override — ${editingMutation.label}`:"Add Gene Mutation/Override"}</h3>
+    <p class="small" style="margin:0 0 8px;">Adds extra allele options onto an existing base gene, visible only for horses of the Custom/Created breed you pick here — e.g. Sealspot Roan extends the Roan gene, but only appears once that breed is selected. No need to add a "none" row; the base gene's own zero-price option already covers that.</p>
+    ${mutationBreeds.length?"":`<p class="small" style="opacity:.7;margin:0 0 8px;">No Custom/Created breeds yet — add one above first, then come back here to attach a mutation to it.</p>`}
+    <div class="row">
+      <div><label>Applies to Breed</label>
+        <select id="am2_breed">
+          <option value="">— Pick a Custom/Created breed —</option>
+          ${mutationBreeds.map(b=>`<option value="${b.name.toLowerCase()}" ${editingMutation&&editingMutation.breedName===b.name.toLowerCase()?"selected":""}>${b.name}</option>`).join("")}
+        </select>
+      </div>
+      <div><label>Base Gene It Extends</label>
+        <select id="am2_locus">
+          <option value="">— Pick a base gene —</option>
+          ${mutationTargetLoci.map(l=>`<option value="${l.key}" ${editingMutation&&editingMutation.locusKey===l.key?"selected":""}>${shortLocusLabel(l)}</option>`).join("")}
+        </select>
+      </div>
+    </div>
+    <label style="margin-top:10px;">Mutation Name</label>
+    <input id="am2_label" placeholder="e.g. Sealspot Roan (Rns)" value="${editingMutation?editingMutation.label.replace(/"/g,"&quot;"):""}" style="max-width:320px;" />
+
+    <h4 style="margin:14px 0 4px;color:var(--accent);">Extra Alleles</h4>
+    <p class="small" style="margin:0 0 8px;">One row per genotype this mutation adds — they'll appear as extra rows in the base gene's dropdown.</p>
+    <div id="am2_option_rows"></div>
+    <button id="am2_add_row" class="secondary" style="margin-top:4px;">+ Add Allele</button>
+
+    <div style="margin-top:14px;">
+      <button id="am2_save_mutation">${editingMutation?"Save Changes":"Add Mutation"}</button>
+      ${editingMutation?`<button id="am2_cancel_mutation" class="secondary">Cancel</button>`:""}
+    </div>
+    <div id="am2_save_status" class="small" style="margin-top:6px;"></div>
+  `);
+  wrap.appendChild(mutationForm);
+
+  let mutationOptionRows = editingMutation ? editingMutation.options.map(o=>({...o})) : [{code:"",desc:"",price:0}];
+
+  function refreshMutationOptionRows(){
+    const rowsWrap = mutationForm.querySelector('#am2_option_rows');
+    rowsWrap.innerHTML = mutationOptionRows.map((o,i)=>`
+      <div class="row" style="align-items:flex-end;margin-bottom:6px;" data-row="${i}">
+        <div style="max-width:140px;"><label>Code</label><input data-field="code" value="${(o.code||"").replace(/"/g,"&quot;")}" placeholder="e.g. Rnsrns" /></div>
+        <div style="flex:2;"><label>Description</label><input data-field="desc" value="${(o.desc||"").replace(/"/g,"&quot;")}" placeholder="e.g. Sealspot Roan" /></div>
+        <div style="max-width:120px;"><label>Price (฿)</label><input data-field="price" type="number" value="${o.price||0}" /></div>
+        <div><button data-remove-row="${i}" class="danger" style="padding:9px 12px;margin-top:0;">✕</button></div>
+      </div>`).join("");
+    rowsWrap.querySelectorAll('[data-row]').forEach(rowEl=>{
+      const idx=Number(rowEl.dataset.row);
+      rowEl.querySelectorAll('[data-field]').forEach(inp=>{
+        inp.oninput=()=>{
+          const field=inp.dataset.field;
+          mutationOptionRows[idx][field] = field==="price" ? Number(inp.value)||0 : inp.value;
+        };
+      });
+    });
+    rowsWrap.querySelectorAll('[data-remove-row]').forEach(b=>b.onclick=()=>{
+      if(mutationOptionRows.length<=1){ alert("A mutation needs at least one allele row."); return; }
+      mutationOptionRows.splice(Number(b.dataset.removeRow),1);
+      refreshMutationOptionRows();
+    });
+  }
+  refreshMutationOptionRows();
+
+  mutationForm.querySelector('#am2_add_row').onclick=()=>{
+    mutationOptionRows.push({code:"",desc:"",price:0});
+    refreshMutationOptionRows();
+  };
+
+  mutationForm.querySelector('#am2_save_mutation').onclick=async()=>{
+    const breedName=mutationForm.querySelector('#am2_breed').value;
+    const locusKey=mutationForm.querySelector('#am2_locus').value;
+    const label=mutationForm.querySelector('#am2_label').value.trim();
+    if(!breedName){ alert("Pick which breed this mutation applies to."); return; }
+    if(!locusKey){ alert("Pick which base gene this mutation extends."); return; }
+    if(!label){ alert("Give the mutation a name first."); return; }
+    const options=mutationOptionRows
+      .filter(o=>(o.code||"").trim() && (o.desc||"").trim())
+      .map(o=>({code:o.code.trim(), desc:o.desc.trim(), price:Number(o.price)||0}));
+    if(!options.length){ alert("Add at least one allele with both a code and a description."); return; }
+    if(!state.customMutations) state.customMutations=[];
+    if(editingMutation){
+      editingMutation.breedName=breedName; editingMutation.locusKey=locusKey;
+      editingMutation.label=label; editingMutation.options=options;
+    } else {
+      state.customMutations.push({id:uid2(), breedName, locusKey, label, options});
+    }
+    editingMutationId=null;
+    const status=mutationForm.querySelector('#am2_save_status');
+    status.textContent='Saving…';
+    const ok=await saveGlobalBreeds();
+    status.textContent = ok ? 'Saved — visible to all affiliates now.' : '⚠ Saved here, but failed to sync to Stable Data. Try again.';
+    render();
+  };
+  const mutationCancelBtn=mutationForm.querySelector('#am2_cancel_mutation');
+  if(mutationCancelBtn) mutationCancelBtn.onclick=()=>{ editingMutationId=null; render(); };
+
+  const mutationListCard = el('div','card');
+  const builtinMutations = BUILTIN_MUTATIONS.slice().sort((a,b)=>a.label.localeCompare(b.label));
+  const customMutationsList = (state.customMutations||[]).slice().sort((a,b)=>a.label.localeCompare(b.label));
+  mutationListCard.innerHTML=`<h3>Gene Mutations/Overrides (${builtinMutations.length+customMutationsList.length})</h3>`;
+  const mutationRowHtml = (m, removable)=>{
+    const locus = mutationTargetLoci.find(l=>l.key===m.locusKey);
+    const breedDisplay = mutationBreeds.find(b=>b.name.toLowerCase()===m.breedName)?.name || m.breedName;
+    return `
+      <div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #2c2118;">
+        <div style="flex:1;">
+          <div style="font-weight:bold;">${m.label}${m.builtin?` <span class="small" style="opacity:.6;">(built-in)</span>`:""}</div>
+          <div class="small" style="opacity:.8;">Extends ${locus?shortLocusLabel(locus):m.locusKey} — for ${breedDisplay}</div>
+          <div class="small" style="opacity:.8;">${m.options.map(o=>o.desc).join(", ")}</div>
+        </div>
+        ${removable?`<button class="secondary" data-edit-mutation="${m.id}" style="font-size:.96em;padding:3px 10px;margin-top:0;">Edit</button>
+        <button class="danger" data-remove-mutation="${m.id}" style="font-size:.96em;padding:3px 10px;margin-top:0;">Remove</button>`:""}
+      </div>`;
+  };
+  if(!builtinMutations.length && !customMutationsList.length){
+    mutationListCard.innerHTML+=`<div class="small">None added yet.</div>`;
+  } else {
+    mutationListCard.innerHTML+=[...builtinMutations.map(m=>mutationRowHtml(m,false)), ...customMutationsList.map(m=>mutationRowHtml(m,true))].join("");
+  }
+  wrap.appendChild(mutationListCard);
+
+  mutationListCard.querySelectorAll('[data-edit-mutation]').forEach(b=>b.onclick=()=>{
+    editingMutationId=b.dataset.editMutation;
+    render();
+    window.scrollTo(0,0);
+  });
+  mutationListCard.querySelectorAll('[data-remove-mutation]').forEach(b=>b.onclick=async()=>{
+    const target=state.customMutations.find(x=>x.id===b.dataset.removeMutation);
+    if(!confirm(`Remove mutation "${target?.label}"? It'll disappear from the base gene's dropdown for that breed (horses already carrying it keep their saved Net Worth value).`)) return;
+    state.customMutations=(state.customMutations||[]).filter(x=>x.id!==b.dataset.removeMutation);
+    await saveGlobalBreeds();
+    render();
+  });
+
   return wrap;
 }
 
@@ -2818,15 +2968,26 @@ const GENETIC_LOCI = [
       {code:"Ee", desc:"Black-based (carries red)"},
       {code:"ee", desc:"Red-based / Chestnut"},
     ]},
+  // Dominance hierarchy: A+ (wild-type) > A (bay) > At (seal brown) > a (black).
+  // A+ is the "wild" allele — on chestnut (ee) it's silent (just Chestnut, same
+  // as if it weren't there at all — see computeBaseColor), but on any
+  // black-based horse (EE/Ee) it produces Wild Bay, the base of the whole
+  // "wild chain" (Wild Buckskin = Wild Bay + Cream, Wild Amber Champagne =
+  // Wild Bay + Champagne, etc. — every dilution that normally acts on Bay
+  // acts the same way on Wild Bay, just tagged "Wild").
   { key:"agouti", label:"Agouti (A) — distributes black", base:true, requiresAny:{extension:["EE","Ee","ee"]},
     options:[
+      {code:"A+A+", desc:"Chestnut / Wild Bay (homozygous)"},
+      {code:"A+A", desc:"Chestnut / Wild Bay"},
+      {code:"A+At", desc:"Liver Chestnut / Wild Bay"},
+      {code:"A+a", desc:"Chestnut / Wild Bay"},
       {code:"AA", desc:"Chestnut / Bay"},
       {code:"Aa", desc:"Chestnut / Bay"},
       {code:"aa", desc:"Black"},
-      {code:"AtA", desc:"Liver Chestnut / Wild bay"},
-      {code:"Ata", desc:"Liver Chestnut / Wild bay"},
-      {code:"AtAt", desc:"Black Chestnut / Seal Bay"},
-      {code:"Atat", desc:"Liver Chestnut / Seal Bay"},           
+      {code:"AtA", desc:"Liver Chestnut / Seal Brown"},
+      {code:"Ata", desc:"Liver Chestnut / Seal Brown"},
+      {code:"AtAt", desc:"Black Chestnut / Seal Brown (homozygous)"},
+      {code:"Atat", desc:"Liver Chestnut / Seal Brown"},           
     ]},
   { key:"sooty", label:"Sooty (Sty)",
     options:[
@@ -2969,27 +3130,12 @@ const GENETIC_LOCI = [
       {code:"Momo", desc:"Mouse Dilute", price:12000},
       {code:"MoMo", desc:"Mouse Dilute (homozygous)", price:12000},
     ]},
-  // These three replace their "normal genetics" counterpart on a
-  // breed/line rather than stacking with it — give a breed EITHER
-  // "roan" OR "sealspotroan" in BREED_GENETICS, not both, and so on.
-  { key:"sealspotroan", label:"Sealspot Roan (Rns) — ILB Exclusive, replaces Roan",
-    options:[
-      {code:"rnsrns", desc:"No Sealspot Roan", price:0},
-      {code:"Rnsrns", desc:"Sealspot Roan", price:6000},
-      {code:"RnsRns", desc:"Sealspot Roan (homozygous)", price:6000},
-    ]},
-  { key:"restricteddapple", label:"Restricted Dapple (G+) — ILB Exclusive, replaces Grey",
-    options:[
-      {code:"g+g+", desc:"No Restricted Dapple", price:0},
-      {code:"G+g+", desc:"Restricted Dapple", price:10000},
-      {code:"G+G+", desc:"Restricted Dapple (homozygous)", price:10000},
-    ]},
-  { key:"tigerdun", label:"Tiger Dun (Dt) — ILB Exclusive, replaces Dun",
-    options:[
-      {code:"dtdt", desc:"No Tiger Dun", price:0},
-      {code:"Dtdt", desc:"Tiger Dun", price:9000},
-      {code:"DtDt", desc:"Tiger Dun (homozygous)", price:9000},
-    ]},
+  // Sealspot Roan, Restricted Dapple, and Tiger Dun used to live here as
+  // their own standalone loci. They're mutations of Roan/Grey/Dun rather
+  // than independent genes, though, so they've moved to the
+  // GENE_MUTATIONS system below — see BUILTIN_MUTATIONS — where they
+  // extend the base gene's own option list for a specific breed instead
+  // of showing up as a separate gene-cell.
 ];
 
 // Custom genes are defined by affiliates via Admin > Custom Genes, stored in
@@ -3009,6 +3155,59 @@ function customGeneLoci(){
 }
 function allLoci(){
   return [...GENETIC_LOCI, ...customGeneLoci()];
+}
+
+// ============================================
+// GENE MUTATIONS / OVERRIDES
+// A mutation extends an existing base gene (e.g. Roan) with extra allele
+// options, but ONLY for horses of one specific Custom/Created breed — it
+// doesn't get its own gene-cell, it just adds rows to the base gene's
+// dropdown once that breed is selected. Built-ins live in
+// BUILTIN_MUTATIONS below; affiliate-defined ones live in
+// state.customMutations, added via Admin > Gene Mutations/Overrides.
+// Shape: {id, breedName (lowercased Custom/Created breed name), locusKey
+// (which GENETIC_LOCI key it extends), label, options:[{code,desc,price}]}
+// ============================================
+const BUILTIN_MUTATIONS = [
+  { id:"builtin_sealspotroan", breedName:"irish lightblood", locusKey:"roan",
+    label:"Sealspot Roan (Rns)", builtin:true,
+    options:[
+      {code:"Rnsrns", desc:"Sealspot Roan", price:6000},
+      {code:"RnsRns", desc:"Sealspot Roan (homozygous)", price:6000},
+    ]},
+  { id:"builtin_restricteddapple", breedName:"irish lightblood", locusKey:"grey",
+    label:"Restricted Dapple (G+)", builtin:true,
+    options:[
+      {code:"G+g+", desc:"Restricted Dapple", price:10000},
+      {code:"G+G+", desc:"Restricted Dapple (homozygous)", price:10000},
+    ]},
+  { id:"builtin_tigerdun", breedName:"irish lightblood", locusKey:"dun",
+    label:"Tiger Dun (Dt)", builtin:true,
+    options:[
+      {code:"Dtdt", desc:"Tiger Dun", price:9000},
+      {code:"DtDt", desc:"Tiger Dun (homozygous)", price:9000},
+    ]},
+];
+function allMutations(){
+  return [...BUILTIN_MUTATIONS, ...(state.customMutations||[])];
+}
+function mutationsFor(breed, locusKey){
+  const key=(breed||"").trim().toLowerCase();
+  if(!key) return [];
+  return allMutations().filter(m=>m.locusKey===locusKey && (m.breedName||"").trim().toLowerCase()===key);
+}
+// Returns a locus's normal option list, plus any extra allele rows added
+// by mutations attached to this specific breed — this is what should
+// always be read from (instead of locus.options directly) anywhere a
+// gene-cell's dropdown is built or a selected code needs to be resolved
+// back to a description/price, so overrides show up transparently.
+function getLocusOptions(locus, breed){
+  const muts=mutationsFor(breed, locus.key);
+  let options = muts.length ? [...locus.options, ...muts.flatMap(m=>m.options.map(o=>({...o})))] : locus.options;
+  const restrictions=getAlleleRestrictions(breed);
+  const allowedCodes=restrictions && restrictions[locus.key];
+  if(allowedCodes) options = options.filter(o=>allowedCodes.includes(o.code));
+  return options;
 }
 
 // Generates a unique, storage-safe key for a new custom gene from its
@@ -3041,13 +3240,28 @@ function computeAppaloosaPattern(lp, patn1, patn2){
 function computeBaseColor(extension, agouti){
   const blackBased = extension==="EE" || extension==="Ee";
   const a = agouti==="AAt" ? "AA" : agouti;
+  // AtA, Ata, and Atat are all het/mixed At combinations — their allele
+  // descriptions all read "Liver Chestnut / Seal Brown", so all three
+  // resolve the same way here. Only AtAt (homozygous At) is the darker
+  // "Black Chestnut / Seal Brown" tier.
+  const sealBrown = ["AtA","Ata","Atat"];
+  // A+ is dominant over everything else at this locus, so any genotype
+  // carrying it resolves to Wild Bay on a black-based horse. A+At still
+  // carries one copy of At, which keeps darkening a *chestnut* coat (At's
+  // only visible effect off black) — so that's the one wild-bay genotype
+  // that isn't a plain Chestnut when extension is ee.
+  const wildBay = ["A+A+","A+A","A+At","A+a"];
+  if(wildBay.includes(a)){
+    if(!blackBased) return a==="A+At" ? {label:"Liver Chestnut", price:600} : {label:"Chestnut", price:700};
+    return {label:"Wild Bay", price:500};
+  }
 
   if(!blackBased){
     if(a==="AtAt") return {label:"Black Chestnut", price:600};
-    if(a==="Ata")  return {label:"Liver Chestnut", price:600};
+    if(sealBrown.includes(a)) return {label:"Liver Chestnut", price:600};
     return {label:"Chestnut", price:700};
   }
-  if(a==="AtAt" || a==="Ata") return {label:"Seal Bay", price:600};
+  if(a==="AtAt" || sealBrown.includes(a)) return {label:"Seal Brown", price:600};
   if(a==="aa") return {label:"Black", price:500};
   return {label:"Bay", price:500};
 }
@@ -3077,7 +3291,16 @@ const BREED_GENETICS = {
   // locking the breed to black only, Extension/Agouti are left open here —
   // a flavor note nudges toward black being the norm without blocking fun.
   "friesian":        ["sooty","sabino1","flaxen"],
-  "haflinger":       { loci:["pangare","sabino1","flaxen"], fixedExtension:"ee", fixedAgouti:"AA" },
+  // Haflingers can't carry the black gene at all — Extension is fixed to
+  // ee (chestnut-based) — but every Agouti genotype is still selectable;
+  // since Agouti only visibly expresses on black-based horses anyway, all
+  // of those combinations phenotype out to the three chestnut shades
+  // (Chestnut / Liver Chestnut / Black Chestnut) via computeBaseColor.
+  // They're also always flaxen — every registered Haflinger carries at
+  // least one Flaxen allele — so "No Flaxen" is excluded here via
+  // alleleRestrictions rather than left as a pickable (but wrong) option.
+  "haflinger":       { loci:["pangare","sabino1","flaxen"], fixedExtension:"ee",
+                        alleleRestrictions:{ flaxen:["nF","FF"] } },
   "andalusian":      ["sooty","pangare","grey","dun","pearl"],
   "pre":             ["sooty","pangare","grey","dun","pearl"],
   "lipizzaner":      ["sooty","pangare","grey"],
@@ -3103,6 +3326,17 @@ function getFixedBase(breed){
   if(entry && !Array.isArray(entry) && (entry.fixedExtension || entry.fixedAgouti)){
     return { extension: entry.fixedExtension||null, agouti: entry.fixedAgouti||null };
   }
+  return null;
+}
+// Some breeds narrow (rather than fully fix) which alleles are pickable at
+// a given locus — e.g. Haflingers can be Aa, aa, AtAt, etc. (Agouti stays
+// fully open), but can never be "ff" (no Flaxen) since the breed always
+// carries at least one Flaxen allele. Returns {locusKey:[allowedCodes]} or
+// null if this breed has no such restrictions.
+function getAlleleRestrictions(breed){
+  const key=(breed||"").trim().toLowerCase();
+  const entry=BREED_GENETICS[key];
+  if(entry && !Array.isArray(entry) && entry.alleleRestrictions) return entry.alleleRestrictions;
   return null;
 }
 
@@ -3179,7 +3413,7 @@ function computeGenoResult(selections, breed){
       if(!satisfiesAll) return;
     }
     if(["leopard","patn1","patn2","silver","flaxen"].includes(locus.key)) return;
-    const opt = locus.options.find(o=>o.code===code);
+    const opt = getLocusOptions(locus, breed).find(o=>o.code===code);
     if(!opt) return;
     genoParts.push(code);
     if(opt.price>0){
