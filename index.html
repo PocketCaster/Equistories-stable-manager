@@ -1113,8 +1113,10 @@ function renderRoster(){
   // only shows up once the selected breed is in LINE_FEATURE_BREEDS.
   function renderModPicker(){
     const breed=(currentBreedKey()||"").trim().toLowerCase();
+    const hasCode=(locus,code)=>genoSelections[locus]===code;
     const groups={
-      "Rare Markings":[...GENO_MODIFIERS["Rare Markings"], ...(state.customMarkings||[])],
+      "Rare Markings":[...GENO_MODIFIERS["Rare Markings"], ...(state.customMarkings||[])]
+        .filter(m=>markingMeetsGeneRequirement(m.label, hasCode)),
     };
     if(LINE_FEATURE_BREEDS.includes(breed)) groups["Line Features"]=GENO_MODIFIERS["Line Features"];
     const pick=form.querySelector('#nh_mod_pick');
@@ -1191,6 +1193,7 @@ function renderRoster(){
     wrapEl.querySelectorAll('[data-locus]').forEach(sel=>sel.onchange=()=>{
       genoSelections[sel.dataset.locus]=sel.value;
       renderGeneticsPicker();
+      renderModPicker();
     });
     refreshGenoPreview();
   }
@@ -2954,6 +2957,26 @@ const GENO_MODIFIERS = {
   ],
 };
 
+// A couple of Rare Markings only make sense on top of a specific base
+// gene — Bloodmark is documented as a marking that only shows up on grey
+// horses, and the Peacock Appaloosa Mutation only occurs on Leopard
+// Complex (Lp) horses. Rather than letting them be picked on a horse that
+// can't carry them, they're filtered out of the marking picker unless the
+// prerequisite gene is present. Keyed by marking label -> the locus and
+// the set of allele codes at that locus that satisfy the requirement.
+const MARKING_GENE_REQUIREMENTS = {
+  "Bloodmark": {locus:"grey", codes:["Gg","GG"]},
+  "Peacock Appaloosa Mutation": {locus:"leopard", codes:["nLp","LpLp"]},
+};
+// hasCodeFn(locus, code) -> boolean; callers supply different lookups
+// depending on whether they have live selections (the Add-a-Horse form)
+// or only a saved horse's genotype string (the Net Worth modal).
+function markingMeetsGeneRequirement(label, hasCodeFn){
+  const req = MARKING_GENE_REQUIREMENTS[label];
+  if(!req) return true;
+  return req.codes.some(c=>hasCodeFn(req.locus, c));
+}
+
 // Breeds (by lowercased name) whose horses can access the "Line Features"
 // group of rare markings/traits. Line Features are ILB-line-exclusive, so
 // they're hidden from the picker entirely unless the selected breed is one
@@ -3872,9 +3895,16 @@ function showNetWorthModal(horseId){
   }
 
   const baseOpts = GENO_BASE_PRICES.map(p=>`<option value="${p.value}" ${h.genoBasePrice===p.value?"selected":""}>${p.label} — ฿${p.value}</option>`).join("");
+  // Only the horse's own saved genotype string is available here (no live
+  // locus selections), so the Bloodmark/Peacock Appaloosa prerequisite is
+  // checked by looking for the required allele code as a whole token in
+  // that string (genotype codes are space-separated, e.g. "EE Aa Gg ...").
+  const genotypeTokens = (h.genotype||"").split(/\s+/);
+  const hasSavedCode=(locus,code)=>genotypeTokens.includes(code);
   const modGroups = Object.entries(GENO_MODIFIERS).map(([group, items])=>`
     <optgroup label="— ${group} —">
-      ${items.map(m=>`<option value="${m.value}|${m.label}">${m.label} (+฿${m.value})</option>`).join("")}
+      ${items.filter(m=>markingMeetsGeneRequirement(m.label, hasSavedCode))
+        .map(m=>`<option value="${m.value}|${m.label}">${m.label} (+฿${m.value})</option>`).join("")}
     </optgroup>`).join("");
   const genoNote = h.genotype
     ? `<p class="small" style="color:#7a9b6e;margin:4px 0 10px;">Base genetics: <b>${h.genotype}</b> (${h.phenotype||""}) — set on the Roster tab. This section is for extra fictitious/rare markings and mane types on top of that.</p>`
