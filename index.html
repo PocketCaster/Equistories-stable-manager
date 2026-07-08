@@ -1108,17 +1108,20 @@ function renderRoster(){
   };
   form.querySelector('#nh_breed_other').oninput=()=>{ renderGeneticsPicker(); renderModPicker(); };
 
-  // Rare Markings is universal to every breed (plus any Custom Rare Markings
-  // added in the Admin panel); Line Features is ILB-line-exclusive, so it
-  // only shows up once the selected breed is in LINE_FEATURE_BREEDS.
+  // Rare Markings (built-in + Custom Rare Markings from the Admin panel) is
+  // available to every breed by default. A Custom Rare Marking can also be
+  // scoped to specific breeds in Admin — if it has a breeds list, it only
+  // shows up in the picker for horses of one of those breeds.
   function renderModPicker(){
     const breed=(currentBreedKey()||"").trim().toLowerCase();
+    const breedName=(currentBreedDisplay()||"").trim().toLowerCase();
     const hasCode=(locus,code)=>genoSelections[locus]===code;
+    const customForBreed=(state.customMarkings||[]).filter(m=>
+      !m.breeds || !m.breeds.length || m.breeds.some(b=>b.toLowerCase()===breed || b.toLowerCase()===breedName));
     const groups={
-      "Rare Markings":[...GENO_MODIFIERS["Rare Markings"], ...(state.customMarkings||[])]
+      "Rare Markings":[...GENO_MODIFIERS["Rare Markings"], ...customForBreed]
         .filter(m=>markingMeetsGeneRequirement(m.label, hasCode)),
     };
-    if(LINE_FEATURE_BREEDS.includes(breed)) groups["Line Features"]=GENO_MODIFIERS["Line Features"];
     const pick=form.querySelector('#nh_mod_pick');
     const prevVal=pick.value;
     pick.innerHTML=`<option value="">— Pick a marking/trait —</option>`+
@@ -2703,14 +2706,30 @@ function renderAdmin(){
   // ============================================
 
   const editingMarking = editingMarkingId ? (state.customMarkings||[]).find(m=>m.id===editingMarkingId) : null;
+  const {common:markingCommonBreeds, custom:markingCustomBreeds} = getBreedOptionGroups();
+  const editingMarkingBreeds = (editingMarking?.breeds||[]).map(b=>b.toLowerCase());
 
   const markingForm = el('div','card',`
     <h3>${editingMarking?`Edit Custom Rare Marking — ${editingMarking.label}`:"Add Custom Rare Marking"}</h3>
-    <p class="small" style="margin:0 0 8px;">Shows up under "— Rare Markings —" in the marking/trait picker on the Roster tab for every affiliate, alongside the built-in list — available on every horse regardless of breed.</p>
+    <p class="small" style="margin:0 0 8px;">Shows up under "— Rare Markings —" in the marking/trait picker on the Roster tab for every affiliate, alongside the built-in list.</p>
     <div class="row" style="align-items:flex-end;">
       <div style="flex:2;"><label>Marking Name</label><input id="am_label" placeholder="e.g. Cryptic" value="${editingMarking?editingMarking.label.replace(/"/g,"&quot;"):""}" /></div>
       <div style="max-width:140px;"><label>Price (฿)</label><input id="am_price" type="number" min="0" value="${editingMarking?editingMarking.value:0}" /></div>
     </div>
+
+    <h4 style="margin:14px 0 4px;color:var(--accent);">Restrict to Breeds <span class="small">(optional)</span></h4>
+    <p class="small" style="margin:0 0 8px;">Leave everything unchecked to make this marking available on every breed. Check one or more breeds to limit it to just those.</p>
+    <div class="loci-check-grid">
+      ${markingCommonBreeds.map(b=>`
+        <label class="small" title="${b.name.replace(/"/g,"&quot;")}">
+          <input type="checkbox" data-marking-breed="${b.key}" ${editingMarkingBreeds.includes(b.key)?"checked":""} /> <span>${b.name}</span>
+        </label>`).join("")}
+      ${markingCustomBreeds.map(b=>`
+        <label class="small" title="${b.name.replace(/"/g,"&quot;")} (Custom/Created)">
+          <input type="checkbox" data-marking-breed="${b.name.toLowerCase()}" ${editingMarkingBreeds.includes(b.name.toLowerCase())?"checked":""} /> <span>${b.name}</span>
+        </label>`).join("")}
+    </div>
+
     <div style="margin-top:14px;">
       <button id="am_save_marking">${editingMarking?"Save Changes":"Add Marking"}</button>
       ${editingMarking?`<button id="am_cancel_marking" class="secondary">Cancel</button>`:""}
@@ -2722,15 +2741,16 @@ function renderAdmin(){
   markingForm.querySelector('#am_save_marking').onclick=async()=>{
     const label=markingForm.querySelector('#am_label').value.trim();
     const value=Number(markingForm.querySelector('#am_price').value)||0;
+    const breeds=[...markingForm.querySelectorAll('[data-marking-breed]')].filter(c=>c.checked).map(c=>c.dataset.markingBreed);
     if(!label){ alert("Give the marking a name first."); return; }
     if(!state.customMarkings) state.customMarkings=[];
     const dupe=state.customMarkings.find(m=>m.label.toLowerCase()===label.toLowerCase() && m.id!==editingMarkingId)
       || GENO_MODIFIERS["Rare Markings"].find(m=>m.label.toLowerCase()===label.toLowerCase());
     if(dupe){ alert("A rare marking with that name already exists."); return; }
     if(editingMarking){
-      editingMarking.label=label; editingMarking.value=value;
+      editingMarking.label=label; editingMarking.value=value; editingMarking.breeds=breeds;
     } else {
-      state.customMarkings.push({id:uid2(), label, value});
+      state.customMarkings.push({id:uid2(), label, value, breeds});
     }
     editingMarkingId=null;
     const status=markingForm.querySelector('#am_save_status');
@@ -2755,6 +2775,7 @@ function renderAdmin(){
         <div style="flex:1;">
           <div style="font-weight:bold;">${m.label}</div>
           <div class="small" style="opacity:.8;">+฿${m.value.toLocaleString()}</div>
+          <div class="small" style="opacity:.6;">${m.breeds&&m.breeds.length?`Restricted to: ${m.breeds.map(b=>breedDisplayName(b)).join(", ")}`:"All breeds"}</div>
         </div>
         <button class="secondary" data-edit-marking="${m.id}" style="font-size:.96em;padding:3px 10px;margin-top:0;">Edit</button>
         <button class="danger" data-remove-marking="${m.id}" style="font-size:.96em;padding:3px 10px;margin-top:0;">Remove</button>
@@ -2948,13 +2969,6 @@ const GENO_MODIFIERS = {
     {label:"Dom White", value:1200},
     {label:"Vitiligo", value:900},
   ],
-  "Line Features": [
-    {label:"Jewel Line — Glossy Coat", value:5000},
-    {label:"Hallowed Line — Silken", value:9000},
-    {label:"Light Years Line — Indigo Eyes", value:9000},
-    {label:"Circe Line — Circe Ears", value:9000},
-    {label:"Wolf Line — Unrelated Bleu", value:9000},
-  ],
 };
 
 // A couple of Rare Markings only make sense on top of a specific base
@@ -2976,13 +2990,6 @@ function markingMeetsGeneRequirement(label, hasCodeFn){
   if(!req) return true;
   return req.codes.some(c=>hasCodeFn(req.locus, c));
 }
-
-// Breeds (by lowercased name) whose horses can access the "Line Features"
-// group of rare markings/traits. Line Features are ILB-line-exclusive, so
-// they're hidden from the picker entirely unless the selected breed is one
-// of these — everything else in GENO_MODIFIERS is a universal mutation
-// available to every breed.
-const LINE_FEATURE_BREEDS = ["irish lightblood"];
 
 const GENETIC_LOCI = [
   { key:"extension", label:"Extension (E) — base pigment", base:true,
@@ -3313,7 +3320,7 @@ const BREED_GENETICS = {
   // lines do exist as a rarer separately-registered variant. Rather than
   // locking the breed to black only, Extension/Agouti are left open here —
   // a flavor note nudges toward black being the norm without blocking fun.
-  "friesian":        ["sooty","sabino1","flaxen"],
+  "friesian":        ["sooty","flaxen"],
   // Haflingers can't carry the black gene at all — Extension is fixed to
   // ee (chestnut-based) — but every Agouti genotype is still selectable;
   // since Agouti only visibly expresses on black-based horses anyway, all
