@@ -2998,7 +2998,7 @@ const GENETIC_LOCI = [
       {code:"Ee", desc:"Black-based (carries red)"},
       {code:"ee", desc:"Red-based / Chestnut"},
     ]},
-  // Dominance hierarchy: A+ (wild-type) > A (bay) > At (seal brown) > a (black).
+  // Dominance hierarchy: A+ (wild-type) > A (bay) > At (seal bay) > a (black).
   // A+ is the "wild" allele — on chestnut (ee) it's silent (just Chestnut, same
   // as if it weren't there at all — see computeBaseColor), but on any
   // black-based horse (EE/Ee) it produces Wild Bay, the base of the whole
@@ -3014,10 +3014,10 @@ const GENETIC_LOCI = [
       {code:"AA", desc:"Chestnut / Bay"},
       {code:"Aa", desc:"Chestnut / Bay"},
       {code:"aa", desc:"Black"},
-      {code:"AtA", desc:"Liver Chestnut / Seal Brown"},
-      {code:"Ata", desc:"Liver Chestnut / Seal Brown"},
-      {code:"AtAt", desc:"Black Chestnut / Seal Brown (homozygous)"},
-      {code:"Atat", desc:"Liver Chestnut / Seal Brown"},           
+      {code:"AtA", desc:"Liver Chestnut / Seal Bay"},
+      {code:"Ata", desc:"Liver Chestnut / Seal Bay"},
+      {code:"AtAt", desc:"Black Chestnut / Seal Bay (homozygous)"},
+      {code:"Atat", desc:"Liver Chestnut / Seal Bay"},           
     ]},
   { key:"sooty", label:"Sooty (Sty)",
     options:[
@@ -3031,11 +3031,26 @@ const GENETIC_LOCI = [
       {code:"Pngpng", desc:"Pangare", price:100},
       {code:"PngPng", desc:"Pangare (homozygous)", price:100},
     ]},
-  { key:"cream", label:"Cream (Cr)",
+  // Cream and Pearl are not two genes — they are two alleles of the SAME locus
+  // (MATP / SLC45A2), alongside the non-dilute wild-type "n". A horse carries
+  // exactly two of {Cr, prl, n}, which is why "one Cream AND two Pearls" can
+  // never occur. The six real genotypes:
+  //
+  //   nn      no dilution
+  //   Crn     one Cream   — Palomino / Buckskin / Smoky Black
+  //   CrCr    two Creams  — Cremello / Perlino / Smoky Cream
+  //   prln    one Pearl   — carried, invisible on its own
+  //   prlprl  two Pearls  — Apricot / Amber Pearl / Black Pearl
+  //   Crprl   one of each — a "pseudo-double dilute": Palomino Pearl looks like
+  //                         a Cremello, Buckskin Pearl looks like a Perlino
+  { key:"creampearl", label:"Cream & Pearl (Cr / prl) — one locus",
     options:[
-      {code:"crcr", desc:"No Cream", price:0},
-      {code:"Crcr", desc:"Single Cream (Palomino / Buckskin / Smoky Black)", price:100},
+      {code:"nn", desc:"No Cream or Pearl", price:0},
+      {code:"Crn", desc:"Single Cream (Palomino / Buckskin / Smoky Black)", price:100},
       {code:"CrCr", desc:"Double Cream (Cremello / Perlino / Smoky Cream)", price:500},
+      {code:"prln", desc:"Pearl carrier (no visible dilution)", price:150},
+      {code:"prlprl", desc:"Double Pearl (Apricot / Amber Pearl / Black Pearl)", price:400},
+      {code:"Crprl", desc:"Cream + Pearl (Palomino Pearl / Buckskin Pearl / Smoky Black Pearl)", price:500},
     ]},
   { key:"dun", label:"Dun (D)",
     options:[
@@ -3048,12 +3063,6 @@ const GENETIC_LOCI = [
       {code:"chch", desc:"No Champagne", price:0},
       {code:"Chch", desc:"Champagne", price:700},
       {code:"ChCh", desc:"Champagne (homozygous)", price:700},
-    ]},
-  { key:"pearl", label:"Pearl (Prl)",
-    options:[
-      {code:"prlprl", desc:"No Pearl", price:0},
-      {code:"Prlprl", desc:"Pearl (carrier)", price:150},
-      {code:"PrlPrl", desc:"Pearl (Apricot dilute)", price:400},
     ]},
   // Silver and Flaxen can each be CARRIED on either base color, but only
   // VISUALLY EXPRESSED on one: Silver shows on black-based horses
@@ -3192,9 +3201,28 @@ function mutationsFor(breed, locusKey){
 // always be read from (instead of locus.options directly) anywhere a
 // gene-cell's dropdown is built or a selected code needs to be resolved
 // back to a description/price, so overrides show up transparently.
+function breedLociFor(breed){
+  const key=(breed||"").trim().toLowerCase();
+  const custom=(state.customBreeds||[]).find(b=>(b.name||"").trim().toLowerCase()===key);
+  return custom ? custom.loci : breedLociList(BREED_GENETICS[key]);
+}
+
 function getLocusOptions(locus, breed){
   const muts=mutationsFor(breed, locus.key);
   let options = muts.length ? [...locus.options, ...muts.flatMap(m=>m.options.map(o=>({...o})))] : locus.options;
+  // Cream and Pearl share the "creampearl" locus, but many breeds carry only
+  // one of them (Andalusians have Pearl and no Cream; Appaloosas the reverse).
+  // Hide any genotype needing an allele the breed cannot have.
+  if(locus.key==="creampearl"){
+    const list=breedLociFor(breed);
+    const hasCream = !list || list.includes("cream");
+    const hasPearl = !list || list.includes("pearl");
+    options = options.filter(o=>{
+      if(/Cr/.test(o.code)  && !hasCream) return false;
+      if(/prl/.test(o.code) && !hasPearl) return false;
+      return true;
+    });
+  }
   const restrictions=getAlleleRestrictions(breed);
   const allowedCodes=restrictions && restrictions[locus.key];
   if(allowedCodes) options = options.filter(o=>allowedCodes.includes(o.code));
@@ -3232,10 +3260,10 @@ function computeBaseColor(extension, agouti){
   const blackBased = extension==="EE" || extension==="Ee";
   const a = agouti==="AAt" ? "AA" : agouti;
   // AtA, Ata, and Atat are all het/mixed At combinations — their allele
-  // descriptions all read "Liver Chestnut / Seal Brown", so all three
+  // descriptions all read "Liver Chestnut / Seal Bay", so all three
   // resolve the same way here. Only AtAt (homozygous At) is the darker
-  // "Black Chestnut / Seal Brown" tier.
-  const sealBrown = ["AtA","Ata","Atat"];
+  // "Black Chestnut / Seal Bay" tier.
+  const sealBay = ["AtA","Ata","Atat"];
   // A+ is dominant over everything else at this locus, so any genotype
   // carrying it resolves to Wild Bay on a black-based horse. A+At still
   // carries one copy of At, which keeps darkening a *chestnut* coat (At's
@@ -3249,10 +3277,10 @@ function computeBaseColor(extension, agouti){
 
   if(!blackBased){
     if(a==="AtAt") return {label:"Black Chestnut", price:600};
-    if(sealBrown.includes(a)) return {label:"Liver Chestnut", price:600};
+    if(sealBay.includes(a)) return {label:"Liver Chestnut", price:600};
     return {label:"Chestnut", price:700};
   }
-  if(a==="AtAt" || sealBrown.includes(a)) return {label:"Seal Brown", price:600};
+  if(a==="AtAt" || sealBay.includes(a)) return {label:"Seal Bay", price:600};
   if(a==="aa") return {label:"Black", price:500};
   return {label:"Bay", price:500};
 }
@@ -3380,9 +3408,14 @@ function getAllowedLoci(breed){
   // Breed lists were only ever written with "silver" in mind, so carry
   // "flaxen" along automatically rather than requiring every breed entry
   // to be edited by hand.
-  const list = restricted.includes("silver") && !restricted.includes("flaxen")
+  let list = restricted.includes("silver") && !restricted.includes("flaxen")
     ? [...restricted, "flaxen"]
     : restricted;
+  // Cream and Pearl were merged into the single "creampearl" locus, since they
+  // are alleles of one gene. Breed lists still name them separately, so a breed
+  // allowing either one gets the merged locus; getLocusOptions() then hides
+  // whichever alleles that breed shouldn't be able to carry.
+  if(list.includes("cream") || list.includes("pearl")) list = [...list, "creampearl"];
   return optionalKeys.filter(k=>list.includes(k));
 }
 
@@ -3412,15 +3445,15 @@ const COLOR_BASE_KEY = {
   "Black Chestnut": "chestnut",
   "Wild Bay":       "bay",      // resolved as Bay, then tagged "Wild"
   "Bay":            "bay",
-  "Seal Brown":     "seal",
+  "Seal Bay":       "seal",
   "Black":          "black",
 };
 
 const COLOR_TABLES = {
   // one Cream, no Pearl
-  singleCream: { chestnut:"Palomino", bay:"Buckskin", seal:"Brown Buckskin", black:"Smoky Black" },
+  singleCream: { chestnut:"Palomino", bay:"Buckskin", seal:"Seal Buckskin", black:"Smoky Black" },
   // two Creams — heavy dilution washes agouti out, so seal collapses onto bay
-  doubleCream: { chestnut:"Cremello", bay:"Pearlino", seal:"Pearlino", black:"Smoky Cream" },
+  doubleCream: { chestnut:"Cremello", bay:"Perlino", seal:"Perlino", black:"Smoky Cream" },
   // one Cream + at least one Pearl (pseudo-double dilute, distinct from Pearlino)
   creamPearl:  { chestnut:"Palomino Pearl", bay:"Buckskin Pearl", seal:"Buckskin Pearl", black:"Smoky Black Pearl" },
   // two Pearls, no Cream
@@ -3432,13 +3465,13 @@ const COLOR_TABLES = {
   // Champagne + two Pearls
   champPearl:  { chestnut:"Gold Champagne Pearl", bay:"Amber Champagne Pearl", seal:"Sable Champagne Pearl", black:"Classic Champagne Pearl" },
   // Dun on an otherwise undiluted base
-  dunBase:     { chestnut:"Red Dun", bay:"Bay Dun", seal:"Brown Dun", black:"Grullo" },
+  dunBase:     { chestnut:"Red Dun", bay:"Bay Dun", seal:"Seal Dun", black:"Grullo" },
   // Dun stacked on a single-cream dilute earns its own portmanteau
   dunCream:    { chestnut:"Dunalino", bay:"Dunskin", seal:"Dunskin", black:"Smoky Grullo" },
-  // Silver on an otherwise undiluted base. Taffy is the silver seal brown.
+  // Silver on an otherwise undiluted base. Taffy is the silver seal bay.
   silverBase:  { bay:"Silver Bay", seal:"Taffy", black:"Silver Black" },
   // Roan on an otherwise undiluted base
-  roanBase:    { chestnut:"Red Roan", bay:"Bay Roan", seal:"Brown Roan", black:"Blue Roan" },
+  roanBase:    { chestnut:"Red Roan", bay:"Bay Roan", seal:"Seal Roan", black:"Blue Roan" },
 };
 
 function computeColorName(selections, allowed, baseLabel){
@@ -3446,11 +3479,13 @@ function computeColorName(selections, allowed, baseLabel){
   const on = (key, offCode) =>
     allowed.has(key) && selections[key] && selections[key] !== offCode;
 
-  const creamCode = allowed.has("cream") ? selections.cream : "crcr";
-  const cream = creamCode === "CrCr" ? 2 : creamCode === "Crcr" ? 1 : 0;
-
-  const pearlCode = allowed.has("pearl") ? selections.pearl : "prlprl";
-  const pearl = pearlCode === "PrlPrl" ? 2 : pearlCode === "Prlprl" ? 1 : 0;
+  // Cream and Pearl are two alleles of ONE locus (MATP/SLC45A2), so a horse
+  // carries exactly two of {Cr, prl, n}. Count each allele out of the code.
+  //   nn     0 cream 0 pearl   Crn    1 cream        CrCr   2 cream
+  //   prln   1 pearl (silent)  prlprl 2 pearl        Crprl  1 cream + 1 pearl
+  const cpCode = allowed.has("creampearl") ? (selections.creampearl || "nn") : "nn";
+  const cream = (cpCode.match(/Cr/g)  || []).length;
+  const pearl = (cpCode.match(/prl/g) || []).length;
 
   const isWild = baseLabel === "Wild Bay";
   const key = COLOR_BASE_KEY[baseLabel] || "bay";
@@ -3540,8 +3575,8 @@ function computeGenoResult(selections, breed){
   // Genes folded into the single color name by computeColorName(). They still
   // record in the genotype string and still price as modifiers — they just
   // aren't listed separately in the phenotype anymore.
-  const COLOR_LOCI = new Set(["sooty","pangare","cream","dun","champagne",
-                              "pearl","silver","flaxen","grey","roan"]);
+  const COLOR_LOCI = new Set(["sooty","pangare","creampearl","dun",
+                              "champagne","silver","flaxen","grey","roan"]);
   const phenoParts = [];
   const patternParts = [];
   const modifiers = [];
