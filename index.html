@@ -3386,14 +3386,170 @@ function getAllowedLoci(breed){
   return optionalKeys.filter(k=>list.includes(k));
 }
 
+// ---------------------------------------------------------------------------
+// computeColorName(): turns the base coat + every dilution/modifier gene into
+// the single name people actually use for that horse — "Buckskin", "Pearlino",
+// "Taffy", "Dunskin" — instead of listing each locus separately.
+//
+// computeBaseColor() has already resolved Extension + Agouti down to one of
+// seven labels, so this function starts from that and layers dilutions on top.
+//
+// WILD BAY RULE: per the Agouti notes above, every dilution that acts on Bay
+// acts identically on Wild Bay, "just tagged Wild". So Wild Bay is resolved
+// through the ordinary Bay tables and then prefixed — Buckskin -> Wild
+// Buckskin, Amber Champagne -> Wild Amber Champagne, Bay Dun -> Wild Bay Dun.
+// Adding a new bay dilution below automatically gives you its wild twin.
+//
+// ORDER MATTERS: Dun resolves before Silver so that black + silver + dun
+// reads "Silver Grullo" rather than "Silver Black Dun". Grey is applied last
+// because it eventually covers everything else up.
+// ---------------------------------------------------------------------------
+
+// Which base label maps to which column in the tables below.
+const COLOR_BASE_KEY = {
+  "Chestnut":       "chestnut",
+  "Liver Chestnut": "chestnut",
+  "Black Chestnut": "chestnut",
+  "Wild Bay":       "bay",      // resolved as Bay, then tagged "Wild"
+  "Bay":            "bay",
+  "Seal Brown":     "seal",
+  "Black":          "black",
+};
+
+const COLOR_TABLES = {
+  // one Cream, no Pearl
+  singleCream: { chestnut:"Palomino", bay:"Buckskin", seal:"Brown Buckskin", black:"Smoky Black" },
+  // two Creams — heavy dilution washes agouti out, so seal collapses onto bay
+  doubleCream: { chestnut:"Cremello", bay:"Pearlino", seal:"Pearlino", black:"Smoky Cream" },
+  // one Cream + at least one Pearl (pseudo-double dilute, distinct from Pearlino)
+  creamPearl:  { chestnut:"Palomino Pearl", bay:"Buckskin Pearl", seal:"Buckskin Pearl", black:"Smoky Black Pearl" },
+  // two Pearls, no Cream
+  doublePearl: { chestnut:"Apricot", bay:"Amber Pearl", seal:"Sable Pearl", black:"Black Pearl" },
+  // Champagne, no Cream
+  champagne:   { chestnut:"Gold Champagne", bay:"Amber Champagne", seal:"Sable Champagne", black:"Classic Champagne" },
+  // Champagne + Cream
+  champCream:  { chestnut:"Gold Cream Champagne", bay:"Amber Cream Champagne", seal:"Sable Cream Champagne", black:"Classic Cream Champagne" },
+  // Champagne + two Pearls
+  champPearl:  { chestnut:"Gold Champagne Pearl", bay:"Amber Champagne Pearl", seal:"Sable Champagne Pearl", black:"Classic Champagne Pearl" },
+  // Dun on an otherwise undiluted base
+  dunBase:     { chestnut:"Red Dun", bay:"Bay Dun", seal:"Brown Dun", black:"Grullo" },
+  // Dun stacked on a single-cream dilute earns its own portmanteau
+  dunCream:    { chestnut:"Dunalino", bay:"Dunskin", seal:"Dunskin", black:"Smoky Grullo" },
+  // Silver on an otherwise undiluted base. Taffy is the silver seal brown.
+  silverBase:  { bay:"Silver Bay", seal:"Taffy", black:"Silver Black" },
+  // Roan on an otherwise undiluted base
+  roanBase:    { chestnut:"Red Roan", bay:"Bay Roan", seal:"Brown Roan", black:"Blue Roan" },
+};
+
+function computeColorName(selections, allowed, baseLabel){
+  // A locus only counts if the breed allows it and something is selected.
+  const on = (key, offCode) =>
+    allowed.has(key) && selections[key] && selections[key] !== offCode;
+
+  const creamCode = allowed.has("cream") ? selections.cream : "crcr";
+  const cream = creamCode === "CrCr" ? 2 : creamCode === "Crcr" ? 1 : 0;
+
+  const pearlCode = allowed.has("pearl") ? selections.pearl : "prlprl";
+  const pearl = pearlCode === "PrlPrl" ? 2 : pearlCode === "Prlprl" ? 1 : 0;
+
+  const isWild = baseLabel === "Wild Bay";
+  const key = COLOR_BASE_KEY[baseLabel] || "bay";
+  const redBased = key === "chestnut";
+  const pick = (table) => table[key];
+
+  const champagne = on("champagne", "chch");
+  const dun       = on("dun", "dd");
+  const sooty     = on("sooty", "stysty");
+  const pangare   = on("pangare", "pngpng");
+  const roan      = on("roan", "rnrn");
+  const grey      = on("grey", "gg");
+  // Silver and Flaxen can be CARRIED on the wrong base without showing. A
+  // chestnut carrying Silver is still just a Chestnut, so an unexpressed
+  // carrier must not affect the name at all.
+  const silver    = on("silver", "zz") && !redBased;
+  const flaxen    = on("flaxen", "ff") &&  redBased;
+
+  // --- core: base + cream / pearl / champagne ------------------------------
+  let core;
+  let diluted = true;   // flipped to false in the plain-base branch
+
+  if (champagne) {
+    if (cream >= 1)       core = pick(COLOR_TABLES.champCream);
+    else if (pearl === 2) core = pick(COLOR_TABLES.champPearl);
+    else                  core = pick(COLOR_TABLES.champagne);
+  } else if (cream === 2) {
+    core = pick(COLOR_TABLES.doubleCream);
+  } else if (cream === 1 && pearl >= 1) {
+    core = pick(COLOR_TABLES.creamPearl);
+  } else if (cream === 1) {
+    core = pick(COLOR_TABLES.singleCream);
+  } else if (pearl === 2) {
+    core = pick(COLOR_TABLES.doublePearl);
+  } else {
+    // Undiluted. Keep computeBaseColor's own shade label, which already
+    // encodes Liver / Black Chestnut from Agouti. Wild Bay becomes plain
+    // "Bay" here and gets its "Wild" tag back at the end.
+    core = isWild ? "Bay" : baseLabel;
+    diluted = false;
+  }
+
+  // --- Flaxen: red pigment only -------------------------------------------
+  if (flaxen && !diluted) core = "Flaxen " + core;
+
+  // --- Dun (before Silver, so black+silver+dun = Silver Grullo) ------------
+  if (dun) {
+    if (!diluted && !flaxen)                        core = pick(COLOR_TABLES.dunBase);
+    else if (!champagne && cream === 1 && pearl === 0) core = pick(COLOR_TABLES.dunCream);
+    else                                            core = core + " Dun";
+  }
+
+  // --- Silver: black pigment only ------------------------------------------
+  if (silver) {
+    if (!diluted && !dun) core = pick(COLOR_TABLES.silverBase);
+    else                  core = "Silver " + core;
+  }
+
+  // --- Roan -----------------------------------------------------------------
+  if (roan) {
+    if (!diluted && !dun && !silver && !flaxen) core = pick(COLOR_TABLES.roanBase);
+    else                                        core = core + " Roan";
+  }
+
+  // --- Wild Bay tag. Applied to the finished color, before Sooty, so the
+  // result is "Sooty Wild Buckskin" and not "Wild Sooty Buckskin".
+  if (isWild && !/^Wild\b/.test(core)) core = "Wild " + core;
+
+  // --- Sooty ----------------------------------------------------------------
+  if (sooty) core = "Sooty " + core;
+
+  // --- Pangare ---------------------------------------------------------------
+  if (pangare) core = core + " with Pangare";
+
+  // --- Grey covers everything, so it wraps rather than replaces ---------------
+  if (grey) {
+    const greyDesc = selections.grey === "GG" ? "Dappled Grey" : "Fleabitten Grey";
+    core = `${greyDesc} (was ${core})`;
+  }
+
+  return core;
+}
+
 function computeGenoResult(selections, breed){
   const allowed = new Set(["extension","agouti", ...getAllowedLoci(breed)]);
   const base = computeBaseColor(selections.extension, selections.agouti);
-  const phenoParts = [base.label];
+  // Genes folded into the single color name by computeColorName(). They still
+  // record in the genotype string and still price as modifiers — they just
+  // aren't listed separately in the phenotype anymore.
+  const COLOR_LOCI = new Set(["sooty","pangare","cream","dun","champagne",
+                              "pearl","silver","flaxen","grey","roan"]);
+  const phenoParts = [];
+  const patternParts = [];
   const modifiers = [];
   const genoParts = [];
   if(selections.extension) genoParts.push(selections.extension);
-  if(selections.agouti && selections.extension!=="ee") genoParts.push(selections.agouti);
+  // Agouti is always recorded now: on chestnut it no longer expresses as bay,
+  // but it still sets the shade (Liver / Black Chestnut) and passes to foals.
+  if(selections.agouti) genoParts.push(selections.agouti);
 
   allLoci().filter(l=>!l.base).forEach(locus=>{
     if(!allowed.has(locus.key)) return;
@@ -3408,7 +3564,7 @@ function computeGenoResult(selections, breed){
     if(!opt) return;
     genoParts.push(code);
     if(opt.price>0){
-      phenoParts.push(opt.desc);
+      if(!COLOR_LOCI.has(locus.key)) patternParts.push(opt.desc);
       modifiers.push({label:opt.desc, value:opt.price});
     }
   });
@@ -3419,7 +3575,7 @@ function computeGenoResult(selections, breed){
     if(selections.patn1 && selections.patn1!=="patn1patn1") genoParts.push(selections.patn1);
     if(selections.patn2 && selections.patn2!=="patn2patn2") genoParts.push(selections.patn2);
     if(appy){
-      phenoParts.push(appy.label);
+      patternParts.push(appy.label);
       modifiers.push({label:appy.label, value:appy.price});
     }
   }
@@ -3434,7 +3590,6 @@ function computeGenoResult(selections, breed){
     genoParts.push(selections.silver);
     const opt = GENETIC_LOCI.find(l=>l.key==="silver").options.find(o=>o.code===selections.silver);
     if(opt && opt.price>0 && blackBased){
-      phenoParts.push(opt.desc);
       modifiers.push({label:opt.desc, value:opt.price});
     }
   }
@@ -3442,10 +3597,13 @@ function computeGenoResult(selections, breed){
     genoParts.push(selections.flaxen);
     const opt = GENETIC_LOCI.find(l=>l.key==="flaxen").options.find(o=>o.code===selections.flaxen);
     if(opt && opt.price>0 && redBased){
-      phenoParts.push(opt.desc);
       modifiers.push({label:opt.desc, value:opt.price});
     }
   }
+
+  // The color name comes first, then any white pattern / appaloosa markings.
+  phenoParts.push(computeColorName(selections, allowed, base.label));
+  patternParts.forEach(p=>phenoParts.push(p));
 
   return {
     genotype: genoParts.join(" "),
