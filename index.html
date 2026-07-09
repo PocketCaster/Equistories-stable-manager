@@ -3077,8 +3077,8 @@ const GENETIC_LOCI = [
     ]},
   // Cream and Pearl are not two genes — they are two alleles of the SAME locus
   // (MATP / SLC45A2), alongside the non-dilute wild-type "n". A horse carries
-  // exactly two of {Cr, prl, n}, which is why "one Cream AND two Pearls" can
-  // never occur. The six real genotypes:
+  // exactly two of {Cr, Prl, n}, which is why "one Cream AND two Pearls" can
+  // never occur. The six real genotypes (n written first on single alleles):
   //
   //   nn      no dilution
   //   nCr     one Cream   — Palomino / Buckskin / Smoky Black
@@ -3087,7 +3087,7 @@ const GENETIC_LOCI = [
   //   PrlPrl  two Pearls  — Apricot / Amber Pearl / Black Pearl
   //   CrPrl   one of each — a "pseudo-double dilute": Palomino Pearl looks like
   //                         a Cremello, Buckskin Pearl looks like a Perlino
-  { key:"creampearl", label:"Cream & Pearl (Cr / prl) — one locus",
+  { key:"creampearl", label:"Cream & Pearl (Cr / Prl) — one locus",
     options:[
       {code:"nn", desc:"No Cream or Pearl", price:0},
       {code:"nCr", desc:"Single Cream (Palomino / Buckskin / Smoky Black)", price:100},
@@ -3263,7 +3263,7 @@ function getLocusOptions(locus, breed){
     const hasPearl = !list || list.includes("pearl");
     options = options.filter(o=>{
       if(/Cr/.test(o.code)  && !hasCream) return false;
-      if(/prl/.test(o.code) && !hasPearl) return false;
+      if(/Prl/.test(o.code) && !hasPearl) return false;
       return true;
     });
   }
@@ -3524,7 +3524,7 @@ function computeColorName(selections, allowed, baseLabel){
     allowed.has(key) && selections[key] && selections[key] !== offCode;
 
   // Cream and Pearl are two alleles of ONE locus (MATP/SLC45A2), so a horse
-  // carries exactly two of {Cr, prl, n}. Count each allele out of the code.
+  // carries exactly two of {Cr, Prl, n}. Count each allele out of the code.
   //   nn     0 cream 0 pearl   nCr    1 cream        CrCr   2 cream
   //   nPrl   1 pearl (silent)  PrlPrl 2 pearl        CrPrl  1 cream + 1 pearl
   const cpCode = allowed.has("creampearl") ? (selections.creampearl || "nn") : "nn";
