@@ -110,6 +110,27 @@
   @media (max-width:380px){
     #app .statgrid { grid-template-columns:1fr; }
   }
+
+  /* Collapsible "Add a Horse" panel. <details> gives us open/close for free,
+     including keyboard support; we only restyle the marker and header. */
+  #app details.collapse > summary {
+    list-style:none; cursor:pointer; display:flex; align-items:center; gap:10px;
+    color:var(--accent); font-family:'Palatino Linotype',Georgia,serif;
+    font-size:1.3em; line-height:1.3; margin:0; padding:2px 0; min-height:44px;
+    user-select:none;
+  }
+  #app details.collapse > summary::-webkit-details-marker { display:none; }
+  #app details.collapse > summary::marker { content:""; }
+  #app details.collapse > summary:focus-visible { outline:2px solid var(--accent); outline-offset:4px; border-radius:4px; }
+  #app details.collapse .chev {
+    display:inline-block; flex:none; width:1em; text-align:center;
+    transition:transform .18s ease; opacity:.85;
+  }
+  #app details.collapse[open] .chev { transform:rotate(90deg); }
+  #app details.collapse .summary-hint { margin-left:auto; font-size:.62em; color:var(--dim); font-family:Georgia,serif; }
+  #app details.collapse[open] .summary-hint { opacity:0; }
+  #app details.collapse > .collapse-body { padding-top:14px; }
+  @media (prefers-reduced-motion:reduce) { #app details.collapse .chev { transition:none; } }
 </style>
 <script>
 (function(){
@@ -1033,11 +1054,21 @@ function renderLoginScreen(app){
 // ROSTER TAB
 // ============================================
 
+// Whether the "Add a Horse" panel is expanded. Lives outside renderRoster()
+// so it survives the full re-render that follows adding a horse.
+let addHorseOpen = false;
+
 function renderRoster(){
   const wrap = el('div');
 
   const form = el('div','card',`
-    <h3>Add a Horse</h3>
+    <details id="nh_details" class="collapse">
+      <summary>
+        <span class="chev" aria-hidden="true">&#9656;</span>
+        <span>Add a Horse</span>
+        <span class="summary-hint">click to expand</span>
+      </summary>
+      <div class="collapse-body">
     <div class="row">
       <div><label>Name</label><input id="nh_name" placeholder="e.g. Banshee" /></div>
       <div><label>Age</label><input id="nh_age" type="number" min="0" value="3" style="max-width:80px;" /></div>
@@ -1081,8 +1112,17 @@ function renderRoster(){
 
     <div id="nh_geno_preview" class="prompt-box" style="margin-top:8px;"></div>
     <button id="nh_add" style="margin-top:10px;">Add to Stable</button>
+      </div>
+    </details>
   `);
   wrap.appendChild(form);
+
+  // render() rebuilds this whole card, so the panel would snap shut every time
+  // a horse is added. Mirror the open/closed state into a variable that
+  // outlives the re-render.
+  const nhDetails=form.querySelector('#nh_details');
+  nhDetails.open=addHorseOpen;
+  nhDetails.addEventListener('toggle',()=>{ addHorseOpen=nhDetails.open; });
 
   const genoSelections={extension:"EE", agouti:"AA"};
   const extraModifiers=[];
@@ -1237,6 +1277,10 @@ function renderRoster(){
       genoBasePrice:geno.genoBasePrice, genoModifiers:allModifiers});
     state.horses.push(h);
     addLog(`${h.name} (${breed}) joined the stable.`);
+    // The panel has done its job — fold it away so the roster below is visible
+    // straight after adding. render() rebuilds the form, and renderRoster()
+    // reads addHorseOpen to decide whether <details> comes back open.
+    addHorseOpen = false;
     saveHorse(h); save(); render();
   };
 
