@@ -784,8 +784,12 @@ function uid2(){ return 't_'+Math.random().toString(36).slice(2,9); }
 
 function getEquippedStatBonus(h, stat){
   let bonus=0;
+  // Equipped tack is stored by id; the items themselves live in the shared
+  // state.tackInventory. (h.tackOwned is a legacy per-horse list, kept here
+  // as a fallback so any older saved data still resolves.)
+  const inv = state.tackInventory || [];
   (h.tackEquipped||[]).forEach(tid=>{
-    const item=(h.tackOwned||[]).find(t=>t.id===tid);
+    const item = inv.find(t=>t.id===tid) || (h.tackOwned||[]).find(t=>t.id===tid);
     if(item && item.stats && item.stats[stat]) bonus += Number(item.stats[stat])||0;
   });
   return bonus;
@@ -1294,7 +1298,7 @@ function renderRoster(){
       const base=h.stats[s]||0, bonus=getEquippedStatBonus(h,s), eff=base+bonus;
       return `<div style="padding:1px 0;white-space:nowrap;flex:0 0 auto;">
         <span style="font-size:.92em;color:var(--dim);">${STAT_LABELS[s]}:</span>
-        <span style="font-size:.92em;font-weight:bold;color:var(--accent);margin-left:4px;">${eff}${bonus?` <span style="color:var(--good);font-weight:normal;">(+${bonus})</span>`:""}</span>
+        <span style="font-size:.92em;font-weight:bold;color:var(--accent);margin-left:4px;" title="${bonus?`Base ${base} + ${bonus} from tack = ${eff}`:`Base ${base}`}">${base}${bonus?` <span style="color:var(--good);font-weight:normal;">(+${bonus})</span>`:""}</span>
       </div>`;
     }).join("");
 
@@ -3742,7 +3746,7 @@ function renderHorseProfilePage(app, h){
     const base=h.stats[s]||0, bonus=getEquippedStatBonus(h,s), eff=base+bonus;
     return `<div style="padding:4px 0;white-space:nowrap;">
       <span style="font-size:1em;color:#b5a392;">${STAT_LABELS[s]}:</span>
-      <span style="font-size:1em;font-weight:bold;color:#c98a3a;margin-left:6px;">${eff}${bonus?` <span style="color:#7a9b6e;font-weight:normal;">(+${bonus})</span>`:""}</span>
+      <span style="font-size:1em;font-weight:bold;color:#c98a3a;margin-left:6px;" title="${bonus?`Base ${base} + ${bonus} from tack = ${eff}`:`Base ${base}`}">${base}${bonus?` <span style="color:#7a9b6e;font-weight:normal;">(+${bonus})</span>`:""}</span>
     </div>`;
   }).join("");
 
