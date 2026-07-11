@@ -159,6 +159,7 @@ const LEVEL_TABLE = {
 
 const ART_EXP = {
   "Uncolored Headshot":1, "Colored Headshot":2,
+  "Uncolored Halfbody":2, "Colored Halfbody":3,
   "Uncolored Fullbody":3, "Colored Fullbody":4,
 };
 
@@ -170,7 +171,8 @@ const BONUS_EXP = {
 const REF_SHEET_EXP = 4;
 
 const TRAININGS = [
-  {id:"bonding",     name:"Bonding / Misc. Art",             stats:{harmony:3},                                    prompt:"Any quiet moment between horse and handler/rider — grooming, feeding, hand-grazing — or any other miscellaneous/extra artwork of your horse that isn't tied to a specific training."},
+  {id:"misc",        name:"Misc. Art (EXP only, no stats)",  stats:{},                                             prompt:"Any random or extra artwork of your horse with no training interaction — standing, grazing, a doodle, a portrait, wearing tack without doing anything. Earns EXP only; adds no stats."},
+  {id:"bonding",     name:"Bonding",                        stats:{harmony:3},                                    prompt:"A quiet moment of connection between horse and handler/rider — grooming, feeding, hand-grazing, groundwork affection. Builds Harmony."},
   {id:"light_hack",  name:"Light Hack",                     stats:{balance:2,gaits:2,harmony:2},                  prompt:"Show a warmup, cool-down, or casual hack under saddle."},
   {id:"transition",  name:"Transition Work",                stats:{harmony:3,gaits:3,strength:3,stamina:3},       prompt:"Show your horse working through upward and downward transitions."},
   {id:"slope",       name:"Working on a Slope",              stats:{stamina:4,strength:4,balance:4},               prompt:"Show your horse walking, trotting, or cantering up or down a slope."},
@@ -1877,7 +1879,8 @@ function renderTraining(){
     const trainEntry={id:uid2(),day:state.log.length+1,type:"training",label,art:artType,lit:litWords?`${litWords} words`:null,bonuses:[...selectedBonuses],exp:expGain,link:link||null,image:uploadedImage,statsDelta:allStats,milestoneIds};
     h.artLog.unshift(trainEntry);
     const statsStr=Object.entries(allStats).map(([s,v])=>`+${v} ${STAT_LABELS[s]}`).join(", ");
-    addLog(`${h.name} — ${label} (${statsStr}) · +${expGain} EXP`);
+    const statsNote=statsStr||"EXP only";
+    addLog(`${h.name} — ${label} (${statsNote}) · +${expGain} EXP`);
 
     res.innerHTML=`<div class="result">⏳ Saving…</div>`;
     // FIX: previously these calls were fired without awaiting or checking
@@ -1888,7 +1891,7 @@ function renderTraining(){
     await save();
 
     if(hOk && entryOk){
-      res.innerHTML=`<div class="result success">✓ Training logged & saved! ${statsStr} · +${expGain} EXP (${sources.join(", ")})</div>`;
+      res.innerHTML=`<div class="result success">✓ Training logged & saved! ${statsNote} · +${expGain} EXP (${sources.join(", ")})</div>`;
     } else {
       res.innerHTML=`<div class="result fail">⚠ Training was recorded here, but saving it to the Stable Data sheet failed. Try again, or check your Stable Data URL in Admin settings.</div>`;
     }
@@ -2195,6 +2198,48 @@ function buildShowLogForm(){
 
 function buildShowHistory(){
   const wrap=el('div');
+
+  // Claim a show ribbon: paste a code from EquiStories Shows to hang a ribbon on
+  // the horse you entered. Uses the normal saveHorse path — same as a local show.
+  const claim=el('div');
+  claim.style.cssText='margin-bottom:16px;padding:12px;border:1px solid #4a392a;border-radius:8px;background:#1c1510;';
+  claim.innerHTML=`
+    <div class="small" style="color:#b5a392;margin-bottom:6px;">Claim a show ribbon</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+      <input id="ribbon_claim_code" type="text" placeholder="Paste the claim code from a show" style="flex:1;min-width:220px;" />
+      <button id="ribbon_claim_btn" class="btn">Add to horse</button>
+    </div>
+    <div id="ribbon_claim_msg" class="small" style="margin-top:6px;color:#5a4a3a;"></div>`;
+  wrap.appendChild(claim);
+  claim.querySelector('#ribbon_claim_btn').onclick=async()=>{
+    const msg=claim.querySelector('#ribbon_claim_msg');
+    const raw=(claim.querySelector('#ribbon_claim_code').value||'').trim();
+    if(!raw){ msg.textContent='Paste a claim code first.'; return; }
+    let data;
+    try{
+      const b64=raw.replace(/-/g,'+').replace(/_/g,'/');
+      data=JSON.parse(decodeURIComponent(escape(atob(b64))));
+    }catch(e){ msg.style.color='#b5533a'; msg.textContent='That code could not be read.'; return; }
+    if(!data || data.v!==1 || !data.horseId || !data.rec){ msg.style.color='#b5533a'; msg.textContent='That is not a ribbon claim code.'; return; }
+    const h=state.horses.find(x=>x.id===data.horseId);
+    if(!h){ msg.style.color='#b5533a'; msg.textContent='That ribbon is for a horse not in your stable. Are you signed into the right account?'; return; }
+    if(!h.compHistory) h.compHistory=[];
+    if(h.compHistory.some(r=>r.id===data.rec.id)){ msg.style.color='#b5533a'; msg.textContent='This ribbon is already on '+h.name+'.'; return; }
+    h.compHistory.unshift(data.rec);
+    msg.style.color='#7a9b6e'; msg.textContent='Adding to '+h.name+'…';
+    const ok=await saveHorse(h);
+    await save();
+    if(ok){
+      addLog(`${h.name} received a ribbon: ${data.rec.difficulty}${data.rec.venue?' at '+data.rec.venue:''}`);
+      msg.textContent=`Ribbon added to ${h.name}'s wall.`;
+      claim.querySelector('#ribbon_claim_code').value='';
+      showMode('history');
+    } else {
+      h.compHistory=h.compHistory.filter(r=>r.id!==data.rec.id);
+      msg.style.color='#b5533a'; msg.textContent='Could not save. Try again.';
+    }
+  };
+
   state.horses.forEach(h=>{
     const history=h.compHistory||[];
     if(!history.length) return;
@@ -3768,6 +3813,14 @@ function renderHorseProfilePage(app, h){
     const item=inv.find(t=>t.id===tid);
     if(!item) return "";
     const s=Object.entries(item.stats||{}).map(([k,v])=>`+${v} ${STAT_LABELS[k]}`).join(", ");
+    if(item.image){
+      return `<div style="display:inline-flex;flex-direction:column;align-items:center;gap:4px;width:150px;">
+        <img src="${item.image}" style="width:150px;height:150px;object-fit:contain;cursor:zoom-in;border:1px solid #3a7a5a;border-radius:6px;background:#15100c;"
+             onclick="openLightbox('${jsStr(item.image)}','${jsStr(item.name)}')" onerror="this.style.display='none';this.nextElementSibling.style.display='block';" />
+        <span class="tag" style="display:none;background:#1a3a2a;color:#a0e8c0;border-color:#3a7a5a;">${item.name}</span>
+        <div class="small" style="text-align:center;color:#a0e8c0;">${item.name}${s?`<br><span style="color:#7a9b6e;">${s}</span>`:""}</div>
+      </div>`;
+    }
     return `<span class="tag" style="background:#1a3a2a;color:#a0e8c0;border-color:#3a7a5a;">${item.name}${s?` (${s})`:""}</span>`;
   }).join(" ")||`<span class="small">Nothing equipped.</span>`;
 
