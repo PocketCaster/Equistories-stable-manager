@@ -170,6 +170,127 @@ const BONUS_EXP = {
 
 const REF_SHEET_EXP = 4;
 
+// ---- RIDER PRESTIGE (Scope A: earn PP, get titles; no stat bonuses yet) ----
+// Each source is a checkbox on a logged rider entry; the entry's PP is the sum
+// of the ones ticked. A rider's total PP is the sum across all their entries.
+const RIDER_PP = {
+  "Art": {
+    "Rider in a personal image":1,
+    "Rider in a collaboration image":2,
+    "Full-body image (stackable)":1,
+    "Rider in group image (3+ riders)":2,
+    "Training or mentoring another rider":2,
+    "Rider in a collaborative show entry":3,
+    "Drawn by someone else (gift/commission)":1,
+  },
+  "Literature": {
+    "Rider in a 500+ word literature piece":1,
+    "Collab literature piece":2,
+    "Main focus / POV in lit (stackable)":1,
+    "Featured in someone else's writing":1,
+    "Show / clinic lit entry":2,
+    "Mentoring / training in lit (500+ words)":2,
+  },
+  "Community & Collabs": {
+    "Collab image/lit (2+ users)":2,
+    "Logged RP scene (per 100 words)":1,
+    "Logged RP 1000+ words":3,
+    "Mentor / mentee drawing or writing":2,
+    "Rider in prompt or community event":1,
+    "Hosting a clinic or event":3,
+  },
+  "Show / Clinic / Event": {
+    "Show or clinic entry":2,
+    "Top 3 in show":1,
+    "Judge's Choice or special ribbon":1,
+    "Collaborative show/clinic entry":3,
+    "Rider intro / interview (lit or art)":1,
+  },
+  "Extras & Bonus": {
+    "Monthly rider prompt / journal":1,
+    "Rider profile / questionnaire":1,
+    "Flashbacks or age-up content":1,
+    "Meme / comic / fun side content":1,
+    "Cameo in another's art/lit":1,
+  },
+};
+
+// Title tiers by total PP. (Perks are intentionally omitted for now — the old
+// show-based perks are being reworked into a training-only model.)
+const RIDER_TITLES = [
+  { min:0,   max:4,        name:"Stablehand",          note:"Just starting — green around the ears." },
+  { min:5,   max:9,        name:"Novice Rider",        note:"Familiar with the reins and stable life." },
+  { min:10,  max:14,       name:"Apprentice Rider",    note:"Gaining confidence in the saddle." },
+  { min:15,  max:19,       name:"Junior Rider",        note:"Actively training and competing." },
+  { min:20,  max:29,       name:"Skilled Rider",       note:"Proficient in technique and discipline." },
+  { min:30,  max:39,       name:"Show Competitor",     note:"Regular in events, a known face on the circuit." },
+  { min:40,  max:49,       name:"Clinic Regular",      note:"Trusted peer in training and learning spaces." },
+  { min:50,  max:64,       name:"Respected Equestrian",note:"Accomplished rider, often asked for advice." },
+  { min:65,  max:79,       name:"Champion Rider",      note:"Proven in competition and reputation." },
+  { min:80,  max:99,       name:"Master Equestrian",   note:"Near-legendary, admired for versatility." },
+  { min:100, max:Infinity, name:"Custom Prestige Title",note:"Awarded by admin — a title all your own." },
+];
+
+function riderTitle(pp){
+  return RIDER_TITLES.find(t=> pp>=t.min && pp<=t.max) || RIDER_TITLES[0];
+}
+function riderPP(rider){
+  return (rider.artLog||[]).reduce((n,e)=> n + (Number(e.pp)||0), 0);
+}
+
+// Stat bonuses granted by the horse's ASSIGNED rider, scaled by the rider's title
+// tier. perImage = added to each stat a training image already grants (so EXP-only
+// Misc art gets nothing). final = a one-time bonus applied once the horse is fully
+// trained (level 10). These are the starting numbers from the Prestige journal —
+// edit any value here and it applies everywhere.
+//   tier index matches RIDER_TITLES order (0 Stablehand … 10 Custom Prestige).
+const RIDER_TIER_BONUS = [
+  { perImage:0, final:0 }, // Stablehand
+  { perImage:1, final:1 }, // Novice
+  { perImage:1, final:1 }, // Apprentice
+  { perImage:1, final:2 }, // Junior
+  { perImage:2, final:2 }, // Skilled
+  { perImage:2, final:3 }, // Show Competitor
+  { perImage:2, final:3 }, // Clinic Regular
+  { perImage:3, final:4 }, // Respected Equestrian
+  { perImage:3, final:4 }, // Champion Rider
+  { perImage:3, final:5 }, // Master Equestrian
+  { perImage:3, final:5 }, // Custom Prestige (100+)
+];
+function riderBonusFor(rider){
+  if(!rider) return { perImage:0, final:0 };
+  const idx = RIDER_TITLES.indexOf(riderTitle(riderPP(rider)));
+  return RIDER_TIER_BONUS[idx] || { perImage:0, final:0 };
+}
+
+// Add the assigned rider's per-image bonus onto a training image's stat gains.
+// Only stats the image ALREADY trains get the bonus, so EXP-only Misc art stays
+// stat-free. Returns a note for the log, or "" if no rider bonus applied.
+function applyRiderTrainingBonus(h, allStats){
+  if(!h.riderId) return "";
+  const rider = state.riders.find(r=>r.id===h.riderId);
+  if(!rider) return "";
+  const per = riderBonusFor(rider).perImage;
+  const keys = Object.keys(allStats);
+  if(per<=0 || !keys.length) return "";
+  keys.forEach(s=> allStats[s]+=per);
+  return `${rider.name} (${riderTitle(riderPP(rider)).name}) +${per}/stat`;
+}
+
+function newRider(data){
+  return {
+    id:'r_'+Math.random().toString(36).slice(2,10),
+    name:data.name||"Unnamed Rider",
+    pronouns:data.pronouns||"",
+    image:data.image||"",       // URL
+    bio:data.bio||"",
+    link:data.link||"",         // ref/profile sheet
+    customTitle:data.customTitle||"",  // only shown at 100+ PP
+    artLog:[],
+    createdAt:new Date().toISOString(),
+  };
+}
+
 const TRAININGS = [
   {id:"misc",        name:"Misc. Art (EXP only, no stats)",  stats:{},                                             prompt:"Any random or extra artwork of your horse with no training interaction — standing, grazing, a doodle, a portrait, wearing tack without doing anything. Earns EXP only; adds no stats."},
   {id:"bonding",     name:"Bonding",                        stats:{harmony:3},                                    prompt:"A quiet moment of connection between horse and handler/rider — grooming, feeding, hand-grazing, groundwork affection. Builds Harmony."},
@@ -271,7 +392,7 @@ const BANK_URL = 'https://script.google.com/macros/s/AKfycby9WLxUPDAPg9EH5aTPATz
 const DEFAULT_STABLE_URL = 'https://script.google.com/macros/s/AKfycbwNF02tC8_U9MjAvJJzjVLNgHUyAf2ND-drxjhQPnOikJdw_seUIIxrYEsTsAlhG-o/exec';
 let STABLE_URL = localStorage.getItem('equi_stable_url') || DEFAULT_STABLE_URL;
 
-let state = { horses:[], log:[], tackInventory:[], customBreeds:[], customGenes:[], loaded:false };
+let state = { horses:[], riders:[], log:[], tackInventory:[], customBreeds:[], customGenes:[], loaded:false };
 // Custom/Created breeds (and custom genes) are shared config, visible to every affiliate
 // regardless of who's logged in — they're stored under this reserved userId
 // in the same Stable Data backend everyone already uses, rather than in any
@@ -649,6 +770,23 @@ async function deleteHorseFromSheets(horseId){
   await stableGas({ action:'deleteHorse', userId:bankAccount.userId, horseId });
 }
 
+// ---- rider persistence (mirrors horses; art log in its own sheet) ----
+async function saveRider(rider){
+  if(!bankAccount.linked || !STABLE_URL) return false;
+  const { artLog, ...riderData } = rider;   // art log saved as separate rows
+  const res = await stableGas({ action:'saveRider', userId:bankAccount.userId, riderId:rider.id, riderJson:JSON.stringify(riderData) });
+  return !!(res && res.success);
+}
+async function saveRiderEntry(rider, entry){
+  if(!bankAccount.linked || !STABLE_URL) return false;
+  const res = await stableGas({ action:'saveRiderArtLogEntry', userId:bankAccount.userId, riderId:rider.id, entryJson:JSON.stringify(entry) });
+  return !!(res && res.success);
+}
+async function deleteRiderFromSheets(riderId){
+  if(!bankAccount.linked || !STABLE_URL) return;
+  await stableGas({ action:'deleteRider', userId:bankAccount.userId, riderId });
+}
+
 // Sell / give a horse to another member. Moves the whole horse — art log, comp
 // history, ribbons, images, stats — into the buyer's stable server-side, then
 // removes it from ours. Requires being signed in (you can only transfer a horse
@@ -709,9 +847,10 @@ async function saveGlobalBreeds(){
 
 async function loadFromSheets(){
   const userId = bankAccount.userId;
-  const [stateRes, horsesRes] = await Promise.all([
+  const [stateRes, horsesRes, ridersRes] = await Promise.all([
     stableGas({ action:'loadStableState', userId }),
     stableGas({ action:'loadStable', userId }),
+    stableGas({ action:'loadRiders', userId }),
     loadGlobalBreeds(),
   ]);
   if(stateRes?.success && stateRes.data){
@@ -721,6 +860,7 @@ async function loadFromSheets(){
     state.log=[]; state.tackInventory=[];
   }
   state.horses = horsesRes?.success ? (horsesRes.data||[]) : [];
+  state.riders = ridersRes?.success ? (ridersRes.data||[]) : [];
   const horsesToFix=[];
   state.horses.forEach(h=>{
     resolveImageRefs(h);
@@ -817,6 +957,9 @@ function newHorse(data){
     compHistory:[],
     ownerName: data.ownerName||"",
     ownerLink: data.ownerLink||"",
+    height: data.height||"",
+    importLink: data.importLink||"",
+    riderId: data.riderId||null,   // assigned primary rider (drives training bonuses)
     riderName: data.riderName||"",
     stableName: data.stableName||"",
     stableLink: data.stableLink||"",
@@ -884,6 +1027,20 @@ function recomputeHorse(h){
     if(entry.milestoneIds) entry.milestoneIds.forEach(id=>{ if(!h.completedMilestones.includes(id)) h.completedMilestones.push(id); });
   });
   applyLevelsFromExp(h, true);
+
+  // Fully-trained bonus: once a horse is level 10, its assigned rider grants a
+  // one-time permanent stat bonus (tier-scaled) to every stat. Applied here so a
+  // recompute is idempotent (stats were reset above) and self-correcting (drops
+  // away if the horse ever falls below 10, or if the rider is removed).
+  h.riderFinalBonus = 0;
+  if(h.level>=10 && h.riderId){
+    const rider = state.riders.find(r=>r.id===h.riderId);
+    const fin = rider ? riderBonusFor(rider).final : 0;
+    if(fin>0){
+      STATS.forEach(s=>{ h.stats[s]=(h.stats[s]||0)+fin; });
+      h.riderFinalBonus = fin;
+    }
+  }
 }
 
 async function editArtLogImage(h, entryId){
@@ -995,9 +1152,9 @@ function render(){
       </div>
     </details>
     <div class="tabs" style="align-items:center;">
-      ${["roster","train","compete","tack","admin"].map(t=>`
+      ${["roster","riders","train","compete","tack","admin"].map(t=>`
         <div class="tab${activeTab===t?' active':''}" data-tab="${t}">
-          ${t==="roster"?"Stable Roster":t==="train"?"Training":t==="compete"?"Competitions":t==="tack"?"Tack Inventory":"Admin"}
+          ${t==="roster"?"Stable Roster":t==="riders"?"Riders":t==="train"?"Training":t==="compete"?"Competitions":t==="tack"?"Tack Inventory":"Admin"}
         </div>`).join("")}
       <div style="flex:1;"></div>
       <span class="small" style="color:var(--dim);margin-right:6px;">${bankAccount.userId}</span>
@@ -1016,13 +1173,14 @@ function render(){
   if(signOutBtn) signOutBtn.onclick=async()=>{
     if(!confirm('Sign out? Your stable data is saved to Google Sheets — sign back in anytime.')) return;
     bankAccount={userId:'',password:'',linked:false};
-    state.horses=[]; state.log=[]; state.tackInventory=[]; state.loaded=false;
+    state.horses=[]; state.riders=[]; state.log=[]; state.tackInventory=[]; state.loaded=false;
     saveBankAccount();
     load();
   };
 
   const content = app.querySelector('#tab-content');
   if(activeTab==="roster")   content.appendChild(renderRoster());
+  else if(activeTab==="riders")   content.appendChild(renderRiders());
   else if(activeTab==="train")   content.appendChild(renderTraining());
   else if(activeTab==="compete") content.appendChild(renderCompete());
   else if(activeTab==="tack")    content.appendChild(renderTackInventory());
@@ -1128,6 +1286,222 @@ function renderLoginScreen(app){
 // so it survives the full re-render that follows adding a horse.
 let addHorseOpen = false;
 
+// ============================================
+// RIDERS TAB
+// ============================================
+let expandedRiderLogs = new Set();   // rider ids whose art log is open
+let openRiderEntry = new Set();      // rider ids whose "log entry" form is open
+
+function riderProgress(pp){
+  const t=riderTitle(pp);
+  if(t.max===Infinity) return { pct:100, toNext:0, next:null };
+  const span=t.max - t.min + 1;
+  const into=pp - t.min;
+  const next=RIDER_TITLES[RIDER_TITLES.indexOf(t)+1];
+  return { pct: Math.min(100, Math.round((into/span)*100)), toNext: (t.max+1)-pp, next };
+}
+
+function renderRiders(){
+  const wrap=el('div');
+
+  // --- add a rider ---
+  const add=el('div','panel');
+  add.style.cssText='margin-bottom:18px;';
+  add.innerHTML=`
+    <h3 style="margin-top:0;">Add a Rider</h3>
+    <div class="small" style="color:#b5a392;margin-bottom:10px;">Riders are characters on your account. They earn <b>Prestige Points (PP)</b> from art, writing, and community activity, and climb through rider titles.</div>
+    <div class="row">
+      <div><label>Name</label><input id="nr_name" placeholder="e.g. Natalia Jones" /></div>
+      <div><label>Pronouns <span style="opacity:.6;font-weight:normal;">(optional)</span></label><input id="nr_pronouns" placeholder="she/her" style="max-width:130px;" /></div>
+      <div style="flex:1;min-width:200px;"><label>Profile image link <span style="opacity:.6;font-weight:normal;">(optional)</span></label><input id="nr_image" placeholder="https://… image address" /></div>
+    </div>
+    <div class="row">
+      <div style="flex:1;min-width:200px;"><label>Reference / profile sheet link <span style="opacity:.6;font-weight:normal;">(optional)</span></label><input id="nr_link" placeholder="https://…" /></div>
+    </div>
+    <div><label>Bio <span style="opacity:.6;font-weight:normal;">(optional)</span></label><textarea id="nr_bio" placeholder="A short description of your rider…" style="min-height:70px;"></textarea></div>
+    <button id="nr_add" class="btn" style="margin-top:10px;">Add Rider</button>`;
+  wrap.appendChild(add);
+  add.querySelector('#nr_add').onclick=async()=>{
+    const name=add.querySelector('#nr_name').value.trim();
+    if(!name){ alert('Give your rider a name.'); return; }
+    const rider=newRider({
+      name,
+      pronouns:add.querySelector('#nr_pronouns').value.trim(),
+      image:add.querySelector('#nr_image').value.trim(),
+      link:add.querySelector('#nr_link').value.trim(),
+      bio:add.querySelector('#nr_bio').value.trim(),
+    });
+    state.riders.push(rider);
+    addLog(`Rider ${rider.name} joined your account.`);
+    await saveRider(rider); await save(); render();
+  };
+
+  if(!state.riders.length){
+    wrap.appendChild(el('div','small','<div style="padding:12px;color:#5a4a3a;">No riders yet — add one above to start earning Prestige.</div>'));
+    return wrap;
+  }
+
+  // --- rider cards ---
+  state.riders.forEach(rider=>{
+    const pp=riderPP(rider);
+    const title=riderTitle(pp);
+    const prog=riderProgress(pp);
+    const showTitle = (pp>=100 && rider.customTitle) ? rider.customTitle : title.name;
+    const logOpen=expandedRiderLogs.has(rider.id);
+    const entryOpen=openRiderEntry.has(rider.id);
+
+    const imgHtml = rider.image
+      ? `<img src="${rider.image}" style="width:120px;height:120px;object-fit:cover;border-radius:8px;border:2px solid var(--accent);cursor:zoom-in;" onclick="openLightbox('${jsStr(rider.image)}','${jsStr(rider.name)}')" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';" /><div class="horse-photo-placeholder" style="width:120px;height:120px;display:none;">🧍</div>`
+      : `<div class="horse-photo-placeholder" style="width:120px;height:120px;">🧍</div>`;
+
+    const card=el('div','horse-card');
+    card.innerHTML=`
+      <div style="display:flex;gap:12px;align-items:flex-start;">
+        <div style="flex:none;">${imgHtml}</div>
+        <div style="flex:1;min-width:0;">
+          <div style="display:flex;align-items:baseline;flex-wrap:wrap;gap:6px;">
+            <span style="font-size:1.25em;color:var(--accent);font-weight:bold;">${rider.name}</span>
+            ${rider.pronouns?`<span class="small" style="color:#8a7a6a;">${rider.pronouns}</span>`:""}
+            <span class="tag" style="background:#2a1a3a;color:#c9a8e8;border-color:#6a4a8a;">${showTitle}</span>
+          </div>
+          <div class="small" style="margin-top:4px;"><b>${pp} PP</b>${prog.next?` · ${prog.toNext} to ${prog.next.name}`:` · top tier`}</div>
+          <div class="expbar-bg" style="margin-top:5px;"><div class="expbar-fill" style="width:${prog.pct}%;background:linear-gradient(90deg,#8a6fb0,#c9a8e8);"></div></div>
+          <div class="small" style="margin-top:4px;color:#8a7a6a;font-style:italic;">${title.note}</div>
+          ${rider.link?`<div class="small" style="margin-top:4px;"><a href="${rider.link}" target="_blank" rel="noopener" style="color:var(--accent);">Reference sheet ↗</a></div>`:""}
+          ${rider.bio?`<div class="small" style="margin-top:6px;">${rider.bio.replace(/</g,'&lt;')}</div>`:""}
+        </div>
+      </div>
+      <div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap;">
+        <button class="btn" data-ract="toggle-entry" data-id="${rider.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">${entryOpen?"Close":"Log art / activity (+PP)"}</button>
+        <button class="secondary" data-ract="toggle-rlog" data-id="${rider.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">${logOpen?"Hide":"Show"} Prestige Log (${(rider.artLog||[]).length})</button>
+        ${pp>=100?`<button class="secondary" data-ract="edit-title" data-id="${rider.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">Custom Title</button>`:""}
+        <button class="secondary" data-ract="edit-rider" data-id="${rider.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">Edit</button>
+        <button class="danger" data-ract="del-rider" data-id="${rider.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">Remove</button>
+      </div>
+      ${entryOpen?riderEntryFormHtml(rider):""}
+      ${logOpen?riderLogHtml(rider):""}
+    `;
+    wrap.appendChild(card);
+  });
+
+  bindRiderCardEvents(wrap);
+  return wrap;
+}
+
+function riderEntryFormHtml(rider){
+  const groups=Object.entries(RIDER_PP).map(([cat,items])=>`
+    <div style="margin-top:8px;">
+      <div class="small" style="color:#c9a8e8;font-weight:bold;">${cat}</div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px;">
+        ${Object.entries(items).map(([label,pp])=>`
+          <label class="pill" style="cursor:pointer;font-size:.95em;">
+            <input type="checkbox" data-pp="${pp}" data-ppsrc="${label.replace(/"/g,'&quot;')}" style="margin-right:6px;" />
+            ${label} <b style="color:#c9a8e8;margin-left:4px;">+${pp}</b>
+          </label>`).join("")}
+      </div>
+    </div>`).join("");
+  return `
+    <div class="artlog-panel" data-rider-entry="${rider.id}" style="margin-top:12px;">
+      <div class="small" style="color:#b5a392;margin-bottom:6px;">Tick everything that applies to this piece. PP for this entry: <b id="rpp_total_${rider.id}" style="color:#c9a8e8;">0</b></div>
+      <div class="row">
+        <div style="flex:1;min-width:200px;"><label>Title / description</label><input class="rpp_label" placeholder="e.g. 'Morning at the barn' or a roleplay title" /></div>
+        <div style="flex:1;min-width:200px;"><label>Link <span style="opacity:.6;font-weight:normal;">(image address or doc)</span></label><input class="rpp_link" placeholder="https://…" /></div>
+      </div>
+      ${groups}
+      <button class="btn rpp_save" style="margin-top:10px;">Log entry (+<span class="rpp_btn_total">0</span> PP)</button>
+    </div>`;
+}
+
+function riderLogHtml(rider){
+  const log=(rider.artLog||[]);
+  if(!log.length) return `<div class="artlog-panel" style="margin-top:12px;"><div class="small">No entries yet.</div></div>`;
+  const rows=[...log].reverse().map(e=>`
+    <div style="border-bottom:1px solid #2a2018;padding:6px 0;">
+      <div style="display:flex;justify-content:space-between;gap:8px;align-items:baseline;">
+        <div><b>${(e.label||'Entry').replace(/</g,'&lt;')}</b> ${e.link?`<a href="${e.link}" target="_blank" rel="noopener" class="small" style="color:var(--accent);">↗</a>`:""}</div>
+        <div class="small" style="color:#c9a8e8;white-space:nowrap;">+${e.pp||0} PP
+          <span data-ract="del-rentry" data-id="${rider.id}" data-entry="${e.id}" style="cursor:pointer;color:#c96a3a;font-weight:bold;margin-left:8px;" title="Delete (removes its PP)">✕</span>
+        </div>
+      </div>
+      ${(e.sources&&e.sources.length)?`<div class="small" style="color:#8a7a6a;">${e.sources.join(" · ")}</div>`:""}
+    </div>`).join("");
+  return `<div class="artlog-panel" style="margin-top:12px;">${rows}</div>`;
+}
+
+function bindRiderCardEvents(wrap){
+  wrap.querySelectorAll('[data-ract="toggle-entry"]').forEach(b=>b.onclick=()=>{
+    const id=b.dataset.id; openRiderEntry.has(id)?openRiderEntry.delete(id):openRiderEntry.add(id); render();
+  });
+  wrap.querySelectorAll('[data-ract="toggle-rlog"]').forEach(b=>b.onclick=()=>{
+    const id=b.dataset.id; expandedRiderLogs.has(id)?expandedRiderLogs.delete(id):expandedRiderLogs.add(id); render();
+  });
+  wrap.querySelectorAll('[data-ract="del-rider"]').forEach(b=>b.onclick=async()=>{
+    const rider=state.riders.find(r=>r.id===b.dataset.id); if(!rider) return;
+    if(!confirm(`Remove rider "${rider.name}"? This deletes their Prestige log too. This cannot be undone.`)) return;
+    state.riders=state.riders.filter(r=>r.id!==rider.id);
+    deleteRiderFromSheets(rider.id); await save(); render();
+  });
+  wrap.querySelectorAll('[data-ract="edit-rider"]').forEach(b=>b.onclick=async()=>{
+    const rider=state.riders.find(r=>r.id===b.dataset.id); if(!rider) return;
+    const name=prompt('Rider name:', rider.name); if(name===null) return;
+    const image=prompt('Profile image link (blank to clear):', rider.image||""); if(image===null) return;
+    const link=prompt('Reference / profile sheet link (blank to clear):', rider.link||""); if(link===null) return;
+    const bio=prompt('Bio (blank to clear):', rider.bio||""); if(bio===null) return;
+    rider.name=name.trim()||rider.name; rider.image=image.trim(); rider.link=link.trim(); rider.bio=bio.trim();
+    await saveRider(rider); await save(); render();
+  });
+  wrap.querySelectorAll('[data-ract="edit-title"]').forEach(b=>b.onclick=async()=>{
+    const rider=state.riders.find(r=>r.id===b.dataset.id); if(!rider) return;
+    const t=prompt('Custom Prestige Title (shown at 100+ PP):', rider.customTitle||""); if(t===null) return;
+    rider.customTitle=t.trim(); await saveRider(rider); await save(); render();
+  });
+  wrap.querySelectorAll('[data-ract="del-rentry"]').forEach(b=>b.onclick=async()=>{
+    const rider=state.riders.find(r=>r.id===b.dataset.id); if(!rider) return;
+    if(!confirm('Delete this entry? Its PP will be removed.')) return;
+    const entryId=b.dataset.entry;
+    rider.artLog=(rider.artLog||[]).filter(e=>e.id!==entryId);
+    if(bankAccount.linked && STABLE_URL){
+      await stableGas({ action:'deleteRiderArtLogEntry', userId:bankAccount.userId, riderId:rider.id, entryId });
+    }
+    await save(); render();
+  });
+
+  // live PP total + save, per open entry form
+  wrap.querySelectorAll('[data-rider-entry]').forEach(form=>{
+    const rid=form.dataset.riderEntry;
+    const recalc=()=>{
+      let sum=0; form.querySelectorAll('input[data-pp]:checked').forEach(c=>sum+=Number(c.dataset.pp)||0);
+      const t1=document.getElementById('rpp_total_'+rid); if(t1) t1.textContent=sum;
+      form.querySelectorAll('.rpp_btn_total').forEach(s=>s.textContent=sum);
+      return sum;
+    };
+    form.querySelectorAll('input[data-pp]').forEach(c=>c.onchange=recalc);
+    form.querySelector('.rpp_save').onclick=async()=>{
+      const rider=state.riders.find(r=>r.id===rid); if(!rider) return;
+      const checked=[...form.querySelectorAll('input[data-pp]:checked')];
+      const pp=checked.reduce((n,c)=>n+(Number(c.dataset.pp)||0),0);
+      if(pp<=0){ alert('Tick at least one PP source.'); return; }
+      const entry={
+        id:'re_'+Math.random().toString(36).slice(2,10),
+        label:form.querySelector('.rpp_label').value.trim()||'Prestige entry',
+        link:form.querySelector('.rpp_link').value.trim(),
+        pp,
+        sources:checked.map(c=>c.dataset.ppsrc),
+        date:new Date().toISOString(),
+      };
+      if(!rider.artLog) rider.artLog=[];
+      rider.artLog.push(entry);
+      addLog(`${rider.name} earned +${pp} PP — ${entry.label}.`);
+      await saveRiderEntry(rider, entry);
+      openRiderEntry.delete(rid); await save(); render();
+    };
+  });
+}
+
+// ============================================
+// RIDER STAT INTEGRATION
+// ============================================
+
 function renderRoster(){
   const wrap = el('div');
 
@@ -1142,6 +1516,8 @@ function renderRoster(){
     <div class="row">
       <div><label>Name</label><input id="nh_name" placeholder="e.g. Banshee" /></div>
       <div><label>Age</label><input id="nh_age" type="number" min="0" value="3" style="max-width:80px;" /></div>
+      <div><label>Height <span style="opacity:.6;font-weight:normal;">(optional)</span></label><input id="nh_height" placeholder="e.g. 16.2 hh" style="max-width:120px;" /></div>
+      <div style="flex:1;min-width:200px;"><label>Import sheet link <span style="opacity:.6;font-weight:normal;">(optional)</span></label><input id="nh_import" placeholder="https://… reference/import sheet" /></div>
       <div><label>Breed</label>
         <select id="nh_breed_select">
           <option value="">— Select a breed —</option>
@@ -1343,7 +1719,9 @@ function renderRoster(){
     const allModifiers=[...geno.genoModifiers, ...allExtras];
     const tags=allExtras.filter(m=>m.genoTag).map(m=>m.genoTag);
     const genotype=tags.length?`${geno.genotype} ${tags.join(" ")}`:geno.genotype;
-    const h=newHorse({name,age,breed,gender,phenotype:geno.phenotype,genotype,
+    const height=form.querySelector('#nh_height')?.value.trim()||"";
+    const importLink=form.querySelector('#nh_import')?.value.trim()||"";
+    const h=newHorse({name,age,breed,gender,phenotype:geno.phenotype,genotype,height,importLink,
       genoBasePrice:geno.genoBasePrice, genoModifiers:allModifiers});
     state.horses.push(h);
     addLog(`${h.name} (${breed}) joined the stable.`);
@@ -1409,9 +1787,15 @@ function renderRoster(){
             <span data-act="view-profile" data-id="${h.id}" style="font-size:1.1em;color:var(--accent);font-weight:bold;text-decoration:none;cursor:pointer;">${h.name}</span>
             <span class="tag">Lvl ${h.level}</span>
             ${(h.badges||[]).map(b=>`<span class="tag" title="${b} Trophy" style="background:#3a2a10;color:#e8c86a;border-color:#c98a3a;">${b}</span>`).join("")}
-            <span data-act="view-profile" data-id="${h.id}" class="small" style="color:var(--accent);cursor:pointer;">Profile Page</span>
           </div>
-          <div class="small">${h.breed} · Age ${h.age} (${h.stage})${h.gender?` · ${h.gender}`:""}</div>
+          <div class="small">${h.breed} · Age ${h.age} (${h.stage})${h.gender?` · ${h.gender}`:""}${h.height?` · ${h.height}`:""}</div>
+          ${h.importLink?`<div class="small"><a href="${h.importLink}" target="_blank" rel="noopener" style="color:var(--accent);">Import sheet ↗</a></div>`:""}
+          <div class="small" style="margin-top:2px;">Rider:
+            <select data-act="assign-rider" data-id="${h.id}" style="width:auto;display:inline-block;font-size:.95em;padding:2px 6px;min-height:0;">
+              <option value="">— none —</option>
+              ${state.riders.map(r=>`<option value="${r.id}"${h.riderId===r.id?' selected':''}>${r.name} · ${riderTitle(riderPP(r)).name}</option>`).join("")}
+            </select>${h.riderFinalBonus?` <span class="tag" style="background:#2a1a3a;color:#c9a8e8;border-color:#6a4a8a;" title="Fully-trained bonus from ${(state.riders.find(r=>r.id===h.riderId)||{}).name||'rider'}">Lvl 10 +${h.riderFinalBonus} all stats</span>`:""}
+          </div>
           <div class="small">EXP: ${h.exp} / ${h.level<10?LEVEL_TABLE[h.level+1].exp:"MAX"}</div>
           <div class="expbar-bg"><div class="expbar-fill" style="width:${pct}%"></div></div>
           <div style="display:flex;flex-wrap:wrap;gap:2px 16px;margin-top:6px;">${statBars}</div>
@@ -1435,6 +1819,7 @@ function renderRoster(){
         <button class="secondary" data-act="toggle-log" data-id="${h.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">${open?"Hide":"Show"} Art Log (${h.artLog.length})</button>
         <button class="secondary" data-act="edit-lineage" data-id="${h.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">Lineage</button>
         <button class="secondary" data-act="edit-worth" data-id="${h.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">Net Worth</button>
+        <button class="secondary" data-act="edit-details" data-id="${h.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">Details</button>
         <button class="danger" data-act="del" data-id="${h.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">Remove</button>
         <button class="secondary" data-act="transfer-horse" data-id="${h.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">Sell / Transfer</button>
       </div>
@@ -1478,6 +1863,21 @@ function renderRoster(){
   });
   wrap.querySelectorAll('[data-act="edit-lineage"]').forEach(b=>b.onclick=()=>showLineageModal(b.dataset.id));
   wrap.querySelectorAll('[data-act="edit-worth"]').forEach(b=>b.onclick=()=>showNetWorthModal(b.dataset.id));
+  wrap.querySelectorAll('[data-act="edit-details"]').forEach(b=>b.onclick=async()=>{
+    const h=state.horses.find(x=>x.id===b.dataset.id); if(!h) return;
+    const height=prompt(`Height for ${h.name} (e.g. "16.2 hh"). Leave blank to clear.`, h.height||"");
+    if(height===null) return;
+    const importLink=prompt(`Import / reference sheet link for ${h.name} (a URL). Leave blank to clear.`, h.importLink||"");
+    if(importLink===null) return;
+    h.height=height.trim(); h.importLink=importLink.trim();
+    await saveHorse(h); await save(); render();
+  });
+  wrap.querySelectorAll('[data-act="assign-rider"]').forEach(sel=>sel.onchange=async()=>{
+    const h=state.horses.find(x=>x.id===sel.dataset.id); if(!h) return;
+    h.riderId = sel.value || null;
+    recomputeHorse(h);              // fully-trained bonus depends on the assigned rider
+    await saveHorse(h); await save(); render();
+  });
   wrap.querySelectorAll('[data-act="view-profile"]').forEach(b=>b.onclick=()=>goToProfile(b.dataset.id));
   wrap.querySelectorAll('[data-act="edit-artlog-img"]').forEach(b=>b.onclick=()=>{
     const h=state.horses.find(x=>x.id===b.dataset.id);
@@ -1927,6 +2327,7 @@ function renderTraining(){
     const label=t2?`${t.name} + ${t2.name}`:t.name;
     const allStats={...t.stats};
     if(t2) Object.entries(t2.stats).forEach(([s,v])=>allStats[s]=(allStats[s]||0)+v);
+    const riderNote=applyRiderTrainingBonus(h, allStats);
     Object.entries(allStats).forEach(([s,v])=>h.stats[s]=(h.stats[s]||0)+v);
 
     const m=MILESTONES[h.stage];
@@ -1946,6 +2347,7 @@ function renderTraining(){
     const litExp=calcLitExp(litWords);
     if(litExp>0){expGain+=litExp; sources.push(`Lit ${litWords}w (+${litExp})`);}
     selectedBonuses.forEach(k=>{if(BONUS_EXP[k]){expGain+=BONUS_EXP[k]; sources.push(`${k} (+${BONUS_EXP[k]})`);}});
+    if(riderNote) sources.push(riderNote);
     h.exp+=expGain;
     checkLevelUp(h);
 
@@ -2515,7 +2917,7 @@ function renderTackInventory(){
       <div><label>Category</label>
         <select id="tk_cat">
           <option>Saddle</option><option>Bridle</option><option>Shoes</option>
-          <option>Boots</option><option>Saddlepad</option><<option>Blanket</option><option>Other</option>
+          <option>Boots</option><option>Saddlepad</option><option>Blanket</option><option>Other</option>
         </select>
       </div>
     </div>
