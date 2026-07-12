@@ -649,6 +649,32 @@ async function deleteHorseFromSheets(horseId){
   await stableGas({ action:'deleteHorse', userId:bankAccount.userId, horseId });
 }
 
+// Sell / give a horse to another member. Moves the whole horse — art log, comp
+// history, ribbons, images, stats — into the buyer's stable server-side, then
+// removes it from ours. Requires being signed in (you can only transfer a horse
+// your own account owns).
+async function transferHorseToMember(h){
+  if(!bankAccount.linked || !bankAccount.userId){ alert('Sign in first — you can only transfer a horse from the account that owns it.'); return; }
+  if(!STABLE_URL){ alert('No Stable Data URL configured.'); return; }
+  const buyer = prompt(`Transfer "${h.name}" to another member.\n\nType the buyer's exact Bank User ID (their username). This moves the whole horse — art log, ribbons, everything — into their stable and removes it from yours.`);
+  if(buyer===null) return;
+  const toId = buyer.trim();
+  if(!toId){ return; }
+  if(toId === bankAccount.userId){ alert('That is your own account.'); return; }
+  if(!confirm(`Transfer "${h.name}" to ${toId}?\n\nThis cannot be undone. The horse and its entire history leave your stable and become theirs.`)) return;
+
+  const res = await stableGas({ action:'transferHorse', horseId:h.id, fromUserId:bankAccount.userId, toUserId:toId });
+  if(!res || res.success===false){
+    alert('Transfer failed: ' + (res?.error || 'no response from the stable.') + '\n\nThe horse is unchanged and still yours.');
+    return;
+  }
+  // Success: drop it from our local stable and refresh.
+  state.horses = state.horses.filter(x=>x.id!==h.id);
+  addLog(`Transferred ${h.name} to ${toId}.`);
+  await save(); render();
+  alert(`"${h.name}" has been transferred to ${toId}. It's now in their stable, art log and all.`);
+}
+
 async function loadGlobalBreeds(){
   if(!STABLE_URL){ state.customBreeds=[]; state.customGenes=[]; state.customMarkings=[]; state.customMutations=[]; return; }
   const res = await stableGas({ action:'loadStableState', userId:GLOBAL_CONFIG_USER_ID });
@@ -1400,6 +1426,7 @@ function renderRoster(){
         <button class="secondary" data-act="edit-lineage" data-id="${h.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">Lineage</button>
         <button class="secondary" data-act="edit-worth" data-id="${h.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">Net Worth</button>
         <button class="danger" data-act="del" data-id="${h.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">Remove</button>
+        <button class="secondary" data-act="transfer-horse" data-id="${h.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">Sell / Transfer</button>
       </div>
       ${artLogHtml}
     `;
@@ -1419,6 +1446,10 @@ function renderRoster(){
     state.horses=state.horses.filter(x=>x.id!==delId);
     deleteHorseFromSheets(delId);
     save(); render();
+  });
+  wrap.querySelectorAll('[data-act="transfer-horse"]').forEach(b=>b.onclick=()=>{
+    const h=state.horses.find(x=>x.id===b.dataset.id);
+    if(h) transferHorseToMember(h);
   });
   wrap.querySelectorAll('[data-act="equip-select"]').forEach(sel=>sel.onchange=()=>{
     const h=state.horses.find(x=>x.id===sel.dataset.id);
