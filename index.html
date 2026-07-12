@@ -661,7 +661,17 @@ async function transferHorseToMember(h){
   const toId = buyer.trim();
   if(!toId){ return; }
   if(toId === bankAccount.userId){ alert('That is your own account.'); return; }
-  if(!confirm(`Transfer "${h.name}" to ${toId}?\n\nThis cannot be undone. The horse and its entire history leave your stable and become theirs.`)) return;
+
+  // Verify the buyer is a real Bank account first — the Stable can't see the
+  // Players sheet, so this check has to happen here against the bank.
+  const check = await gasPost({ action:'checkBalance', userId:toId });
+  if(!check || check.success===false){
+    alert(`No bank account found for "${toId}". Check the exact spelling of their Bank User ID (it's case-sensitive).`);
+    return;
+  }
+  const buyerName = check.data?.displayName || toId;
+
+  if(!confirm(`Transfer "${h.name}" to ${buyerName} (${toId})?\n\nThis cannot be undone. The horse and its entire history leave your stable and become theirs.`)) return;
 
   const res = await stableGas({ action:'transferHorse', horseId:h.id, fromUserId:bankAccount.userId, toUserId:toId });
   if(!res || res.success===false){
@@ -2505,7 +2515,7 @@ function renderTackInventory(){
       <div><label>Category</label>
         <select id="tk_cat">
           <option>Saddle</option><option>Bridle</option><option>Shoes</option>
-          <option>Boots</option><option>Saddlepad</option><option>Sheet</option><option>Other</option>
+          <option>Boots</option><option>Saddlepad</option><<option>Blanket</option><option>Other</option>
         </select>
       </div>
     </div>
