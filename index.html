@@ -685,6 +685,7 @@ async function loadFromSheets(){
     state.log=[]; state.tackInventory=[];
   }
   state.horses = horsesRes?.success ? (horsesRes.data||[]) : [];
+  const horsesToFix=[];
   state.horses.forEach(h=>{
     resolveImageRefs(h);
     if(h.referenceImage && h.refBonusGiven===undefined) h.refBonusGiven=true;
@@ -692,8 +693,17 @@ async function loadFromSheets(){
     if(!Array.isArray(h.badges)) h.badges=[];
     if(h.level>=5 && !h.badges.includes("Quality Stock")) h.badges.push("Quality Stock");
     if(h.level>=10 && !h.badges.includes("Excellent Stock")) h.badges.push("Excellent Stock");
+    // Migration: older show records added stats. If any competition entry still
+    // carries a non-empty statsDelta, recompute (which now ignores show stats)
+    // and re-save so the correction sticks. Runs once per affected horse.
+    const hasShowStats=(h.artLog||[]).some(e=>e.type==="competition" && e.statsDelta && Object.keys(e.statsDelta).length);
+    if(hasShowStats){ recomputeHorse(h); horsesToFix.push(h); }
   });
   state.loaded = true;
+  if(horsesToFix.length){
+    Promise.all(horsesToFix.map(h=>saveHorse(h))).then(()=>save()).catch(()=>{});
+    addLog(`Corrected ${horsesToFix.length} horse(s): shows no longer count toward stats.`);
+  }
 }
 
 async function loadPublicHorse(horseId, urlOverride){
@@ -829,10 +839,28 @@ function recomputeHorse(h){
   const chronological = [...(h.artLog||[])].reverse();
   chronological.forEach(entry=>{
     h.exp += entry.exp||0;
-    if(entry.statsDelta) Object.entries(entry.statsDelta).forEach(([s,v])=>{ h.stats[s]=(h.stats[s]||0)+v; });
+    // Only training entries grant stats. Shows (type "competition") award EXP
+    // only — even old records that were saved with a statsDelta are ignored here,
+    // so past shows stop inflating stats the next time a horse recomputes.
+    if(entry.statsDelta && entry.type!=="competition"){
+      Object.entries(entry.statsDelta).forEach(([s,v])=>{ h.stats[s]=(h.stats[s]||0)+v; });
+    }
     if(entry.milestoneIds) entry.milestoneIds.forEach(id=>{ if(!h.completedMilestones.includes(id)) h.completedMilestones.push(id); });
   });
   applyLevelsFromExp(h, true);
+}
+
+async function editArtLogImage(h, entryId){
+  const e=(h.artLog||[]).find(x=>x.id===entryId);
+  if(!e) return;
+  const cur = (typeof e.image==='string' && !e.image.startsWith('@img:')) ? e.image : '';
+  const url = prompt("Paste a new direct image link for this entry (leave blank to remove the image):", cur);
+  if(url===null) return; // cancelled
+  e.image = url.trim() || null;
+  addLog(`${h.name} — updated an art log image.`);
+  const ok = await saveArtEntry(h, e);
+  await saveHorse(h); await save(); render();
+  if(!ok) alert("The entry updated here, but saving to the Stable Data sheet failed. Try again.");
 }
 
 function deleteArtLogEntry(h, entryId){
@@ -1317,7 +1345,7 @@ function renderRoster(){
             ${e.image?`<img src="${e.image}" class="artlog-thumb" data-lightbox="${e.image}" data-caption="${e.label}" style="cursor:zoom-in;" />`:""}
             <b>${e.label}</b> ${e.type==="competition"&&e.placement?`<span class="tag">${["1st","2nd","3rd","4th","5th","6th"][e.placement-1]||e.placement+"th"}</span>`:""}
             <span class="tag">+${e.exp} EXP</span>
-            <span data-act="delete-artlog" data-id="${h.id}" data-entry="${e.id}" style="cursor:pointer;color:#c96a3a;font-size:1.02em;margin-left:6px;" title="Delete this entry (reverses its EXP/stats)"></span>
+            <span data-act="edit-artlog-img" data-id="${h.id}" data-entry="${e.id}" style="cursor:pointer;color:#c98a3a;font-size:.92em;margin-left:6px;font-weight:bold;" title="Replace this entry's image link">Edit image</span><span data-act="delete-artlog" data-id="${h.id}" data-entry="${e.id}" style="cursor:pointer;color:#c96a3a;font-size:.92em;margin-left:6px;font-weight:bold;" title="Delete this entry (reverses its EXP/stats)">✕ Delete</span>
             ${e.link?`<a href="${e.link}" target="_blank" class="artlog-link" style="font-size:1em;margin-left:6px;">View</a>`:""}
             <div class="small" style="margin-top:2px;">${e.art||""}${e.lit?` · ${e.lit}`:""}</div>
           </div>`).join("") : '<div class="small">No entries yet.</div>'}
@@ -1410,6 +1438,10 @@ function renderRoster(){
   wrap.querySelectorAll('[data-act="edit-lineage"]').forEach(b=>b.onclick=()=>showLineageModal(b.dataset.id));
   wrap.querySelectorAll('[data-act="edit-worth"]').forEach(b=>b.onclick=()=>showNetWorthModal(b.dataset.id));
   wrap.querySelectorAll('[data-act="view-profile"]').forEach(b=>b.onclick=()=>goToProfile(b.dataset.id));
+  wrap.querySelectorAll('[data-act="edit-artlog-img"]').forEach(b=>b.onclick=()=>{
+    const h=state.horses.find(x=>x.id===b.dataset.id);
+    if(h) editArtLogImage(h, b.dataset.entry);
+  });
   wrap.querySelectorAll('[data-act="delete-artlog"]').forEach(b=>b.onclick=()=>{
     const h=state.horses.find(x=>x.id===b.dataset.id);
     if(!h) return;
@@ -2142,7 +2174,8 @@ function buildShowLogForm(){
       if(placement){expGain+=placeExp; sources.push(`Placement (+${placeExp})`);}
       h.exp+=expGain;
       checkLevelUp(h);
-      if(disc && DISCIPLINES[disc]?.stats) DISCIPLINES[disc].stats.forEach(s=>{ h.stats[s]=(h.stats[s]||0)+1; discStats[s]=(discStats[s]||0)+1; });
+      // Shows award EXP only — they do NOT add stats and do NOT count as training.
+      // discStats stays empty so this record contributes zero stats on recompute.
     }
 
     let artLogId=null;
@@ -2393,7 +2426,7 @@ function renderArtLog(){
               <b>${e.label}</b>
               ${placeLabel?`<span class="tag">${placeLabel}</span>`:""}
               <span class="tag" style="background:rgba(122,155,110,.15);color:#7a9b6e;border-color:#7a9b6e;">+${e.exp} EXP</span>
-              <span data-act="delete-artlog" data-id="${h.id}" data-entry="${e.id}" style="cursor:pointer;color:#c96a3a;font-size:1.02em;margin-left:6px;" title="Delete this entry (reverses its EXP/stats)"></span>
+              <span data-act="edit-artlog-img" data-id="${h.id}" data-entry="${e.id}" style="cursor:pointer;color:#c98a3a;font-size:.92em;margin-left:6px;font-weight:bold;" title="Replace this entry's image link">Edit image</span><span data-act="delete-artlog" data-id="${h.id}" data-entry="${e.id}" style="cursor:pointer;color:#c96a3a;font-size:.92em;margin-left:6px;font-weight:bold;" title="Delete this entry (reverses its EXP/stats)">✕ Delete</span>
               ${e.link?`<a href="${e.link}" target="_blank" class="artlog-link" style="font-size:1em;margin-left:4px;"></a>`:""}
               <div class="small" style="margin-top:2px;">${[e.art,e.lit,...(e.bonuses||[])].filter(Boolean).join(" · ")}</div>
             </div>
@@ -2410,6 +2443,10 @@ function renderArtLog(){
 
   wrap.querySelectorAll('[data-lightbox]').forEach(img=>{
     img.onclick=e=>{ e.stopPropagation(); openLightbox(img.dataset.lightbox, img.dataset.caption); };
+  });
+  wrap.querySelectorAll('[data-act="edit-artlog-img"]').forEach(b=>b.onclick=()=>{
+    const h=state.horses.find(x=>x.id===b.dataset.id);
+    if(h) editArtLogImage(h, b.dataset.entry);
   });
   wrap.querySelectorAll('[data-act="delete-artlog"]').forEach(b=>b.onclick=()=>{
     const h=state.horses.find(x=>x.id===b.dataset.id);
