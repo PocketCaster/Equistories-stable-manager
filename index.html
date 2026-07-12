@@ -238,43 +238,60 @@ function riderPP(rider){
   return (rider.artLog||[]).reduce((n,e)=> n + (Number(e.pp)||0), 0);
 }
 
-// Stat bonuses granted by the horse's ASSIGNED rider, scaled by the rider's title
-// tier. perImage = added to each stat a training image already grants (so EXP-only
-// Misc art gets nothing). final = a one-time bonus applied once the horse is fully
-// trained (level 10). These are the starting numbers from the Prestige journal —
-// edit any value here and it applies everywhere.
-//   tier index matches RIDER_TITLES order (0 Stablehand … 10 Custom Prestige).
+// Bonuses a horse's ASSIGNED rider grants, by title tier (index matches
+// RIDER_TITLES). Straight from the Prestige journal:
+//   stat      = stat added per training image (to trained stats only, so EXP-only
+//               Misc art stays stat-free). scope "one" = a single stat (Novice).
+//   exp       = EXP added per training image. expMaxLevel caps which horse levels
+//               it applies to (Novice: levels 1-3 only).
+//   final     = one-time permanent bonus to ALL stats once the horse is fully
+//               trained (level 10). Only the Custom Prestige tier grants it.
+// Edit any value here and it applies everywhere.
 const RIDER_TIER_BONUS = [
-  { perImage:0, final:0 }, // Stablehand
-  { perImage:1, final:1 }, // Novice
-  { perImage:1, final:1 }, // Apprentice
-  { perImage:1, final:2 }, // Junior
-  { perImage:2, final:2 }, // Skilled
-  { perImage:2, final:3 }, // Show Competitor
-  { perImage:2, final:3 }, // Clinic Regular
-  { perImage:3, final:4 }, // Respected Equestrian
-  { perImage:3, final:4 }, // Champion Rider
-  { perImage:3, final:5 }, // Master Equestrian
-  { perImage:3, final:5 }, // Custom Prestige (100+)
+  { stat:0, exp:0, final:0 },                          // Stablehand
+  { stat:1, scope:"one", exp:1, expMaxLevel:3, final:0 }, // Novice: +1 EXP (lvl 1-3), +1 to one stat
+  { stat:1, exp:1, final:0 },                          // Apprentice: +1 EXP, +1 all
+  { stat:1, exp:2, final:0 },                          // Junior: +2 EXP, +1 all
+  { stat:2, exp:2, final:0 },                          // Skilled: +2 EXP, +2 all
+  { stat:0, exp:2, final:0 },                          // Show Competitor: +2 EXP, no training-stat perk (show-focused)
+  { stat:2, exp:3, final:0 },                          // Clinic Regular: +3 EXP, +2 all
+  { stat:3, exp:3, final:0 },                          // Respected: +3 EXP, +3 all
+  { stat:3, exp:4, final:0 },                          // Champion: +4 EXP, +3 all
+  { stat:4, exp:5, final:0 },                          // Master: +5 EXP, +4 all
+  { stat:0, exp:5, final:5 },                          // Custom: +5 fully-trained; no per-image training-stat perk
 ];
 function riderBonusFor(rider){
-  if(!rider) return { perImage:0, final:0 };
+  if(!rider) return { stat:0, exp:0, final:0 };
   const idx = RIDER_TITLES.indexOf(riderTitle(riderPP(rider)));
-  return RIDER_TIER_BONUS[idx] || { perImage:0, final:0 };
+  return RIDER_TIER_BONUS[idx] || { stat:0, exp:0, final:0 };
 }
 
-// Add the assigned rider's per-image bonus onto a training image's stat gains.
-// Only stats the image ALREADY trains get the bonus, so EXP-only Misc art stays
-// stat-free. Returns a note for the log, or "" if no rider bonus applied.
+// Add the assigned rider's per-image STAT bonus onto a training image's stat
+// gains. Only stats the image ALREADY trains get it, so EXP-only Misc art stays
+// stat-free. Novice tier ("one") boosts a single stat; others boost all trained
+// stats. Returns a log note, or "" if nothing applied.
 function applyRiderTrainingBonus(h, allStats){
   if(!h.riderId) return "";
   const rider = state.riders.find(r=>r.id===h.riderId);
   if(!rider) return "";
-  const per = riderBonusFor(rider).perImage;
+  const b = riderBonusFor(rider);
   const keys = Object.keys(allStats);
-  if(per<=0 || !keys.length) return "";
-  keys.forEach(s=> allStats[s]+=per);
-  return `${rider.name} (${riderTitle(riderPP(rider)).name}) +${per}/stat`;
+  if(b.stat<=0 || !keys.length) return "";
+  const targets = b.scope==="one" ? [keys[0]] : keys;
+  targets.forEach(s=> allStats[s]+=b.stat);
+  const where = b.scope==="one" ? `${STAT_LABELS[keys[0]]}` : "all trained stats";
+  return `${rider.name} (${riderTitle(riderPP(rider)).name}) +${b.stat} ${where}`;
+}
+
+// EXP the assigned rider adds to a training image (respecting Novice's level cap).
+function riderTrainingExp(h){
+  if(!h.riderId) return 0;
+  const rider = state.riders.find(r=>r.id===h.riderId);
+  if(!rider) return 0;
+  const b = riderBonusFor(rider);
+  if(b.exp<=0) return 0;
+  if(b.expMaxLevel && h.level > b.expMaxLevel) return 0;
+  return b.exp;
 }
 
 function newRider(data){
@@ -286,6 +303,7 @@ function newRider(data){
     bio:data.bio||"",
     link:data.link||"",         // ref/profile sheet
     customTitle:data.customTitle||"",  // only shown at 100+ PP
+    attireEquipped:[],                  // ids of equipped attire items (mirrors horse tack)
     artLog:[],
     createdAt:new Date().toISOString(),
   };
@@ -392,7 +410,7 @@ const BANK_URL = 'https://script.google.com/macros/s/AKfycby9WLxUPDAPg9EH5aTPATz
 const DEFAULT_STABLE_URL = 'https://script.google.com/macros/s/AKfycbwNF02tC8_U9MjAvJJzjVLNgHUyAf2ND-drxjhQPnOikJdw_seUIIxrYEsTsAlhG-o/exec';
 let STABLE_URL = localStorage.getItem('equi_stable_url') || DEFAULT_STABLE_URL;
 
-let state = { horses:[], riders:[], log:[], tackInventory:[], customBreeds:[], customGenes:[], loaded:false };
+let state = { horses:[], riders:[], log:[], tackInventory:[], attireInventory:[], customBreeds:[], customGenes:[], loaded:false };
 // Custom/Created breeds (and custom genes) are shared config, visible to every affiliate
 // regardless of who's logged in — they're stored under this reserved userId
 // in the same Stable Data backend everyone already uses, rather than in any
@@ -619,7 +637,7 @@ async function save(horseIds){
   const ids = horseIds===undefined ? [] : (Array.isArray(horseIds) ? horseIds : [horseIds]);
   const tasks = [
     sendTextChunked(userId, 'stateJson', 'stable',
-      JSON.stringify({ log:state.log, tackInventory:state.tackInventory })),
+      JSON.stringify({ log:state.log, tackInventory:state.tackInventory, attireInventory:state.attireInventory })),
     ...state.horses.filter(h=>ids.includes(h.id)).map(h=>{
       const {artLog, profileImage, referenceImage, ...horseData}=h;
       return sendTextChunked(userId, 'horseJson', h.id, JSON.stringify(horseData));
@@ -856,8 +874,9 @@ async function loadFromSheets(){
   if(stateRes?.success && stateRes.data){
     state.log           = stateRes.data.log || [];
     state.tackInventory = stateRes.data.tackInventory || [];
+    state.attireInventory = stateRes.data.attireInventory || [];
   } else {
-    state.log=[]; state.tackInventory=[];
+    state.log=[]; state.tackInventory=[]; state.attireInventory=[];
   }
   state.horses = horsesRes?.success ? (horsesRes.data||[]) : [];
   state.riders = ridersRes?.success ? (ridersRes.data||[]) : [];
@@ -901,7 +920,7 @@ async function load(){
   if(bankAccount.linked && STABLE_URL){
     await loadFromSheets();
   } else {
-    state.horses=[]; state.log=[]; state.tackInventory=[];
+    state.horses=[]; state.log=[]; state.tackInventory=[]; state.attireInventory=[];
     state.loaded=true;
   }
   render();
@@ -1173,7 +1192,7 @@ function render(){
   if(signOutBtn) signOutBtn.onclick=async()=>{
     if(!confirm('Sign out? Your stable data is saved to Google Sheets — sign back in anytime.')) return;
     bankAccount={userId:'',password:'',linked:false};
-    state.horses=[]; state.riders=[]; state.log=[]; state.tackInventory=[]; state.loaded=false;
+    state.horses=[]; state.riders=[]; state.log=[]; state.tackInventory=[]; state.attireInventory=[]; state.loaded=false;
     saveBankAccount();
     load();
   };
@@ -1292,6 +1311,103 @@ let addHorseOpen = false;
 let expandedRiderLogs = new Set();   // rider ids whose art log is open
 let openRiderEntry = new Set();      // rider ids whose "log entry" form is open
 
+// Rider attire — mirrors the tack inventory. Attire items live in a shared
+// wardrobe and get equipped on individual riders. (Stat effects can be added
+// later; the item structure already supports them, same as tack.)
+function renderAttireInventory(){
+  const wrap=el('div','card');
+  wrap.innerHTML=`
+    <h3 style="margin-top:0;">Rider Attire</h3>
+    <p class="small" style="margin-top:0;">Add attire to your shared wardrobe, then equip pieces on individual riders from their card — just like tack on horses.</p>
+    <div class="row">
+      <div><label>Item Name</label><input id="at_name" placeholder="e.g. Show Coat, Tall Boots" /></div>
+      <div><label>Category</label>
+        <select id="at_cat">
+          <option>Jacket</option><option>Shirt</option><option>Breeches</option><option>Boots</option>
+          <option>Helmet</option><option>Gloves</option><option>Accessory</option><option>Other</option>
+        </select>
+      </div>
+    </div>
+    <div style="margin-top:8px;">
+      <label>Item Image</label>
+      <input type="text" id="at_image_url" placeholder="Paste a direct link to the item photo (.jpg/.png/.gif)" style="width:100%;max-width:420px;" />
+      <div id="at_image_preview" style="margin-top:6px;"></div>
+    </div>
+    <button id="at_add" style="margin-top:10px;">+ Add to Wardrobe</button>`;
+
+  let attireImage=null;
+  wrap.querySelector('#at_image_url').oninput=()=>{
+    attireImage = wrap.querySelector('#at_image_url').value.trim() || null;
+    wrap.querySelector('#at_image_preview').innerHTML = urlImagePreviewHTML(attireImage, 'Attire Item');
+  };
+  wrap.querySelector('#at_add').onclick=async()=>{
+    const name=wrap.querySelector('#at_name').value.trim();
+    if(!name){ alert("Give the attire item a name first!"); return; }
+    const cat=wrap.querySelector('#at_cat').value;
+    const item={ id:uid2(), name, category:cat, image:attireImage, stats:{} };
+    if(!state.attireInventory) state.attireInventory=[];
+    state.attireInventory.push(item);
+    addLog(`Added "${name}" (${cat}) to the wardrobe.`);
+    await save(); render();
+  };
+
+  const inv=state.attireInventory||[];
+  const invCard=el('div');
+  invCard.style.cssText='margin-top:12px;';
+  invCard.innerHTML=`<div class="small" style="color:#b5a392;">Wardrobe (${inv.length})</div>`;
+  if(inv.length){
+    const grid=el('div');
+    grid.style.cssText='display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px;margin-top:8px;';
+    inv.forEach(item=>{
+      const div=el('div');
+      div.style.cssText='background:#15100c;border:1px solid #4a392a;border-radius:8px;padding:8px;text-align:center;';
+      div.innerHTML=`
+        ${item.image?`<img src="${item.image}" style="width:100%;height:90px;object-fit:cover;border-radius:5px;cursor:zoom-in;" onclick="openLightbox('${jsStr(item.image)}','${jsStr(item.name)}')" />`:`<div style="height:90px;display:flex;align-items:center;justify-content:center;font-size:2em;color:#4a392a;">&#128085;</div>`}
+        <div style="margin-top:6px;font-weight:bold;font-size:1.02em;">${item.name}</div>
+        <div class="small">${item.category}</div>
+        <button class="danger" data-act="del-attire" data-id="${item.id}" style="font-size:.94em;padding:3px 8px;margin-top:6px;">Remove</button>`;
+      grid.appendChild(div);
+    });
+    invCard.appendChild(grid);
+  } else {
+    invCard.innerHTML+=`<div class="small">No attire yet.</div>`;
+  }
+  wrap.appendChild(invCard);
+
+  invCard.querySelectorAll('[data-act="del-attire"]').forEach(b=>b.onclick=async()=>{
+    const id=b.dataset.id;
+    state.attireInventory=(state.attireInventory||[]).filter(t=>t.id!==id);
+    state.riders.forEach(r=>{ if(r.attireEquipped){ const before=r.attireEquipped.length; r.attireEquipped=r.attireEquipped.filter(x=>x!==id); if(r.attireEquipped.length!==before) saveRider(r); } });
+    await save(); render();
+  });
+
+  return wrap;
+}
+
+// Attire equipped on a rider, shown framed with name/category (mirrors the
+// equipped-tack images on horses). Falls back to a tag when no image.
+function attireHtml(rider){
+  const inv=state.attireInventory||[];
+  const eq=(rider.attireEquipped||[]).map(id=>inv.find(t=>t.id===id)).filter(Boolean);
+  if(!eq.length) return `<span class="small">Nothing equipped.</span>`;
+  return eq.map(item=>{
+    const cap=`${item.name} · ${item.category}`;
+    if(item.image){
+      return `<div style="display:inline-flex;flex-direction:column;align-items:center;gap:4px;width:96px;">
+        <img src="${item.image}" style="width:96px;height:96px;object-fit:contain;cursor:zoom-in;border:1px solid #6a4a8a;border-radius:6px;background:#15100c;"
+             onclick="openLightbox('${jsStr(item.image)}','${jsStr(item.name)}')" />
+        <div class="small" style="text-align:center;color:#c9a8e8;">${item.name}</div>
+        <span data-ract="unequip-attire" data-id="${rider.id}" data-attire="${item.id}" style="cursor:pointer;color:#c96a3a;font-size:.85em;">remove</span>
+      </div>`;
+    }
+    return `<span class="tag" style="background:#2a1a3a;color:#c9a8e8;border-color:#6a4a8a;">${cap} <span data-ract="unequip-attire" data-id="${rider.id}" data-attire="${item.id}" style="cursor:pointer;">✕</span></span>`;
+  }).join(" ");
+}
+function attireAvailable(rider){
+  const eq=rider.attireEquipped||[];
+  return (state.attireInventory||[]).filter(t=>!eq.includes(t.id));
+}
+
 function riderProgress(pp){
   const t=riderTitle(pp);
   if(t.max===Infinity) return { pct:100, toNext:0, next:null };
@@ -1336,6 +1452,9 @@ function renderRiders(){
     await saveRider(rider); await save(); render();
   };
 
+  // --- rider attire inventory (mirrors the tack system) ---
+  wrap.appendChild(renderAttireInventory());
+
   if(!state.riders.length){
     wrap.appendChild(el('div','small','<div style="padding:12px;color:#5a4a3a;">No riders yet — add one above to start earning Prestige.</div>'));
     return wrap;
@@ -1370,6 +1489,15 @@ function renderRiders(){
           ${rider.link?`<div class="small" style="margin-top:4px;"><a href="${rider.link}" target="_blank" rel="noopener" style="color:var(--accent);">Reference sheet ↗</a></div>`:""}
           ${rider.bio?`<div class="small" style="margin-top:6px;">${rider.bio.replace(/</g,'&lt;')}</div>`:""}
         </div>
+      </div>
+      <div style="margin-top:10px;">
+        <div class="small" style="margin-bottom:3px;">Attire:</div>
+        <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-start;">${attireHtml(rider)}</div>
+        ${attireAvailable(rider).length?`
+          <select data-ract="equip-attire" data-id="${rider.id}" style="margin-top:6px;width:auto;display:inline-block;font-size:.95em;">
+            <option value="">+ Equip attire…</option>
+            ${attireAvailable(rider).map(t=>`<option value="${t.id}">${t.name} (${t.category})</option>`).join("")}
+          </select>`:`<div class="small" style="margin-top:4px;">${(state.attireInventory||[]).length?"All attire equipped.":"Add attire in the wardrobe above."}</div>`}
       </div>
       <div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap;">
         <button class="btn" data-ract="toggle-entry" data-id="${rider.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">${entryOpen?"Close":"Log art / activity (+PP)"}</button>
@@ -1434,6 +1562,17 @@ function bindRiderCardEvents(wrap){
   });
   wrap.querySelectorAll('[data-ract="toggle-rlog"]').forEach(b=>b.onclick=()=>{
     const id=b.dataset.id; expandedRiderLogs.has(id)?expandedRiderLogs.delete(id):expandedRiderLogs.add(id); render();
+  });
+  wrap.querySelectorAll('[data-ract="equip-attire"]').forEach(sel=>sel.onchange=async()=>{
+    const rider=state.riders.find(r=>r.id===sel.dataset.id); if(!rider||!sel.value) return;
+    if(!rider.attireEquipped) rider.attireEquipped=[];
+    if(!rider.attireEquipped.includes(sel.value)) rider.attireEquipped.push(sel.value);
+    await saveRider(rider); await save(); render();
+  });
+  wrap.querySelectorAll('[data-ract="unequip-attire"]').forEach(b=>b.onclick=async()=>{
+    const rider=state.riders.find(r=>r.id===b.dataset.id); if(!rider) return;
+    rider.attireEquipped=(rider.attireEquipped||[]).filter(x=>x!==b.dataset.attire);
+    await saveRider(rider); await save(); render();
   });
   wrap.querySelectorAll('[data-ract="del-rider"]').forEach(b=>b.onclick=async()=>{
     const rider=state.riders.find(r=>r.id===b.dataset.id); if(!rider) return;
@@ -2348,6 +2487,8 @@ function renderTraining(){
     if(litExp>0){expGain+=litExp; sources.push(`Lit ${litWords}w (+${litExp})`);}
     selectedBonuses.forEach(k=>{if(BONUS_EXP[k]){expGain+=BONUS_EXP[k]; sources.push(`${k} (+${BONUS_EXP[k]})`);}});
     if(riderNote) sources.push(riderNote);
+    const rExp=riderTrainingExp(h);
+    if(rExp>0){ expGain+=rExp; sources.push(`Rider +${rExp} EXP`); }
     h.exp+=expGain;
     checkLevelUp(h);
 
@@ -2917,7 +3058,7 @@ function renderTackInventory(){
       <div><label>Category</label>
         <select id="tk_cat">
           <option>Saddle</option><option>Bridle</option><option>Shoes</option>
-          <option>Boots</option><option>Saddlepad</option><option>Blanket</option><option>Other</option>
+          <option>Boots</option><option>Blanket</option><option>Other</option>
         </select>
       </div>
     </div>
