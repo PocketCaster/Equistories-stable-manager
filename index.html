@@ -2246,6 +2246,7 @@ function buildShowHistory(){
   wrap.appendChild(claim);
   claim.querySelector('#ribbon_claim_btn').onclick=async()=>{
     const msg=claim.querySelector('#ribbon_claim_msg');
+    if(!bankAccount.linked || !bankAccount.userId){ msg.style.color='#b5533a'; msg.textContent='Sign in to your stable first — a ribbon can only be added to a horse in the account that owns it.'; return; }
     const raw=(claim.querySelector('#ribbon_claim_code').value||'').trim();
     if(!raw){ msg.textContent='Paste a claim code first.'; return; }
     let data;
