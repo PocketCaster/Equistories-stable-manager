@@ -792,6 +792,12 @@ async function deleteHorseFromSheets(horseId){
 async function saveRider(rider){
   if(!bankAccount.linked || !STABLE_URL) return false;
   const { artLog, ...riderData } = rider;   // art log saved as separate rows
+  // Embed a snapshot of equipped attire (id, name, category, image) so a public
+  // visitor — who doesn't have our wardrobe — can still see it on the profile.
+  const inv = state.attireInventory||[];
+  riderData.attireItems = (rider.attireEquipped||[])
+    .map(id=>inv.find(t=>t.id===id)).filter(Boolean)
+    .map(t=>({ id:t.id, name:t.name, category:t.category, image:t.image||"" }));
   const res = await stableGas({ action:'saveRider', userId:bankAccount.userId, riderId:rider.id, riderJson:JSON.stringify(riderData) });
   return !!(res && res.success);
 }
@@ -911,6 +917,10 @@ async function loadPublicHorse(horseId, urlOverride){
   return res;
 }
 
+async function loadPublicRider(riderId, urlOverride){
+  return await stableGas({ action:'loadPublicRider', riderId }, urlOverride);
+}
+
 async function load(){
   try{
     const b=localStorage.getItem('equi-lite-bank');
@@ -944,6 +954,31 @@ function goToRoster(){
   history.pushState({}, '', url);
   render();
   window.scrollTo(0,0);
+}
+
+function goToRiderProfile(riderId){
+  const url = new URL(window.location.href);
+  url.searchParams.set('rider', riderId);
+  url.searchParams.delete('horse');
+  history.pushState({rider:riderId}, '', url);
+  render();
+  window.scrollTo(0,0);
+}
+function backFromRider(){
+  const url = new URL(window.location.href);
+  url.searchParams.delete('rider');
+  history.pushState({}, '', url);
+  render();
+  window.scrollTo(0,0);
+}
+// Shareable link to a rider profile, carrying the Stable Data URL so a visitor
+// with none configured can still load it (same approach as horse share links).
+function riderShareLink(riderId){
+  const url = new URL(window.location.href);
+  url.searchParams.set('rider', riderId);
+  url.searchParams.delete('horse');
+  if(STABLE_URL) url.searchParams.set('stable', STABLE_URL);
+  return url.toString();
 }
 
 window.addEventListener('popstate', render);
@@ -1139,6 +1174,34 @@ function render(){
       }
       app.innerHTML=`<div style="padding:40px;text-align:center;color:#b5a392;font-family:Georgia,serif;max-width:500px;margin:0 auto;">
         Horse not found.<br>
+        <div style="font-size:1em;opacity:.8;margin-top:10px;background:#15100c;border:1px solid #4a392a;border-radius:6px;padding:10px;">${reason}</div>
+        <br><a href="${window.location.pathname}" style="color:#c98a3a;">← Back</a>
+      </div>`;
+    });
+    return;
+  }
+
+  const riderProfileId = params.get('rider');
+  if(riderProfileId){
+    const localRider = state.riders.find(x=>x.id===riderProfileId);
+    if(localRider){ renderRiderProfilePage(app, localRider); return; }
+    app.innerHTML='<div style="padding:40px;text-align:center;color:#b5a392;font-family:Georgia,serif;">Loading rider profile…</div>';
+    const stableOverride = params.get('stable');
+    if(stableOverride && !STABLE_URL) STABLE_URL = stableOverride;
+    loadPublicRider(riderProfileId, stableOverride).then(res=>{
+      if(res?.success && res.data){ renderRiderProfilePage(app, res.data); return; }
+      let reason;
+      if(!stableOverride && !STABLE_URL){
+        reason = 'This link is missing the Stable Data URL. Re-copy the share link from the rider\'s profile.';
+      } else if(!res){
+        reason = 'No response from the Stable Data server — check the Apps Script is deployed with "Anyone" access.';
+      } else if(res.error){
+        reason = `Server said: "${res.error}"`;
+      } else {
+        reason = 'The server responded, but did not return this rider. Make sure the stable script has the loadPublicRider action and is redeployed.';
+      }
+      app.innerHTML=`<div style="padding:40px;text-align:center;color:#b5a392;font-family:Georgia,serif;max-width:500px;margin:0 auto;">
+        Rider not found.<br>
         <div style="font-size:1em;opacity:.8;margin-top:10px;background:#15100c;border:1px solid #4a392a;border-radius:6px;padding:10px;">${reason}</div>
         <br><a href="${window.location.pathname}" style="color:#c98a3a;">← Back</a>
       </div>`;
@@ -1408,6 +1471,86 @@ function attireAvailable(rider){
   return (state.attireInventory||[]).filter(t=>!eq.includes(t.id));
 }
 
+// Read-only public rider profile page (parallel to the horse profile page).
+function renderRiderProfilePage(app, rider){
+  const pp=riderPP(rider);
+  const title=riderTitle(pp);
+  const prog=riderProgress(pp);
+  const showTitle=(pp>=100 && rider.customTitle)?rider.customTitle:title.name;
+  const owned=state.riders.some(r=>r.id===rider.id); // is this our own rider?
+
+  // Attire images. Prefer our live wardrobe (owner view); fall back to the
+  // snapshot embedded on the rider (public visitors have no wardrobe).
+  const inv=state.attireInventory||[];
+  let eq=(rider.attireEquipped||[]).map(id=>inv.find(t=>t.id===id)).filter(Boolean);
+  if(!eq.length && Array.isArray(rider.attireItems)) eq=rider.attireItems;
+  const attireBlock = eq.length ? `
+    <div style="margin-top:16px;">
+      <h3 style="margin-bottom:6px;">Attire</h3>
+      <div style="display:flex;flex-wrap:wrap;gap:10px;">
+        ${eq.map(item=>`<div style="text-align:center;width:110px;">
+          ${item.image?`<img src="${item.image}" style="width:110px;height:110px;object-fit:contain;border:1px solid #6a4a8a;border-radius:6px;background:#15100c;cursor:zoom-in;" onclick="openLightbox('${jsStr(item.image)}','${jsStr(item.name)}')" />`:`<div style="width:110px;height:110px;border:1px solid #6a4a8a;border-radius:6px;display:flex;align-items:center;justify-content:center;">&#128085;</div>`}
+          <div class="small" style="margin-top:4px;color:#c9a8e8;">${item.name}</div>
+          <div class="small">${item.category}</div>
+        </div>`).join("")}
+      </div>
+    </div>` : "";
+
+  const log=(rider.artLog||[]);
+  const logBlock = log.length ? `
+    <div style="margin-top:16px;">
+      <h3 style="margin-bottom:6px;">Prestige Log (${log.length})</h3>
+      ${[...log].reverse().map(e=>`
+        <div style="border-bottom:1px solid #2a2018;padding:6px 0;">
+          <div style="display:flex;justify-content:space-between;gap:8px;align-items:baseline;">
+            <div><b>${(e.label||'Entry').replace(/</g,'&lt;')}</b> ${e.link?`<a href="${e.link}" target="_blank" rel="noopener" class="small" style="color:var(--accent);">↗</a>`:""}</div>
+            <div class="small" style="color:#c9a8e8;white-space:nowrap;">+${e.pp||0} PP</div>
+          </div>
+          ${(e.sources&&e.sources.length)?`<div class="small" style="color:#8a7a6a;">${e.sources.join(" · ")}</div>`:""}
+        </div>`).join("")}
+    </div>` : "";
+
+  const imgHtml = rider.image
+    ? `<img src="${rider.image}" style="width:220px;height:220px;object-fit:cover;border-radius:10px;border:2px solid var(--accent);cursor:zoom-in;" onclick="openLightbox('${jsStr(rider.image)}','${jsStr(rider.name)}')" />`
+    : `<div class="horse-photo-placeholder" style="width:220px;height:220px;">🧍</div>`;
+
+  app.innerHTML = `
+    <div style="max-width:820px;margin:0 auto;padding:16px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
+        <a href="${window.location.pathname}" onclick="event.preventDefault();(${owned?'backFromRider':'()=>{location.href=location.pathname}'})()" style="color:#c98a3a;cursor:pointer;">← Back</a>
+        <button id="rider_share" class="secondary" style="margin-top:0;font-size:.98em;padding:4px 12px;">Share link</button>
+      </div>
+      <div id="rider_share_out"></div>
+      <div class="card" style="margin-top:12px;">
+        <div style="display:flex;gap:16px;flex-wrap:wrap;">
+          <div style="flex:none;">${imgHtml}</div>
+          <div style="flex:1;min-width:220px;">
+            <h2 style="margin:0;">${rider.name} ${rider.pronouns?`<span class="small" style="color:#8a7a6a;font-weight:normal;">${rider.pronouns}</span>`:""}</h2>
+            <div style="margin:6px 0;"><span class="tag" style="background:#2a1a3a;color:#c9a8e8;border-color:#6a4a8a;font-size:1.05em;">${showTitle}</span></div>
+            <div><b>${pp} PP</b>${prog.next?` · ${prog.toNext} to ${prog.next.name}`:` · top tier`}</div>
+            <div class="expbar-bg" style="margin-top:5px;"><div class="expbar-fill" style="width:${prog.pct}%;background:linear-gradient(90deg,#8a6fb0,#c9a8e8);"></div></div>
+            <div class="small" style="margin-top:6px;font-style:italic;color:#8a7a6a;">${title.note}</div>
+            ${rider.link?`<div class="small" style="margin-top:6px;"><a href="${rider.link}" target="_blank" rel="noopener" style="color:var(--accent);">Reference sheet ↗</a></div>`:""}
+            ${rider.bio?`<div style="margin-top:10px;">${rider.bio.replace(/</g,'&lt;')}</div>`:""}
+          </div>
+        </div>
+        ${attireBlock}
+        ${logBlock}
+      </div>
+    </div>`;
+
+  const shareBtn=app.querySelector('#rider_share');
+  if(shareBtn) shareBtn.onclick=()=>{
+    const link=riderShareLink(rider.id);
+    const out=app.querySelector('#rider_share_out');
+    out.innerHTML=`<div class="card" style="margin-top:8px;"><div class="small" style="color:#b5a392;margin-bottom:4px;">Anyone with this link can view ${rider.name}'s profile:</div>
+      <input type="text" readonly value="${link.replace(/"/g,'&quot;')}" style="width:100%;font-size:.85em;" onclick="this.select()" /></div>`;
+    const inp=out.querySelector('input'); if(inp){ inp.select(); try{document.execCommand('copy');}catch(e){} }
+  };
+}
+
+
+
 function riderProgress(pp){
   const t=riderTitle(pp);
   if(t.max===Infinity) return { pct:100, toNext:0, next:null };
@@ -1479,7 +1622,7 @@ function renderRiders(){
         <div style="flex:none;">${imgHtml}</div>
         <div style="flex:1;min-width:0;">
           <div style="display:flex;align-items:baseline;flex-wrap:wrap;gap:6px;">
-            <span style="font-size:1.25em;color:var(--accent);font-weight:bold;">${rider.name}</span>
+            <span data-ract="open-rider" data-id="${rider.id}" style="font-size:1.25em;color:var(--accent);font-weight:bold;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;" title="Open profile">${rider.name}</span>
             ${rider.pronouns?`<span class="small" style="color:#8a7a6a;">${rider.pronouns}</span>`:""}
             <span class="tag" style="background:#2a1a3a;color:#c9a8e8;border-color:#6a4a8a;">${showTitle}</span>
           </div>
@@ -1501,6 +1644,7 @@ function renderRiders(){
       </div>
       <div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap;">
         <button class="btn" data-ract="toggle-entry" data-id="${rider.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">${entryOpen?"Close":"Log art / activity (+PP)"}</button>
+        <button class="secondary" data-ract="open-rider" data-id="${rider.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">Profile / Share</button>
         <button class="secondary" data-ract="toggle-rlog" data-id="${rider.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">${logOpen?"Hide":"Show"} Prestige Log (${(rider.artLog||[]).length})</button>
         ${pp>=100?`<button class="secondary" data-ract="edit-title" data-id="${rider.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">Custom Title</button>`:""}
         <button class="secondary" data-ract="edit-rider" data-id="${rider.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">Edit</button>
@@ -1563,6 +1707,7 @@ function bindRiderCardEvents(wrap){
   wrap.querySelectorAll('[data-ract="toggle-rlog"]').forEach(b=>b.onclick=()=>{
     const id=b.dataset.id; expandedRiderLogs.has(id)?expandedRiderLogs.delete(id):expandedRiderLogs.add(id); render();
   });
+  wrap.querySelectorAll('[data-ract="open-rider"]').forEach(b=>b.onclick=()=>goToRiderProfile(b.dataset.id));
   wrap.querySelectorAll('[data-ract="equip-attire"]').forEach(sel=>sel.onchange=async()=>{
     const rider=state.riders.find(r=>r.id===sel.dataset.id); if(!rider||!sel.value) return;
     if(!rider.attireEquipped) rider.attireEquipped=[];
