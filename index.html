@@ -72,6 +72,7 @@
   #lightbox-overlay .lb-caption { position:fixed;bottom:20px;left:50%;transform:translateX(-50%);color:#f1e6d8;background:rgba(0,0,0,.7);padding:8px 18px;border-radius:20px;font-size:1em; }
   /* Art log */
   #app .artlog-panel { margin-top:14px; background:#15100c; border:1px solid #4a392a; border-radius:6px; padding:12px; max-height:320px; overflow-y:auto; }
+  #app .rpp-form { margin-top:14px; background:#15100c; border:1px solid #4a392a; border-radius:6px; padding:12px; }
   #app .artlog-entry { padding:11px 0; border-bottom:1px dashed #2c2118; font-size:1.1em; }
   #app .artlog-entry:last-child { border-bottom:none; }
   #app .artlog-thumb { width:56px; height:56px; border-radius:5px; object-fit:cover; border:1px solid #4a392a; margin-right:10px; vertical-align:middle; }
@@ -1793,7 +1794,7 @@ function renderRiders(){
 
 function riderEntryFormHtml(rider){
   return `
-    <div class="artlog-panel" data-rider-entry="${rider.id}" style="margin-top:12px;">
+    <div class="rpp-form" data-rider-entry="${rider.id}" style="margin-top:12px;">
       <div class="row">
         <div style="flex:1;min-width:200px;">
           <label>Prestige Type</label>
