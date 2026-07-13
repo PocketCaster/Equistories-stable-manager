@@ -238,6 +238,67 @@ function riderPP(rider){
   return (rider.artLog||[]).reduce((n,e)=> n + (Number(e.pp)||0), 0);
 }
 
+// ---- PP earned from a horse's training/competition entry that features a rider ----
+// Rider PP entries created this way are LINKED to the source via sourceId, so they
+// can be removed cleanly if the feature is toggled off or the source is deleted.
+function riderPPForSource(sourceType, source){
+  if(sourceType==='competition'){
+    let pp=2; const sources=['Show or clinic entry (+2)'];
+    if(source.placement>=1 && source.placement<=3){ pp+=1; sources.push('Top 3 in show (+1)'); }
+    if((source.prizes&&source.prizes.length) || source.ribbon){ pp+=1; sources.push("Judge's Choice / special ribbon (+1)"); }
+    return { pp, sources };
+  }
+  // training / art featuring the rider
+  return { pp:1, sources:['Rider in a personal image (+1)'] };
+}
+function linkedRiderEntry(rider, sourceId){
+  return (rider.artLog||[]).find(e=>e.sourceId===sourceId);
+}
+// Grant (or refresh) a rider's PP for a horse entry. Idempotent per sourceId.
+async function grantRiderPPForEntry(rider, sourceType, source, horse){
+  if(!rider) return;
+  if(!rider.artLog) rider.artLog=[];
+  const existing=linkedRiderEntry(rider, source.id);
+  const {pp, sources}=riderPPForSource(sourceType, source);
+  const label = sourceType==='competition'
+    ? `${source.discipline||'Show'}${source.venue?` — ${source.venue}`:''} (${horse.name})`
+    : `${source.label||'Training'} (${horse.name})`;
+  if(existing){
+    existing.pp=pp; existing.sources=sources; existing.label=label; existing.link=source.link||existing.link||null;
+  } else {
+    rider.artLog.push({ id:'re_'+Math.random().toString(36).slice(2,10), label,
+      link:source.link||null, pp, sources, sourceType, sourceId:source.id, horseId:horse.id,
+      date:new Date().toISOString() });
+  }
+  await saveRiderEntry(rider, linkedRiderEntry(rider, source.id));
+}
+// Remove a rider's linked PP for a source entry (feature toggled off / source deleted).
+async function removeRiderPPForSource(sourceId){
+  for(const rider of state.riders){
+    const e=linkedRiderEntry(rider, sourceId);
+    if(e){
+      rider.artLog=rider.artLog.filter(x=>x!==e);
+      if(bankAccount.linked && STABLE_URL){
+        await stableGas({ action:'deleteRiderArtLogEntry', userId:bankAccount.userId, riderId:rider.id, entryId:e.id });
+      }
+    }
+  }
+}
+// Toggle "rider featured here" on a horse training/comp entry.
+async function toggleRiderFeatured(horse, source, sourceType){
+  const rider = horse.riderId ? state.riders.find(r=>r.id===horse.riderId) : null;
+  if(!rider){ alert('Assign a rider to this horse first (on the horse card), then mark entries that feature them.'); return; }
+  if(source.featuredRiderId){
+    // turn off
+    await removeRiderPPForSource(source.id);
+    source.featuredRiderId=null;
+  } else {
+    source.featuredRiderId=rider.id;
+    await grantRiderPPForEntry(rider, sourceType, source, horse);
+  }
+  await saveHorse(horse); await save(); render();
+}
+
 // Bonuses a horse's ASSIGNED rider grants, by title tier (index matches
 // RIDER_TITLES). Straight from the Prestige journal:
 //   stat      = stat added per training image (to trained stats only, so EXP-only
@@ -1114,6 +1175,7 @@ async function editArtLogImage(h, entryId){
 function deleteArtLogEntry(h, entryId){
   const idx=(h.artLog||[]).findIndex(e=>e.id===entryId);
   if(idx===-1) return;
+  removeRiderPPForSource(entryId);   // drop any rider PP linked to this entry
   h.artLog.splice(idx,1);
   if(h.compHistory) h.compHistory = h.compHistory.filter(r=>r.artLogId!==entryId);
   recomputeHorse(h);
@@ -1235,9 +1297,9 @@ function render(){
       </div>
     </details>
     <div class="tabs" style="align-items:center;">
-      ${["roster","riders","train","compete","tack","admin"].map(t=>`
+      ${["roster","riders","prestige","train","compete","tack","admin"].map(t=>`
         <div class="tab${activeTab===t?' active':''}" data-tab="${t}">
-          ${t==="roster"?"Stable Roster":t==="riders"?"Riders":t==="train"?"Training":t==="compete"?"Competitions":t==="tack"?"Tack Inventory":"Admin"}
+          ${t==="roster"?"Stable Roster":t==="riders"?"Riders":t==="prestige"?"Rider Prestige":t==="train"?"Training":t==="compete"?"Competitions":t==="tack"?"Tack Inventory":"Admin"}
         </div>`).join("")}
       <div style="flex:1;"></div>
       <span class="small" style="color:var(--dim);margin-right:6px;">${bankAccount.userId}</span>
@@ -1264,6 +1326,7 @@ function render(){
   const content = app.querySelector('#tab-content');
   if(activeTab==="roster")   content.appendChild(renderRoster());
   else if(activeTab==="riders")   content.appendChild(renderRiders());
+  else if(activeTab==="prestige")  content.appendChild(renderPrestigeTab());
   else if(activeTab==="train")   content.appendChild(renderTraining());
   else if(activeTab==="compete") content.appendChild(renderCompete());
   else if(activeTab==="tack")    content.appendChild(renderTackInventory());
@@ -1372,6 +1435,49 @@ let addHorseOpen = false;
 // ============================================
 // RIDERS TAB
 // ============================================
+let prestigeRiderId = null;   // selected rider in the Prestige tab
+function renderPrestigeTab(){
+  const wrap=el('div');
+  if(!state.riders.length){
+    wrap.appendChild(el('div','card','<div class="small" style="padding:12px;">No riders yet. Add a rider on the <b>Riders</b> tab first, then log Prestige here.</div>'));
+    return wrap;
+  }
+  if(!prestigeRiderId || !state.riders.find(r=>r.id===prestigeRiderId)) prestigeRiderId=state.riders[0].id;
+  const rider=state.riders.find(r=>r.id===prestigeRiderId);
+  const pp=riderPP(rider), title=riderTitle(pp), prog=riderProgress(pp);
+
+  const head=el('div','card');
+  head.innerHTML=`
+    <h3 style="margin-top:0;">Log Rider Prestige</h3>
+    <div class="row" style="align-items:flex-end;">
+      <div><label>Rider</label>
+        <select id="pt_rider">${state.riders.map(r=>`<option value="${r.id}"${r.id===prestigeRiderId?' selected':''}>${r.name} · ${riderTitle(riderPP(r)).name}</option>`).join("")}</select>
+      </div>
+      <div style="flex:1;min-width:180px;">
+        <div class="small"><b>${pp} PP</b> · ${title.name}${prog.next?` · ${prog.toNext} to ${prog.next.name}`:` · top tier`}</div>
+        <div class="expbar-bg" style="margin-top:5px;"><div class="expbar-fill" style="width:${prog.pct}%;background:linear-gradient(90deg,#8a6fb0,#c9a8e8);"></div></div>
+      </div>
+    </div>`;
+  wrap.appendChild(head);
+  head.querySelector('#pt_rider').onchange=e=>{ prestigeRiderId=e.target.value; render(); };
+
+  // the PP checklist form (same items as the inline card form)
+  const formCard=el('div','card');
+  formCard.innerHTML=riderEntryFormHtml(rider);
+  wrap.appendChild(formCard);
+  bindRiderEntryForm(formCard);
+
+  // recent manual + linked entries for this rider
+  const log=(rider.artLog||[]);
+  const logCard=el('div','card');
+  logCard.innerHTML=`<h3 style="margin-top:0;">${rider.name}'s Prestige Log (${log.length})</h3>` +
+    (log.length?riderLogHtml(rider):'<div class="small">No entries yet.</div>');
+  wrap.appendChild(logCard);
+  bindRiderCardEvents(logCard); // enables the ✕ delete on entries
+
+  return wrap;
+}
+
 let expandedRiderLogs = new Set();   // rider ids whose art log is open
 let openRiderEntry = new Set();      // rider ids whose "log entry" form is open
 let openRiderAttire = new Set();     // rider ids whose attire panel is open
@@ -1792,7 +1898,13 @@ function bindRiderCardEvents(wrap){
   });
 
   // live PP total + save, per open entry form
-  wrap.querySelectorAll('[data-rider-entry]').forEach(form=>{
+  bindRiderEntryForm(wrap);
+}
+
+// Wire a rider PP entry form (checkbox tally + save). Works inside the card or the
+// Prestige tab. Pass a scope element; binds every [data-rider-entry] form within.
+function bindRiderEntryForm(scope){
+  scope.querySelectorAll('[data-rider-entry]').forEach(form=>{
     const rid=form.dataset.riderEntry;
     const recalc=()=>{
       let sum=0; form.querySelectorAll('input[data-pp]:checked').forEach(c=>sum+=Number(c.dataset.pp)||0);
@@ -2084,7 +2196,7 @@ function renderRoster(){
             ${e.image?`<img src="${e.image}" class="artlog-thumb" data-lightbox="${e.image}" data-caption="${e.label}" style="cursor:zoom-in;" />`:""}
             <b>${e.label}</b> ${e.type==="competition"&&e.placement?`<span class="tag">${["1st","2nd","3rd","4th","5th","6th"][e.placement-1]||e.placement+"th"}</span>`:""}
             <span class="tag">+${e.exp} EXP</span>
-            <span data-act="edit-artlog-img" data-id="${h.id}" data-entry="${e.id}" style="cursor:pointer;color:#c98a3a;font-size:.92em;margin-left:6px;font-weight:bold;" title="Replace this entry's image link">Edit image</span><span data-act="delete-artlog" data-id="${h.id}" data-entry="${e.id}" style="cursor:pointer;color:#c96a3a;font-size:.92em;margin-left:6px;font-weight:bold;" title="Delete this entry (reverses its EXP/stats)">✕ Delete</span>
+            <span data-act="toggle-featured" data-id="${h.id}" data-entry="${e.id}" data-kind="training" style="cursor:pointer;color:${e.featuredRiderId?'#c9a8e8':'#8a7a6a'};font-size:.92em;margin-left:6px;font-weight:bold;" title="${e.featuredRiderId?'Rider featured — grants PP. Click to remove.':'Mark that this horse\u2019s rider is featured here (grants Prestige)'}">${e.featuredRiderId?'\u2605 Rider PP':'\u2606 Rider PP'}</span><span data-act="edit-artlog-img" data-id="${h.id}" data-entry="${e.id}" style="cursor:pointer;color:#c98a3a;font-size:.92em;margin-left:6px;font-weight:bold;" title="Replace this entry's image link">Edit image</span><span data-act="delete-artlog" data-id="${h.id}" data-entry="${e.id}" style="cursor:pointer;color:#c96a3a;font-size:.92em;margin-left:6px;font-weight:bold;" title="Delete this entry (reverses its EXP/stats)">✕ Delete</span>
             ${e.link?`<a href="${e.link}" target="_blank" class="artlog-link" style="font-size:1em;margin-left:6px;">View</a>`:""}
             <div class="small" style="margin-top:2px;">${e.art||""}${e.lit?` · ${e.lit}`:""}</div>
           </div>`).join("") : '<div class="small">No entries yet.</div>'}
@@ -2207,6 +2319,14 @@ function renderRoster(){
   wrap.querySelectorAll('[data-act="edit-artlog-img"]').forEach(b=>b.onclick=()=>{
     const h=state.horses.find(x=>x.id===b.dataset.id);
     if(h) editArtLogImage(h, b.dataset.entry);
+  });
+  wrap.querySelectorAll('[data-act="toggle-featured"]').forEach(b=>b.onclick=()=>{
+    const h=state.horses.find(x=>x.id===b.dataset.id); if(!h) return;
+    const kind=b.dataset.kind;
+    const src = kind==='competition'
+      ? (h.compHistory||[]).find(r=>r.id===b.dataset.entry)
+      : (h.artLog||[]).find(e=>e.id===b.dataset.entry);
+    if(src) toggleRiderFeatured(h, src, kind==='competition'?'competition':'training');
   });
   wrap.querySelectorAll('[data-act="delete-artlog"]').forEach(b=>b.onclick=()=>{
     const h=state.horses.find(x=>x.id===b.dataset.id);
@@ -2968,6 +3088,13 @@ function buildShowLogForm(){
     };
     h.compHistory.unshift(rec);
 
+    // A rider is always riding in a competition — the horse's assigned rider earns
+    // show PP automatically (journal: +2 entry, +1 top-3, +1 special ribbon).
+    if(h.riderId){
+      const rider=state.riders.find(r=>r.id===h.riderId);
+      if(rider){ rec.featuredRiderId=rider.id; await grantRiderPPForEntry(rider, 'competition', rec, h); }
+    }
+
     const placeLabel=placement?["1st","2nd","3rd","4th","5th","6th"][placement-1]||placement+"th":"Participant";
     addLog(`${h.name} — ${disc}${venue?" at "+venue:""} · ${placeLabel}${expGain?` · +${expGain} EXP`:""}`);
 
@@ -3086,6 +3213,7 @@ function buildShowHistory(){
                   </div>`).join("")}
                 </div>`:""}
                 <button data-act="edit-show" data-hid="${h.id}" data-cid="${c.id}" class="secondary" style="font-size:.96em;padding:2px 7px;margin-top:6px;">Edit Placement / Prizes</button>
+                <button data-act="toggle-featured-comp" data-hid="${h.id}" data-cid="${c.id}" class="secondary" style="font-size:.96em;padding:2px 7px;margin-top:6px;color:${c.featuredRiderId?'#c9a8e8':''};" title="${c.featuredRiderId?'Rider featured — grants PP. Click to remove.':'Grant the horse\\u2019s rider PP for this show'}">${c.featuredRiderId?'★ Rider PP':'☆ Rider PP'}</button>
                 <button data-act="del-show" data-hid="${h.id}" data-cid="${c.id}" class="secondary" style="font-size:.96em;padding:2px 7px;margin-top:6px;">✕ Remove</button>
               </div>
             </div>
@@ -3103,7 +3231,12 @@ function buildShowHistory(){
   wrap.querySelectorAll('[data-act="del-show"]').forEach(b=>b.onclick=()=>{
     if(!confirm('Remove this show record? This will reverse its EXP and stat gains.')) return;
     const h=state.horses.find(x=>x.id===b.dataset.hid);
-    if(h) deleteCompRecord(h, b.dataset.cid);
+    if(h){ removeRiderPPForSource(b.dataset.cid); deleteCompRecord(h, b.dataset.cid); }
+  });
+  wrap.querySelectorAll('[data-act="toggle-featured-comp"]').forEach(b=>b.onclick=()=>{
+    const h=state.horses.find(x=>x.id===b.dataset.hid); if(!h) return;
+    const src=(h.compHistory||[]).find(r=>r.id===b.dataset.cid);
+    if(src) toggleRiderFeatured(h, src, 'competition');
   });
   wrap.querySelectorAll('[data-act="edit-show"]').forEach(b=>b.onclick=()=>{
     const h=state.horses.find(x=>x.id===b.dataset.hid);
@@ -3197,7 +3330,7 @@ function renderArtLog(){
               <b>${e.label}</b>
               ${placeLabel?`<span class="tag">${placeLabel}</span>`:""}
               <span class="tag" style="background:rgba(122,155,110,.15);color:#7a9b6e;border-color:#7a9b6e;">+${e.exp} EXP</span>
-              <span data-act="edit-artlog-img" data-id="${h.id}" data-entry="${e.id}" style="cursor:pointer;color:#c98a3a;font-size:.92em;margin-left:6px;font-weight:bold;" title="Replace this entry's image link">Edit image</span><span data-act="delete-artlog" data-id="${h.id}" data-entry="${e.id}" style="cursor:pointer;color:#c96a3a;font-size:.92em;margin-left:6px;font-weight:bold;" title="Delete this entry (reverses its EXP/stats)">✕ Delete</span>
+              <span data-act="toggle-featured" data-id="${h.id}" data-entry="${e.id}" data-kind="training" style="cursor:pointer;color:${e.featuredRiderId?'#c9a8e8':'#8a7a6a'};font-size:.92em;margin-left:6px;font-weight:bold;" title="${e.featuredRiderId?'Rider featured — grants PP. Click to remove.':'Mark that this horse\u2019s rider is featured here (grants Prestige)'}">${e.featuredRiderId?'\u2605 Rider PP':'\u2606 Rider PP'}</span><span data-act="edit-artlog-img" data-id="${h.id}" data-entry="${e.id}" style="cursor:pointer;color:#c98a3a;font-size:.92em;margin-left:6px;font-weight:bold;" title="Replace this entry's image link">Edit image</span><span data-act="delete-artlog" data-id="${h.id}" data-entry="${e.id}" style="cursor:pointer;color:#c96a3a;font-size:.92em;margin-left:6px;font-weight:bold;" title="Delete this entry (reverses its EXP/stats)">✕ Delete</span>
               ${e.link?`<a href="${e.link}" target="_blank" class="artlog-link" style="font-size:1em;margin-left:4px;"></a>`:""}
               <div class="small" style="margin-top:2px;">${[e.art,e.lit,...(e.bonuses||[])].filter(Boolean).join(" · ")}</div>
             </div>
@@ -3218,6 +3351,14 @@ function renderArtLog(){
   wrap.querySelectorAll('[data-act="edit-artlog-img"]').forEach(b=>b.onclick=()=>{
     const h=state.horses.find(x=>x.id===b.dataset.id);
     if(h) editArtLogImage(h, b.dataset.entry);
+  });
+  wrap.querySelectorAll('[data-act="toggle-featured"]').forEach(b=>b.onclick=()=>{
+    const h=state.horses.find(x=>x.id===b.dataset.id); if(!h) return;
+    const kind=b.dataset.kind;
+    const src = kind==='competition'
+      ? (h.compHistory||[]).find(r=>r.id===b.dataset.entry)
+      : (h.artLog||[]).find(e=>e.id===b.dataset.entry);
+    if(src) toggleRiderFeatured(h, src, kind==='competition'?'competition':'training');
   });
   wrap.querySelectorAll('[data-act="delete-artlog"]').forEach(b=>b.onclick=()=>{
     const h=state.horses.find(x=>x.id===b.dataset.id);
@@ -3244,7 +3385,7 @@ function renderTackInventory(){
       <div><label>Category</label>
         <select id="tk_cat">
           <option>Saddle</option><option>Bridle</option><option>Shoes</option>
-          <option>Boots</option><option>Saddlepad</option><option>Blanket</option><option>Other</option>
+          <option>Boots</option><option>Blanket</option><option>Other</option>
         </select>
       </div>
     </div>
