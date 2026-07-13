@@ -171,48 +171,37 @@ const BONUS_EXP = {
 const REF_SHEET_EXP = 4;
 
 // ---- RIDER PRESTIGE (Scope A: earn PP, get titles; no stat bonuses yet) ----
-// Each source is a checkbox on a logged rider entry; the entry's PP is the sum
-// of the ones ticked. A rider's total PP is the sum across all their entries.
-const RIDER_PP = {
-  "Art": {
-    "Rider in a personal image":1,
-    "Rider in a collaboration image":2,
-    "Full-body image (stackable)":1,
-    "Rider in group image (3+ riders)":2,
-    "Training or mentoring another rider":2,
-    "Rider in a collaborative show entry":3,
-    "Drawn by someone else (gift/commission)":1,
-  },
-  "Literature": {
-    "Rider in a 500+ word literature piece":1,
-    "Collab literature piece":2,
-    "Main focus / POV in lit (stackable)":1,
-    "Featured in someone else's writing":1,
-    "Show / clinic lit entry":2,
-    "Mentoring / training in lit (500+ words)":2,
-  },
-  "Community & Collabs": {
-    "Collab image/lit (2+ users)":2,
-    "Logged RP scene (per 100 words)":1,
-    "Logged RP 1000+ words":3,
-    "Mentor / mentee drawing or writing":2,
-    "Rider in prompt or community event":1,
-    "Hosting a clinic or event":3,
-  },
-  "Show / Clinic / Event": {
-    "Show or clinic entry":2,
-    "Top 3 in show":1,
-    "Judge's Choice or special ribbon":1,
-    "Collaborative show/clinic entry":3,
-    "Rider intro / interview (lit or art)":1,
-  },
-  "Extras & Bonus": {
-    "Monthly rider prompt / journal":1,
-    "Rider profile / questionnaire":1,
-    "Flashbacks or age-up content":1,
-    "Meme / comic / fun side content":1,
-    "Cameo in another's art/lit":1,
-  },
+// Rider Prestige, structured like the Training form: pick ONE primary type from a
+// dropdown (what the piece mainly is), then optionally stack a few add-on modifiers.
+// Each carries its PP value; an entry's PP is the primary + any add-ons.
+const RIDER_PP_TYPES = {
+  "Rider in a personal image":1,
+  "Rider in a collaboration image":2,
+  "Rider in a group image (3+ riders)":2,
+  "Rider drawn by someone else (gift/commission)":1,
+  "Rider in 500+ word literature":1,
+  "Collaborative literature piece":2,
+  "Show / clinic entry":2,
+  "Collaborative show / clinic entry":3,
+  "Logged RP scene (under 1000 words)":1,
+  "Logged RP scene (1000+ words)":3,
+  "Training / mentoring another rider":2,
+  "Hosting a clinic or event":3,
+  "Rider in a prompt / community event":1,
+  "Monthly rider prompt / journal":1,
+  "Rider profile / questionnaire":1,
+  "Rider intro / interview":1,
+  "Flashback or age-up content":1,
+  "Meme / comic / fun side content":1,
+  "Cameo in another's art/lit":1,
+};
+const RIDER_PP_ADDONS = {
+  "Full-body image":1,
+  "Main focus / POV":1,
+  "Top 3 in show":1,
+  "Judge's Choice / special ribbon":1,
+  "Mentor / mentee featured":2,
+  "Featured in someone else's work":1,
 };
 
 // Title tiers by total PP. (Perks are intentionally omitted for now — the old
@@ -1803,26 +1792,34 @@ function renderRiders(){
 }
 
 function riderEntryFormHtml(rider){
-  const groups=Object.entries(RIDER_PP).map(([cat,items])=>`
-    <div style="margin-top:8px;">
-      <div class="small" style="color:#c9a8e8;font-weight:bold;">${cat}</div>
-      <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px;">
-        ${Object.entries(items).map(([label,pp])=>`
-          <label class="pill" style="cursor:pointer;font-size:.95em;">
-            <input type="checkbox" data-pp="${pp}" data-ppsrc="${label.replace(/"/g,'&quot;')}" style="margin-right:6px;" />
-            ${label} <b style="color:#c9a8e8;margin-left:4px;">+${pp}</b>
-          </label>`).join("")}
-      </div>
-    </div>`).join("");
   return `
     <div class="artlog-panel" data-rider-entry="${rider.id}" style="margin-top:12px;">
-      <div class="small" style="color:#b5a392;margin-bottom:6px;">Tick everything that applies to this piece. PP for this entry: <b id="rpp_total_${rider.id}" style="color:#c9a8e8;">0</b></div>
       <div class="row">
-        <div style="flex:1;min-width:200px;"><label>Title / description</label><input class="rpp_label" placeholder="e.g. 'Morning at the barn' or a roleplay title" /></div>
-        <div style="flex:1;min-width:200px;"><label>Link <span style="opacity:.6;font-weight:normal;">(image address or doc)</span></label><input class="rpp_link" placeholder="https://…" /></div>
+        <div style="flex:1;min-width:200px;">
+          <label>Prestige Type</label>
+          <select class="rpp_type">
+            ${Object.keys(RIDER_PP_TYPES).map(k=>`<option value="${k}" data-pp="${RIDER_PP_TYPES[k]}">${k} (+${RIDER_PP_TYPES[k]})</option>`).join("")}
+          </select>
+        </div>
       </div>
-      ${groups}
-      <button class="btn rpp_save" style="margin-top:10px;">Log entry (+<span class="rpp_btn_total">0</span> PP)</button>
+      <div style="margin-top:10px;">
+        <label>Image URL <span class="small">(optional)</span></label>
+        <input type="text" class="rpp_image" placeholder="https://…jpg / .png / .gif — a direct image link" />
+        <div class="rpp_image_preview" style="margin-top:6px;"></div>
+      </div>
+      <div class="row" style="margin-top:10px;">
+        <div style="flex:1;min-width:200px;"><label>Title / description</label><input class="rpp_label" placeholder="e.g. 'Morning at the barn' or an RP title" /></div>
+        <div><label>Literature Word Count <span class="small">(optional)</span></label><input type="number" class="rpp_words" min="0" placeholder="e.g. 800" /></div>
+      </div>
+      <div style="margin-top:10px;">
+        <label>Add-ons <span class="small">(optional, stackable)</span></label>
+        <div class="pill-select rpp_addons">
+          ${Object.keys(RIDER_PP_ADDONS).map(k=>`<div class="pill" data-addon="${k}" data-pp="${RIDER_PP_ADDONS[k]}">${k} (+${RIDER_PP_ADDONS[k]})</div>`).join("")}
+        </div>
+      </div>
+      <div style="margin-top:10px;"><label>Link to art / literature <span class="small">(optional)</span></label><input class="rpp_link" placeholder="https://…" /></div>
+      <div class="small" style="margin-top:10px;">This entry: <b class="rpp_total" style="color:#c9a8e8;">1</b> PP</div>
+      <button class="btn rpp_save" style="margin-top:8px;">✓ Log Prestige (+<span class="rpp_btn_total">1</span> PP)</button>
     </div>`;
 }
 
@@ -1901,29 +1898,45 @@ function bindRiderCardEvents(wrap){
   bindRiderEntryForm(wrap);
 }
 
-// Wire a rider PP entry form (checkbox tally + save). Works inside the card or the
-// Prestige tab. Pass a scope element; binds every [data-rider-entry] form within.
+// Wire a rider PP entry form (Training-style: type dropdown + stackable add-on pills).
 function bindRiderEntryForm(scope){
   scope.querySelectorAll('[data-rider-entry]').forEach(form=>{
     const rid=form.dataset.riderEntry;
+    const typeSel=form.querySelector('.rpp_type');
+    const addons=form.querySelector('.rpp_addons');
+    const imgIn=form.querySelector('.rpp_image');
+    const preview=form.querySelector('.rpp_image_preview');
+    const selected=new Set();
+
     const recalc=()=>{
-      let sum=0; form.querySelectorAll('input[data-pp]:checked').forEach(c=>sum+=Number(c.dataset.pp)||0);
-      const t1=document.getElementById('rpp_total_'+rid); if(t1) t1.textContent=sum;
-      form.querySelectorAll('.rpp_btn_total').forEach(s=>s.textContent=sum);
+      let sum=Number(typeSel.selectedOptions[0]?.dataset.pp)||0;
+      selected.forEach(k=> sum+=Number(RIDER_PP_ADDONS[k])||0);
+      form.querySelectorAll('.rpp_total, .rpp_btn_total').forEach(s=>s.textContent=sum);
       return sum;
     };
-    form.querySelectorAll('input[data-pp]').forEach(c=>c.onchange=recalc);
+    typeSel.onchange=recalc;
+    addons.querySelectorAll('[data-addon]').forEach(p=>p.onclick=()=>{
+      const k=p.dataset.addon;
+      if(selected.has(k)){ selected.delete(k); p.classList.remove('active'); }
+      else { selected.add(k); p.classList.add('active'); }
+      recalc();
+    });
+    if(imgIn) imgIn.oninput=()=>{ preview.innerHTML=urlImagePreviewHTML(imgIn.value.trim()||null,'Prestige'); };
+    recalc();
+
     form.querySelector('.rpp_save').onclick=async()=>{
       const rider=state.riders.find(r=>r.id===rid); if(!rider) return;
-      const checked=[...form.querySelectorAll('input[data-pp]:checked')];
-      const pp=checked.reduce((n,c)=>n+(Number(c.dataset.pp)||0),0);
-      if(pp<=0){ alert('Tick at least one PP source.'); return; }
+      const primary=typeSel.value;
+      const pp=recalc();
+      const sources=[`${primary} (+${RIDER_PP_TYPES[primary]})`, ...[...selected].map(k=>`${k} (+${RIDER_PP_ADDONS[k]})`)];
+      const words=Number(form.querySelector('.rpp_words').value)||0;
       const entry={
         id:'re_'+Math.random().toString(36).slice(2,10),
-        label:form.querySelector('.rpp_label').value.trim()||'Prestige entry',
+        label:form.querySelector('.rpp_label').value.trim()|| primary,
         link:form.querySelector('.rpp_link').value.trim(),
-        pp,
-        sources:checked.map(c=>c.dataset.ppsrc),
+        image:(imgIn&&imgIn.value.trim())||null,
+        words: words||undefined,
+        pp, sources,
         date:new Date().toISOString(),
       };
       if(!rider.artLog) rider.artLog=[];
