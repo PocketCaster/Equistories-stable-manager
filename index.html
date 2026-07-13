@@ -299,6 +299,7 @@ function newRider(data){
     id:'r_'+Math.random().toString(36).slice(2,10),
     name:data.name||"Unnamed Rider",
     pronouns:data.pronouns||"",
+    barn:data.barn||"",         // barn / stable they ride for
     image:data.image||"",       // URL
     bio:data.bio||"",
     link:data.link||"",         // ref/profile sheet
@@ -1373,6 +1374,7 @@ let addHorseOpen = false;
 // ============================================
 let expandedRiderLogs = new Set();   // rider ids whose art log is open
 let openRiderEntry = new Set();      // rider ids whose "log entry" form is open
+let openRiderAttire = new Set();     // rider ids whose attire panel is open
 
 // Rider attire — mirrors the tack inventory. Attire items live in a shared
 // wardrobe and get equipped on individual riders. (Stat effects can be added
@@ -1598,6 +1600,7 @@ function renderRiders(){
     <div class="row">
       <div><label>Name</label><input id="nr_name" placeholder="e.g. Natalia Jones" /></div>
       <div><label>Pronouns <span style="opacity:.6;font-weight:normal;">(optional)</span></label><input id="nr_pronouns" placeholder="she/her" style="max-width:130px;" /></div>
+      <div><label>Barn / Stable <span style="opacity:.6;font-weight:normal;">(optional)</span></label><input id="nr_barn" placeholder="e.g. Lightblood Stables" /></div>
       <div style="flex:1;min-width:200px;"><label>Profile image link <span style="opacity:.6;font-weight:normal;">(optional)</span></label><input id="nr_image" placeholder="https://… image address" /></div>
     </div>
     <div class="row">
@@ -1612,6 +1615,7 @@ function renderRiders(){
     const rider=newRider({
       name,
       pronouns:add.querySelector('#nr_pronouns').value.trim(),
+      barn:add.querySelector('#nr_barn').value.trim(),
       image:add.querySelector('#nr_image').value.trim(),
       link:add.querySelector('#nr_link').value.trim(),
       bio:add.querySelector('#nr_bio').value.trim(),
@@ -1637,10 +1641,16 @@ function renderRiders(){
     const showTitle = (pp>=100 && rider.customTitle) ? rider.customTitle : title.name;
     const logOpen=expandedRiderLogs.has(rider.id);
     const entryOpen=openRiderEntry.has(rider.id);
+    const attireOpen=openRiderAttire.has(rider.id);
 
     const imgHtml = rider.image
       ? `<img src="${rider.image}" style="width:120px;height:120px;object-fit:cover;border-radius:8px;border:2px solid var(--accent);cursor:zoom-in;" onclick="openLightbox('${jsStr(rider.image)}','${jsStr(rider.name)}')" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';" /><div class="horse-photo-placeholder" style="width:120px;height:120px;display:none;">🧍</div>`
       : `<div class="horse-photo-placeholder" style="width:120px;height:120px;">🧍</div>`;
+
+    const ridden = state.horses.filter(h=>h.riderId===rider.id);
+    const riddenHtml = ridden.length
+      ? ridden.map(h=>`<span data-act="open-horse" data-id="${h.id}" style="color:var(--accent);cursor:pointer;text-decoration:underline;text-decoration-style:dotted;">${h.name}</span>`).join(", ")
+      : `<span style="color:#8a7a6a;">None yet</span>`;
 
     const card=el('div','horse-card');
     card.innerHTML=`
@@ -1652,31 +1662,29 @@ function renderRiders(){
             ${rider.pronouns?`<span class="small" style="color:#8a7a6a;">${rider.pronouns}</span>`:""}
             <span class="tag" style="background:#2a1a3a;color:#c9a8e8;border-color:#6a4a8a;">${showTitle}</span>
           </div>
-          <div class="small" style="margin-top:4px;"><b>${pp} PP</b>${prog.next?` · ${prog.toNext} to ${prog.next.name}`:` · top tier`}</div>
-          <div class="expbar-bg" style="margin-top:5px;"><div class="expbar-fill" style="width:${prog.pct}%;background:linear-gradient(90deg,#8a6fb0,#c9a8e8);"></div></div>
-          <div class="small" style="margin-top:4px;color:#8a7a6a;font-style:italic;">${title.note}</div>
-          ${rider.link?`<div class="small" style="margin-top:4px;"><a href="${rider.link}" target="_blank" rel="noopener" style="color:var(--accent);">Reference sheet ↗</a></div>`:""}
-          ${rider.bio?`<div class="small" style="margin-top:6px;">${rider.bio.replace(/</g,'&lt;')}</div>`:""}
+          <div class="small" style="margin-top:4px;">Barn: ${rider.barn?rider.barn.replace(/</g,'&lt;'):`<span style="color:#8a7a6a;">—</span>`}</div>
+          <div class="small" style="margin-top:2px;">Rides: ${riddenHtml}</div>
         </div>
-      </div>
-      <div style="margin-top:10px;">
-        <div class="small" style="margin-bottom:3px;">Attire:</div>
-        <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-start;">${attireHtml(rider)}</div>
-        ${attireAvailable(rider).length?`
-          <select data-ract="equip-attire" data-id="${rider.id}" style="margin-top:6px;width:auto;display:inline-block;font-size:.95em;">
-            <option value="">+ Equip attire…</option>
-            ${attireAvailable(rider).map(t=>`<option value="${t.id}">${t.name} (${t.category})</option>`).join("")}
-          </select>`:`<div class="small" style="margin-top:4px;">${(state.attireInventory||[]).length?"All attire equipped.":"Add attire in the wardrobe above."}</div>`}
       </div>
       <div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap;">
         <button class="btn" data-ract="toggle-entry" data-id="${rider.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">${entryOpen?"Close":"Log art / activity (+PP)"}</button>
         <button class="secondary" data-ract="open-rider" data-id="${rider.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">View Profile</button>
         <button class="secondary" data-ract="toggle-rlog" data-id="${rider.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">${logOpen?"Hide":"Show"} Prestige Log (${(rider.artLog||[]).length})</button>
+        <button class="secondary" data-ract="toggle-attire" data-id="${rider.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">${attireOpen?"Hide":"Attire"} (${(rider.attireEquipped||[]).length})</button>
         ${pp>=100?`<button class="secondary" data-ract="edit-title" data-id="${rider.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">Custom Title</button>`:""}
         <button class="secondary" data-ract="edit-rider" data-id="${rider.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">Edit</button>
         <button class="danger" data-ract="del-rider" data-id="${rider.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">Remove</button>
       </div>
       ${entryOpen?riderEntryFormHtml(rider):""}
+      ${attireOpen?`<div class="artlog-panel" style="margin-top:10px;">
+        <div class="small" style="margin-bottom:6px;">Equipped attire:</div>
+        <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-start;">${attireHtml(rider)}</div>
+        ${attireAvailable(rider).length?`
+          <select data-ract="equip-attire" data-id="${rider.id}" style="margin-top:8px;width:auto;display:inline-block;font-size:.95em;">
+            <option value="">+ Equip attire…</option>
+            ${attireAvailable(rider).map(t=>`<option value="${t.id}">${t.name} (${t.category})</option>`).join("")}
+          </select>`:`<div class="small" style="margin-top:6px;">${(state.attireInventory||[]).length?"All attire equipped.":"Add attire in the wardrobe above."}</div>`}
+      </div>`:""}
       ${logOpen?riderLogHtml(rider):""}
     `;
     wrap.appendChild(card);
@@ -1733,7 +1741,21 @@ function bindRiderCardEvents(wrap){
   wrap.querySelectorAll('[data-ract="toggle-rlog"]').forEach(b=>b.onclick=()=>{
     const id=b.dataset.id; expandedRiderLogs.has(id)?expandedRiderLogs.delete(id):expandedRiderLogs.add(id); render();
   });
+  wrap.querySelectorAll('[data-ract="toggle-attire"]').forEach(b=>b.onclick=()=>{
+    const id=b.dataset.id; openRiderAttire.has(id)?openRiderAttire.delete(id):openRiderAttire.add(id); render();
+  });
   wrap.querySelectorAll('[data-ract="open-rider"]').forEach(b=>b.onclick=()=>goToRiderProfile(b.dataset.id));
+  wrap.querySelectorAll('[data-act="open-horse"]').forEach(b=>b.onclick=()=>goToProfile(b.dataset.id));
+  wrap.querySelectorAll('[data-ract="edit-rider"]').forEach(b=>b.onclick=async()=>{
+    const rider=state.riders.find(r=>r.id===b.dataset.id); if(!rider) return;
+    const name=prompt('Rider name:', rider.name); if(name===null) return;
+    const barn=prompt('Barn / stable they ride for (blank to clear):', rider.barn||""); if(barn===null) return;
+    const image=prompt('Profile image link (blank to clear):', rider.image||""); if(image===null) return;
+    const link=prompt('Reference / profile sheet link (blank to clear):', rider.link||""); if(link===null) return;
+    const bio=prompt('Bio (blank to clear):', rider.bio||""); if(bio===null) return;
+    rider.name=name.trim()||rider.name; rider.barn=barn.trim(); rider.image=image.trim(); rider.link=link.trim(); rider.bio=bio.trim();
+    await saveRider(rider); await save(); render();
+  });
   wrap.querySelectorAll('[data-ract="equip-attire"]').forEach(sel=>sel.onchange=async()=>{
     const rider=state.riders.find(r=>r.id===sel.dataset.id); if(!rider||!sel.value) return;
     if(!rider.attireEquipped) rider.attireEquipped=[];
@@ -1750,15 +1772,6 @@ function bindRiderCardEvents(wrap){
     if(!confirm(`Remove rider "${rider.name}"? This deletes their Prestige log too. This cannot be undone.`)) return;
     state.riders=state.riders.filter(r=>r.id!==rider.id);
     deleteRiderFromSheets(rider.id); await save(); render();
-  });
-  wrap.querySelectorAll('[data-ract="edit-rider"]').forEach(b=>b.onclick=async()=>{
-    const rider=state.riders.find(r=>r.id===b.dataset.id); if(!rider) return;
-    const name=prompt('Rider name:', rider.name); if(name===null) return;
-    const image=prompt('Profile image link (blank to clear):', rider.image||""); if(image===null) return;
-    const link=prompt('Reference / profile sheet link (blank to clear):', rider.link||""); if(link===null) return;
-    const bio=prompt('Bio (blank to clear):', rider.bio||""); if(bio===null) return;
-    rider.name=name.trim()||rider.name; rider.image=image.trim(); rider.link=link.trim(); rider.bio=bio.trim();
-    await saveRider(rider); await save(); render();
   });
   wrap.querySelectorAll('[data-ract="edit-title"]').forEach(b=>b.onclick=async()=>{
     const rider=state.riders.find(r=>r.id===b.dataset.id); if(!rider) return;
