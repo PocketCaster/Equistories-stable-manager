@@ -462,7 +462,7 @@ const BANK_URL = 'https://script.google.com/macros/s/AKfycby9WLxUPDAPg9EH5aTPATz
 const DEFAULT_STABLE_URL = 'https://script.google.com/macros/s/AKfycbwNF02tC8_U9MjAvJJzjVLNgHUyAf2ND-drxjhQPnOikJdw_seUIIxrYEsTsAlhG-o/exec';
 let STABLE_URL = localStorage.getItem('equi_stable_url') || DEFAULT_STABLE_URL;
 
-let state = { horses:[], riders:[], log:[], tackInventory:[], attireInventory:[], customBreeds:[], customGenes:[], loaded:false };
+let state = { horses:[], riders:[], profile:null, log:[], tackInventory:[], attireInventory:[], customBreeds:[], customGenes:[], loaded:false };
 // Custom/Created breeds (and custom genes) are shared config, visible to every affiliate
 // regardless of who's logged in — they're stored under this reserved userId
 // in the same Stable Data backend everyone already uses, rather than in any
@@ -803,11 +803,17 @@ async function saveHorse(horse){
   // ever fires for horses that still carry an old base64 profileImage/
   // referenceImage saved back when those were file uploads; once replaced
   // with a pasted link it never triggers again.
+  // Old horses (created before pasted image links) may carry a base64 data: URL
+  // for profileImage/referenceImage. Those are saved separately in the images
+  // sheet and reattached on load — so once saved there, strip them OUT of the
+  // horse JSON. Otherwise the whole base64 blob rides along in horseJson, bloating
+  // it into hundreds of chunks and timing out the write ("can't save old horses").
   const IMAGE_KEYS = ['profileImage','referenceImage'];
   for(const key of IMAGE_KEYS){
-    if(horseData[key] && horseData[key].startsWith('data:')){
+    if(horseData[key] && typeof horseData[key]==='string' && horseData[key].startsWith('data:')){
       const ok = await saveHorseImageChunked(bankAccount.userId, horse.id, key, horseData[key]);
       if(!ok) allOk = false;
+      else delete horseData[key];   // saved separately; keep it out of horseJson
     }
   }
   // Strip any leftover bookkeeping flags from the now-retired chunked-image
@@ -923,10 +929,11 @@ async function saveGlobalBreeds(){
 
 async function loadFromSheets(){
   const userId = bankAccount.userId;
-  const [stateRes, horsesRes, ridersRes] = await Promise.all([
+  const [stateRes, horsesRes, ridersRes, profileRes] = await Promise.all([
     stableGas({ action:'loadStableState', userId }),
     stableGas({ action:'loadStable', userId }),
     stableGas({ action:'loadRiders', userId }),
+    stableGas({ action:'loadProfile', userId }),
     loadGlobalBreeds(),
   ]);
   if(stateRes?.success && stateRes.data){
@@ -938,6 +945,7 @@ async function loadFromSheets(){
   }
   state.horses = horsesRes?.success ? (horsesRes.data||[]) : [];
   state.riders = ridersRes?.success ? (ridersRes.data||[]) : [];
+  state.profile = (profileRes?.success && profileRes.data) ? profileRes.data : null;
   const horsesToFix=[];
   state.horses.forEach(h=>{
     resolveImageRefs(h);
@@ -1234,6 +1242,20 @@ function render(){
     return;
   }
 
+  const playerProfileId = params.get('player');
+  if(playerProfileId){
+    app.innerHTML='<div style="padding:40px;text-align:center;color:#b5a392;font-family:Georgia,serif;">Loading player profile…</div>';
+    const stableOverride = params.get('stable');
+    if(stableOverride && !STABLE_URL) STABLE_URL = stableOverride;
+    stableGas({ action:'loadPublicProfile', userId:playerProfileId }, stableOverride).then(res=>{
+      if(res?.success && res.data){ renderPlayerProfilePage(app, res.data); return; }
+      app.innerHTML=`<div style="padding:40px;text-align:center;color:#b5a392;font-family:Georgia,serif;max-width:500px;margin:0 auto;">
+        Player not found.<br><div style="font-size:1em;opacity:.8;margin-top:10px;">${res&&res.error?('Server said: "'+res.error+'"'):'Check the share link, and that the Stable script is redeployed with loadPublicProfile.'}</div>
+        <br><a href="${window.location.pathname}" style="color:#c98a3a;">← Back</a></div>`;
+    });
+    return;
+  }
+
   const riderProfileId = params.get('rider');
   if(riderProfileId){
     const localRider = state.riders.find(x=>x.id===riderProfileId);
@@ -1293,6 +1315,7 @@ function render(){
         </div>`).join("")}
       <div style="flex:1;"></div>
       <span class="small" style="color:var(--dim);margin-right:6px;">${bankAccount.userId}</span>
+      <button id="btn_myprofile" class="secondary" style="font-size:.98em;padding:4px 10px;margin-top:0;">My Profile</button>
       <button id="btn_signout" class="secondary" style="font-size:.98em;padding:4px 10px;margin-top:0;">Sign Out</button>
     </div>
     <div id="tab-content"></div>
@@ -1304,11 +1327,13 @@ function render(){
   app.querySelectorAll('[data-tab]').forEach(b=>{
     b.onclick=()=>{ activeTab=b.dataset.tab; render(); };
   });
+  const myProfileBtn=app.querySelector('#btn_myprofile');
+  if(myProfileBtn) myProfileBtn.onclick=()=>showPlayerProfileModal();
   const signOutBtn=app.querySelector('#btn_signout');
   if(signOutBtn) signOutBtn.onclick=async()=>{
     if(!confirm('Sign out? Your stable data is saved to Google Sheets — sign back in anytime.')) return;
     bankAccount={userId:'',password:'',linked:false};
-    state.horses=[]; state.riders=[]; state.log=[]; state.tackInventory=[]; state.attireInventory=[]; state.loaded=false;
+    state.horses=[]; state.riders=[]; state.profile=null; state.log=[]; state.tackInventory=[]; state.attireInventory=[]; state.loaded=false;
     saveBankAccount();
     load();
   };
@@ -1572,6 +1597,179 @@ function attireAvailable(rider){
 // Read-only public rider profile page — same layout as the horse profile page,
 // with rider fields swapped in (title/PP for level/breed, Prestige Log for art log,
 // attire for tack).
+// ============================================
+// PLAYER PROFILE  (public identity for the account)
+// ============================================
+function newPlayerProfile(){
+  return { displayName:'', pronouns:'', avatar:'', bio:'', discord:'', links:[], joinedAt:new Date().toISOString() };
+}
+async function savePlayerProfile(profile){
+  state.profile=profile;
+  if(bankAccount.linked && STABLE_URL){
+    await stableGas({ action:'saveProfile', userId:bankAccount.userId, profileJson:JSON.stringify(profile) });
+  }
+}
+function playerShareLink(userId){
+  const url=new URL(window.location.origin+window.location.pathname);
+  url.searchParams.set('player', userId);
+  if(STABLE_URL) url.searchParams.set('stable', STABLE_URL);
+  return url.toString();
+}
+function goToPlayerProfile(userId){
+  const url=new URL(window.location.href);
+  url.searchParams.set('player', userId);
+  url.searchParams.delete('horse'); url.searchParams.delete('rider');
+  history.pushState({player:userId}, '', url);
+  render(); window.scrollTo(0,0);
+}
+
+function showPlayerProfileModal(){
+  const p = state.profile ? {...newPlayerProfile(), ...state.profile} : newPlayerProfile();
+  const links = Array.isArray(p.links) ? p.links.map(l=>({...l})) : [];
+  const overlay=el('div');
+  overlay.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:9999;display:flex;align-items:flex-start;justify-content:center;overflow:auto;padding:24px;color:var(--text);';
+  overlay.innerHTML=`
+    <div class="card" style="max-width:760px;width:100%;margin-top:20px;background:#241a14;border:1px solid #4a392a;box-shadow:0 12px 40px rgba(0,0,0,.6);">
+      <h3 style="margin-top:0;color:#c98a3a;">My Player Profile</h3>
+      <div class="small" style="margin-top:-4px;margin-bottom:10px;">Your public community profile — it shows your horses, riders, and how to reach you. Account name: <b>${bankAccount.userId}</b>.</div>
+      <div class="row">
+        <div style="flex:1;min-width:200px;"><label>Display Name <span class="small">(optional)</span></label><input id="pp_name" value="${escAttr(p.displayName||'')}" placeholder="${escAttr(bankAccount.userId)}" /></div>
+        <div><label>Pronouns <span class="small">(optional)</span></label><input id="pp_pronouns" value="${escAttr(p.pronouns||'')}" placeholder="she/her" style="max-width:130px;" /></div>
+      </div>
+      <div style="margin-top:8px;">
+        <label>Avatar image link <span class="small">(optional)</span></label>
+        <input id="pp_avatar" value="${escAttr(p.avatar||'')}" placeholder="https://…jpg / .png" />
+        <div id="pp_avatar_preview" style="margin-top:6px;">${p.avatar?urlImagePreviewHTML(p.avatar,'Avatar'):''}</div>
+      </div>
+      <div style="margin-top:8px;"><label>Discord <span class="small">(username or invite/profile link)</span></label><input id="pp_discord" value="${escAttr(p.discord||'')}" placeholder="e.g. pocketcaster or a discord.gg/… link" /></div>
+      <div style="margin-top:8px;"><label>Bio <span class="small">(optional)</span></label><textarea id="pp_bio" style="min-height:90px;" placeholder="Tell the community about you and your stable…">${(p.bio||'').replace(/</g,'&lt;')}</textarea></div>
+      <div style="margin-top:8px;">
+        <label>Links <span class="small">(DeviantArt, Toyhouse, etc.)</span></label>
+        <div id="pp_links"></div>
+        <button id="pp_addlink" class="secondary" style="font-size:.95em;padding:3px 10px;margin-top:6px;">+ Add link</button>
+      </div>
+      <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap;">
+        <button id="pp_save" class="btn">Save Profile</button>
+        <button id="pp_view" class="secondary">View / Share public page</button>
+        <button id="pp_cancel" class="secondary">Cancel</button>
+      </div>
+    </div>`;
+  (document.getElementById('app')||document.body).appendChild(overlay);
+
+  const linksWrap=overlay.querySelector('#pp_links');
+  function renderLinks(){
+    linksWrap.innerHTML=links.map((l,i)=>`
+      <div style="display:flex;gap:6px;margin-top:6px;">
+        <input data-lk-label="${i}" value="${escAttr(l.label||'')}" placeholder="Label (e.g. DeviantArt)" style="max-width:180px;" />
+        <input data-lk-url="${i}" value="${escAttr(l.url||'')}" placeholder="https://…" style="flex:1;" />
+        <button class="secondary" data-lk-del="${i}" style="padding:3px 10px;">✕</button>
+      </div>`).join("");
+    linksWrap.querySelectorAll('[data-lk-del]').forEach(b=>b.onclick=()=>{ links.splice(Number(b.dataset.lkDel),1); renderLinks(); });
+    linksWrap.querySelectorAll('[data-lk-label]').forEach(inp=>inp.oninput=()=>{ links[Number(inp.dataset.lkLabel)].label=inp.value; });
+    linksWrap.querySelectorAll('[data-lk-url]').forEach(inp=>inp.oninput=()=>{ links[Number(inp.dataset.lkUrl)].url=inp.value; });
+  }
+  renderLinks();
+  overlay.querySelector('#pp_addlink').onclick=()=>{ links.push({label:'',url:''}); renderLinks(); };
+  overlay.querySelector('#pp_avatar').oninput=e=>{ overlay.querySelector('#pp_avatar_preview').innerHTML=urlImagePreviewHTML(e.target.value.trim()||null,'Avatar'); };
+  overlay.querySelector('#pp_cancel').onclick=()=>overlay.remove();
+
+  function collect(){
+    return { ...newPlayerProfile(), ...p,
+      displayName:overlay.querySelector('#pp_name').value.trim(),
+      pronouns:overlay.querySelector('#pp_pronouns').value.trim(),
+      avatar:overlay.querySelector('#pp_avatar').value.trim(),
+      discord:overlay.querySelector('#pp_discord').value.trim(),
+      bio:overlay.querySelector('#pp_bio').value.trim(),
+      links:links.filter(l=>(l.label||l.url)).map(l=>({label:(l.label||'').trim(),url:(l.url||'').trim()})),
+      joinedAt:p.joinedAt||new Date().toISOString(),
+    };
+  }
+  overlay.querySelector('#pp_save').onclick=async()=>{ await savePlayerProfile(collect()); overlay.remove(); render(); };
+  overlay.querySelector('#pp_view').onclick=async()=>{ await savePlayerProfile(collect()); overlay.remove(); goToPlayerProfile(bankAccount.userId); };
+}
+
+// Public player profile page — same card layout as horse/rider profiles.
+function renderPlayerProfilePage(app, data){
+  const prof = data.profile || {};
+  const name = (prof.displayName && prof.displayName.trim()) || data.userId;
+  const horses = data.horses || [];
+  const riders = data.riders || [];
+  const owned = bankAccount.linked && bankAccount.userId===data.userId;
+
+  const shareUrl=new URL(window.location.origin+window.location.pathname);
+  shareUrl.searchParams.set('player', data.userId);
+  if(STABLE_URL) shareUrl.searchParams.set('stable', STABLE_URL);
+
+  const avatar = prof.avatar
+    ? `<img src="${prof.avatar}" onclick="openLightbox('${jsStr(prof.avatar)}','${jsStr(name)}')" style="width:min(240px,50vw);height:min(240px,50vw);border-radius:12px;object-fit:cover;border:3px solid #c98a3a;cursor:zoom-in;" />`
+    : `<div style="width:min(240px,50vw);height:min(240px,50vw);border-radius:12px;border:3px solid #4a392a;display:flex;align-items:center;justify-content:center;font-size:3.5em;background:#15100c;">👤</div>`;
+
+  let discordHtml='';
+  if(prof.discord){
+    const d=prof.discord.trim();
+    discordHtml = /^https?:\/\//.test(d)
+      ? `<a href="${d}" target="_blank" rel="noopener">Discord ↗</a>`
+      : `Discord: <b>${d.replace(/</g,'&lt;')}</b>`;
+  }
+  const linksHtml=(Array.isArray(prof.links)?prof.links:[]).filter(l=>l.url).map(l=>
+    `<a href="${l.url}" target="_blank" rel="noopener" class="tag" style="margin:2px;">${(l.label||l.url).replace(/</g,'&lt;')} ↗</a>`).join(" ");
+
+  const horseCards = horses.length ? horses.map(h=>`
+    <div class="tag" data-act="pp-open-horse" data-id="${h.id}" style="cursor:pointer;display:inline-flex;align-items:center;gap:8px;margin:4px;padding:6px 10px;">
+      ${h.image?`<img src="${h.image}" style="width:34px;height:34px;object-fit:cover;border-radius:5px;" />`:''}
+      <span><b>${(h.name||'Horse').replace(/</g,'&lt;')}</b> · ${h.breed||''} · Lvl ${h.level||1}</span>
+    </div>`).join("") : `<span class="small">No horses yet.</span>`;
+
+  const riderCards = riders.length ? riders.map(r=>`
+    <div class="tag" data-act="pp-open-rider" data-id="${r.id}" style="cursor:pointer;display:inline-flex;align-items:center;gap:8px;margin:4px;padding:6px 10px;background:#2a1a3a;color:#c9a8e8;border-color:#6a4a8a;">
+      ${r.image?`<img src="${r.image}" style="width:34px;height:34px;object-fit:cover;border-radius:5px;" />`:''}
+      <span><b>${(r.name||'Rider').replace(/</g,'&lt;')}</b> · ${riderTitle(r.pp||0).name} · ${r.pp||0} PP</span>
+    </div>`).join("") : `<span class="small">No riders yet.</span>`;
+
+  app.innerHTML=`
+    <style>
+      body { background:#1b1410; color:#f1e6d8; font-family:Georgia,serif; }
+      .pcard { background:#241a14; border:1px solid #4a392a; border-radius:10px; padding:clamp(18px,3vw,28px); margin-bottom:20px; }
+      .pcard h3 { color:#c98a3a; margin-top:0; }
+      a { color:#c98a3a; }
+      .tag { display:inline-block; font-size:.97em; padding:4px 10px; border-radius:10px; background:#15100c; color:#b5a392; border:1px solid #4a392a; }
+    </style>
+    <div style="width:100%;margin:0 auto;padding:clamp(16px,3vw,32px);">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px;">
+        <span data-act="pp-back" style="color:#c98a3a;cursor:pointer;">← Back to Stable Manager</span>
+        ${owned?`<button data-act="pp-edit" class="secondary" style="margin-top:0;">Edit my profile</button>`:''}
+      </div>
+      <div class="pcard">
+        <div style="display:flex;gap:20px;flex-wrap:wrap;align-items:flex-start;">
+          <div style="flex:none;">${avatar}</div>
+          <div style="flex:1;min-width:220px;">
+            <h1 style="margin:0;color:#c98a3a;font-size:1.9em;">${name.replace(/</g,'&lt;')} ${prof.pronouns?`<span class="small" style="color:#8a7a6a;font-weight:normal;">${prof.pronouns.replace(/</g,'&lt;')}</span>`:''}</h1>
+            <div class="small" style="margin-top:2px;">Account: ${data.userId}</div>
+            <div style="margin-top:10px;display:flex;flex-wrap:wrap;gap:6px;align-items:center;">${discordHtml?`<span class="tag">${discordHtml}</span>`:''} ${linksHtml}</div>
+            ${prof.bio?`<div style="margin-top:12px;line-height:1.6;white-space:pre-wrap;">${prof.bio.replace(/</g,'&lt;')}</div>`:''}
+          </div>
+        </div>
+      </div>
+      <div class="pcard">
+        <h3>Horses (${horses.length})</h3>
+        <div>${horseCards}</div>
+      </div>
+      <div class="pcard">
+        <h3>Riders (${riders.length})</h3>
+        <div>${riderCards}</div>
+      </div>
+      <div style="text-align:center;margin:20px 0;">
+        <div class="small" style="margin-bottom:6px;">Shareable link to this profile:</div>
+        <input readonly value="${shareUrl.toString()}" onclick="this.select()" style="max-width:480px;width:100%;text-align:center;padding:8px;background:#15100c;border:1px solid #4a392a;color:#f1e6d8;border-radius:6px;font-family:monospace;" />
+      </div>
+    </div>`;
+
+  app.querySelector('[data-act="pp-back"]').onclick=()=>{ if(owned){ const u=new URL(window.location.href); u.searchParams.delete('player'); history.pushState({},'',u); render(); } else { location.href=location.pathname; } };
+  const editBtn=app.querySelector('[data-act="pp-edit"]'); if(editBtn) editBtn.onclick=()=>showPlayerProfileModal();
+  app.querySelectorAll('[data-act="pp-open-horse"]').forEach(b=>b.onclick=()=>goToProfile(b.dataset.id));
+  app.querySelectorAll('[data-act="pp-open-rider"]').forEach(b=>b.onclick=()=>goToRiderProfile(b.dataset.id));
+}
+
 function renderRiderProfilePage(app, rider){
   const shareUrl = new URL(window.location.origin + window.location.pathname);
   shareUrl.searchParams.set('rider', rider.id);
