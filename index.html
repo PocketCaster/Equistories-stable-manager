@@ -2000,11 +2000,11 @@ function showTrainingEditModal(horse, entryId){
   });
   overlay.querySelector('#te_cancel').onclick=()=>overlay.remove();
   overlay.querySelector('#te_save').onclick=async()=>{
-   try{
+    let ok=false, errMsg='';
+    try{
     const art=overlay.querySelector('#te_art').value;
     const lit=Number(overlay.querySelector('#te_lit').value)||0;
     const bonuses=[...sel];
-    // recompute EXP from the editable art fields (stats are preserved as logged)
     let exp=ART_EXP[art]||0;
     const litExp=calcLitExp(lit); if(litExp>0) exp+=litExp;
     bonuses.forEach(k=>{ if(BONUS_EXP[k]) exp+=BONUS_EXP[k]; });
@@ -2017,25 +2017,32 @@ function showTrainingEditModal(horse, entryId){
     e.link=overlay.querySelector('#te_link').value.trim()||null;
     e.exp=exp;
 
-    // rider featured toggle
     const wantFeatured=overlay.querySelector('#te_featured').checked;
     if(wantFeatured && !e.featuredRiderId){
-      if(rider){ e.featuredRiderId=rider.id; await grantRiderPPForEntry(rider,'training',e,horse); }
+      if(rider){ e.featuredRiderId=rider.id; }
     } else if(!wantFeatured && e.featuredRiderId){
-      await removeRiderPPForSource(e.id); e.featuredRiderId=null;
-    } else if(wantFeatured && e.featuredRiderId && rider){
-      await grantRiderPPForEntry(rider,'training',e,horse); // refresh label/link
+      e.featuredRiderId=null;
     }
 
     recomputeHorse(horse);
-    const ok=await saveArtEntry(horse, e);   // updates in place now (no dup)
-    await saveHorse(horse); await save();
-    overlay.remove(); render();
-    if(!ok) alert('Saved locally, but writing to the Stable sheet failed — try again.');
-   }catch(err){
-    console.error('Edit save failed:', err);
-    alert('Could not save the edit: '+(err&&err.message?err.message:err));
-   }
+    }catch(err){ errMsg=(err&&err.message)?err.message:String(err); console.error('Edit apply failed:',err); }
+
+    // Always close the box and refresh the view with the applied edits.
+    overlay.remove();
+    render();
+    if(errMsg){ alert('The edit was applied on screen, but something went wrong: '+errMsg); }
+
+    // Persist in the background (won't block the UI). Handles the rider PP link too.
+    (async()=>{
+      try{
+        const wantFeatured = e.featuredRiderId;
+        if(wantFeatured && rider){ await grantRiderPPForEntry(rider,'training',e,horse); }
+        else { await removeRiderPPForSource(e.id); }
+        const okSave = await saveArtEntry(horse, e);
+        await saveHorse(horse); await save();
+        if(!okSave) console.warn('saveArtEntry returned false (Stable URL?).');
+      }catch(err){ console.error('Background save failed:',err); }
+    })();
   };
 }
 
