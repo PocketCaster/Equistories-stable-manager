@@ -698,14 +698,20 @@ async function save(horseIds){
   await Promise.all(tasks);
 }
 
-const IMAGE_CHUNK_SIZE = 3000;
+const IMAGE_CHUNK_SIZE = 5000;
 async function saveHorseImageChunked(userId, horseId, imageKey, imageData){
   const totalChunks = Math.ceil(imageData.length / IMAGE_CHUNK_SIZE) || 1;
   for(let i=0;i<totalChunks;i++){
     const chunk = imageData.slice(i*IMAGE_CHUNK_SIZE, (i+1)*IMAGE_CHUNK_SIZE);
-    const res = await stableGas({ action:'saveHorseImageChunk', userId, horseId, imageKey,
-      chunk, chunkIndex:i, totalChunks });
-    if(!res?.success) return false;
+    // Retry each chunk a few times — one flaky request used to abort the whole
+    // (100+ chunk) upload, which is why big legacy photos never saved.
+    let saved=false;
+    for(let attempt=0; attempt<3 && !saved; attempt++){
+      const res = await stableGas({ action:'saveHorseImageChunk', userId, horseId, imageKey,
+        chunk, chunkIndex:i, totalChunks });
+      saved = !!res?.success;
+    }
+    if(!saved) return false;
   }
   return true;
 }
@@ -793,41 +799,40 @@ function resolveImageRefs(horse){
 async function saveHorse(horse){
   if(!bankAccount.linked || !STABLE_URL) return false;
   const {artLog,...horseData}=horse;
-  let allOk = true;
-  // FIX: this used to also chunk-upload every show's art photo and every
-  // prize photo (see the comment history above/in saveArtEntry) — that was
-  // needed when those were uploaded files. Show art, prizes, art log
-  // images, profile photos, and reference sheets are now all pasted links
-  // (see the note at the top of the app), so they're just short strings
-  // and need no special handling. The chunked-image path below now only
-  // ever fires for horses that still carry an old base64 profileImage/
-  // referenceImage saved back when those were file uploads; once replaced
-  // with a pasted link it never triggers again.
-  // Old horses (created before pasted image links) may carry a base64 data: URL
-  // for profileImage/referenceImage. Those are saved separately in the images
-  // sheet and reattached on load — so once saved there, strip them OUT of the
-  // horse JSON. Otherwise the whole base64 blob rides along in horseJson, bloating
-  // it into hundreds of chunks and timing out the write ("can't save old horses").
+
+  // Legacy base64 images (from the old file-upload scheme) are hundreds of KB and
+  // can't ride inside horseJson over JSONP without timing out. Pull them OUT of the
+  // JSON so the profile text always saves small & fast, then migrate the image to
+  // the images sheet as a best-effort background step. Editing a profile must not
+  // fail just because an old photo is large. (New horses use short URL links, which
+  // stay in the JSON untouched.)
   const IMAGE_KEYS = ['profileImage','referenceImage'];
+  const legacyImages = [];
   for(const key of IMAGE_KEYS){
     if(horseData[key] && typeof horseData[key]==='string' && horseData[key].startsWith('data:')){
-      const ok = await saveHorseImageChunked(bankAccount.userId, horse.id, key, horseData[key]);
-      if(!ok) allOk = false;
-      else delete horseData[key];   // saved separately; keep it out of horseJson
+      legacyImages.push({ key, data: horseData[key] });
+      delete horseData[key];   // keep it out of horseJson (horse[key] in memory is untouched)
     }
   }
-  // Strip any leftover bookkeeping flags from the now-retired chunked-image
-  // scheme (harmless if absent) so they don't clutter the saved JSON.
+  // Strip retired bookkeeping flags.
   if(Array.isArray(horseData.compHistory)){
     horseData.compHistory = horseData.compHistory.map(rec=>{
-      const clean={...rec};
-      delete clean._imgUploaded; delete clean._prizeUploaded;
-      return clean;
+      const clean={...rec}; delete clean._imgUploaded; delete clean._prizeUploaded; return clean;
     });
   }
-  const ok = await sendTextChunked(bankAccount.userId, 'horseJson', horse.id, JSON.stringify(horseData));
-  if(!ok) allOk = false;
-  return allOk;
+
+  // 1) The important save: the profile record itself (small, reliable).
+  const textOk = await sendTextChunked(bankAccount.userId, 'horseJson', horse.id, JSON.stringify(horseData));
+
+  // 2) Best-effort: migrate any legacy base64 image to the images sheet (with
+  // retries). If it can't complete, the profile still saved — the photo just
+  // needs re-adding as a URL link to persist across reloads.
+  for(const img of legacyImages){
+    const okImg = await saveHorseImageChunked(bankAccount.userId, horse.id, img.key, img.data);
+    if(!okImg) console.warn('[EquiStories] legacy image could not be migrated for', horse.name, '— re-add it as a URL link to keep it after reload.');
+  }
+
+  return textOk;
 }
 
 async function saveArtEntry(horse, entry){
