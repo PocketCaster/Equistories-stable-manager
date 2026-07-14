@@ -2000,6 +2000,7 @@ function showTrainingEditModal(horse, entryId){
   });
   overlay.querySelector('#te_cancel').onclick=()=>overlay.remove();
   overlay.querySelector('#te_save').onclick=async()=>{
+   try{
     const art=overlay.querySelector('#te_art').value;
     const lit=Number(overlay.querySelector('#te_lit').value)||0;
     const bonuses=[...sel];
@@ -2031,6 +2032,10 @@ function showTrainingEditModal(horse, entryId){
     await saveHorse(horse); await save();
     overlay.remove(); render();
     if(!ok) alert('Saved locally, but writing to the Stable sheet failed — try again.');
+   }catch(err){
+    console.error('Edit save failed:', err);
+    alert('Could not save the edit: '+(err&&err.message?err.message:err));
+   }
   };
 }
 
