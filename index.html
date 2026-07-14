@@ -1736,7 +1736,6 @@ function renderRiders(){
     const prog=riderProgress(pp);
     const showTitle = (pp>=100 && rider.customTitle) ? rider.customTitle : title.name;
     const logOpen=expandedRiderLogs.has(rider.id);
-    const entryOpen=openRiderEntry.has(rider.id);
     const attireOpen=openRiderAttire.has(rider.id);
 
     const imgHtml = rider.image
@@ -1765,7 +1764,6 @@ function renderRiders(){
         </div>
       </div>
       <div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap;">
-        <button class="btn" data-ract="toggle-entry" data-id="${rider.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">${entryOpen?"Close":"Log art / activity (+PP)"}</button>
         <button class="secondary" data-ract="open-rider" data-id="${rider.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">View Profile</button>
         <button class="secondary" data-ract="toggle-rlog" data-id="${rider.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">${logOpen?"Hide":"Show"} Prestige Log (${(rider.artLog||[]).length})</button>
         <button class="secondary" data-ract="toggle-attire" data-id="${rider.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">${attireOpen?"Hide":"Attire"} (${(rider.attireEquipped||[]).length})</button>
@@ -1773,7 +1771,6 @@ function renderRiders(){
         <button class="secondary" data-ract="edit-rider" data-id="${rider.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">Edit</button>
         <button class="danger" data-ract="del-rider" data-id="${rider.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">Remove</button>
       </div>
-      ${entryOpen?riderEntryFormHtml(rider):""}
       ${attireOpen?`<div class="artlog-panel" style="margin-top:10px;">
         <div class="small" style="margin-bottom:6px;">Equipped attire:</div>
         <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-start;">${attireHtml(rider)}</div>
@@ -1841,9 +1838,6 @@ function riderLogHtml(rider){
 }
 
 function bindRiderCardEvents(wrap){
-  wrap.querySelectorAll('[data-ract="toggle-entry"]').forEach(b=>b.onclick=()=>{
-    const id=b.dataset.id; openRiderEntry.has(id)?openRiderEntry.delete(id):openRiderEntry.add(id); render();
-  });
   wrap.querySelectorAll('[data-ract="toggle-rlog"]').forEach(b=>b.onclick=()=>{
     const id=b.dataset.id; expandedRiderLogs.has(id)?expandedRiderLogs.delete(id):expandedRiderLogs.add(id); render();
   });
@@ -1947,6 +1941,97 @@ function bindRiderEntryForm(scope){
       openRiderEntry.delete(rid); await save(); render();
     };
   });
+}
+
+// Edit a logged training entry with the same fields as the original form,
+// pre-filled. Updates the entry in place (the stable now saves by id, so no
+// duplicate row), recomputes its EXP from art type + bonuses + lit, and lets you
+// toggle whether the horse's rider is featured (grants/removes PP).
+function showTrainingEditModal(horse, entryId){
+  const e=(horse.artLog||[]).find(x=>x.id===entryId);
+  if(!e) return;
+  const rider = horse.riderId ? state.riders.find(r=>r.id===horse.riderId) : null;
+  const litNum = e.lit ? (parseInt(e.lit,10)||0) : 0;
+
+  const overlay=el('div');
+  overlay.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:9999;display:flex;align-items:flex-start;justify-content:center;overflow:auto;padding:24px;';
+  overlay.innerHTML=`
+    <div class="card" style="max-width:560px;width:100%;margin-top:20px;">
+      <h3 style="margin-top:0;">Edit Training Entry</h3>
+      <div style="margin-top:6px;">
+        <label>Art Image URL</label>
+        <input type="text" id="te_image" value="${escAttr(e.image||'')}" placeholder="https://…jpg / .png / .gif" />
+        <div id="te_preview" style="margin-top:6px;">${e.image?urlImagePreviewHTML(e.image,'Training'):''}</div>
+      </div>
+      <div style="margin-top:8px;"><label>Title / label</label><input id="te_label" value="${escAttr(e.label||'')}" /></div>
+      <div class="row" style="margin-top:8px;">
+        <div><label>Art Type</label>
+          <select id="te_art">
+            <option value="">— none —</option>
+            ${Object.keys(ART_EXP).map(k=>`<option value="${k}"${e.art===k?' selected':''}>${k} (+${ART_EXP[k]} EXP)</option>`).join("")}
+          </select>
+        </div>
+        <div><label>Literature Word Count</label><input type="number" id="te_lit" min="0" value="${litNum||''}" placeholder="optional" /></div>
+      </div>
+      <div style="margin-top:8px;">
+        <label>Bonus Elements</label>
+        <div class="pill-select" id="te_bonuses">
+          ${Object.keys(BONUS_EXP).map(k=>`<div class="pill${(e.bonuses||[]).includes(k)?' active':''}" data-bonus="${k}">${k} (+${BONUS_EXP[k]})</div>`).join("")}
+        </div>
+      </div>
+      <div style="margin-top:8px;"><label>Link to Art</label><input id="te_link" value="${escAttr(e.link||'')}" placeholder="https://…" /></div>
+      <label style="margin-top:10px;display:flex;align-items:center;gap:8px;cursor:pointer;">
+        <input type="checkbox" id="te_featured" ${e.featuredRiderId?'checked':''} style="width:18px;height:18px;" />
+        Rider featured here ${rider?`— grants <b>${rider.name}</b> Prestige (+1)`:`<span style="color:#c96a3a;">(assign a rider to this horse first)</span>`}
+      </label>
+      <div class="small" style="margin-top:6px;opacity:.75;">Note: stat gains stay as originally logged — art type/bonuses/lit here adjust EXP only.</div>
+      <div style="margin-top:14px;display:flex;gap:8px;">
+        <button id="te_save" class="btn">Save changes</button>
+        <button id="te_cancel" class="secondary">Cancel</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+
+  const sel=new Set(e.bonuses||[]);
+  overlay.querySelector('#te_image').oninput=ev=>{ overlay.querySelector('#te_preview').innerHTML=urlImagePreviewHTML(ev.target.value.trim()||null,'Training'); };
+  overlay.querySelectorAll('#te_bonuses .pill').forEach(p=>p.onclick=()=>{
+    const k=p.dataset.bonus;
+    if(sel.has(k)){sel.delete(k);p.classList.remove('active');} else {sel.add(k);p.classList.add('active');}
+  });
+  overlay.querySelector('#te_cancel').onclick=()=>overlay.remove();
+  overlay.querySelector('#te_save').onclick=async()=>{
+    const art=overlay.querySelector('#te_art').value;
+    const lit=Number(overlay.querySelector('#te_lit').value)||0;
+    const bonuses=[...sel];
+    // recompute EXP from the editable art fields (stats are preserved as logged)
+    let exp=ART_EXP[art]||0;
+    const litExp=calcLitExp(lit); if(litExp>0) exp+=litExp;
+    bonuses.forEach(k=>{ if(BONUS_EXP[k]) exp+=BONUS_EXP[k]; });
+
+    e.image=overlay.querySelector('#te_image').value.trim()||null;
+    e.label=overlay.querySelector('#te_label').value.trim()||e.label;
+    e.art=art||null;
+    e.lit=lit?`${lit} words`:null;
+    e.bonuses=bonuses;
+    e.link=overlay.querySelector('#te_link').value.trim()||null;
+    e.exp=exp;
+
+    // rider featured toggle
+    const wantFeatured=overlay.querySelector('#te_featured').checked;
+    if(wantFeatured && !e.featuredRiderId){
+      if(rider){ e.featuredRiderId=rider.id; await grantRiderPPForEntry(rider,'training',e,horse); }
+    } else if(!wantFeatured && e.featuredRiderId){
+      await removeRiderPPForSource(e.id); e.featuredRiderId=null;
+    } else if(wantFeatured && e.featuredRiderId && rider){
+      await grantRiderPPForEntry(rider,'training',e,horse); // refresh label/link
+    }
+
+    recomputeHorse(horse);
+    const ok=await saveArtEntry(horse, e);   // updates in place now (no dup)
+    await saveHorse(horse); await save();
+    overlay.remove(); render();
+    if(!ok) alert('Saved locally, but writing to the Stable sheet failed — try again.');
+  };
 }
 
 // ============================================
@@ -2210,7 +2295,7 @@ function renderRoster(){
             ${e.image?`<img src="${e.image}" class="artlog-thumb" data-lightbox="${e.image}" data-caption="${e.label}" style="cursor:zoom-in;" />`:""}
             <b>${e.label}</b> ${e.type==="competition"&&e.placement?`<span class="tag">${["1st","2nd","3rd","4th","5th","6th"][e.placement-1]||e.placement+"th"}</span>`:""}
             <span class="tag">+${e.exp} EXP</span>
-            <span data-act="toggle-featured" data-id="${h.id}" data-entry="${e.id}" data-kind="training" style="cursor:pointer;color:${e.featuredRiderId?'#c9a8e8':'#8a7a6a'};font-size:.92em;margin-left:6px;font-weight:bold;" title="${e.featuredRiderId?'Rider featured — grants PP. Click to remove.':'Mark that this horse\u2019s rider is featured here (grants Prestige)'}">${e.featuredRiderId?'\u2605 Rider PP':'\u2606 Rider PP'}</span><span data-act="edit-artlog-img" data-id="${h.id}" data-entry="${e.id}" style="cursor:pointer;color:#c98a3a;font-size:.92em;margin-left:6px;font-weight:bold;" title="Replace this entry's image link">Edit image</span><span data-act="delete-artlog" data-id="${h.id}" data-entry="${e.id}" style="cursor:pointer;color:#c96a3a;font-size:.92em;margin-left:6px;font-weight:bold;" title="Delete this entry (reverses its EXP/stats)">✕ Delete</span>
+            <span data-act="edit-training" data-id="${h.id}" data-entry="${e.id}" style="cursor:pointer;color:#c98a3a;font-size:.92em;margin-left:6px;font-weight:bold;" title="Edit this entry (image, art type, link, rider PP)">${e.featuredRiderId?'\u2605 ':''}Edit</span><span data-act="delete-artlog" data-id="${h.id}" data-entry="${e.id}" style="cursor:pointer;color:#c96a3a;font-size:.92em;margin-left:6px;font-weight:bold;" title="Delete this entry (reverses its EXP/stats)">✕ Delete</span>
             ${e.link?`<a href="${e.link}" target="_blank" class="artlog-link" style="font-size:1em;margin-left:6px;">View</a>`:""}
             <div class="small" style="margin-top:2px;">${e.art||""}${e.lit?` · ${e.lit}`:""}</div>
           </div>`).join("") : '<div class="small">No entries yet.</div>'}
@@ -2330,17 +2415,9 @@ function renderRoster(){
     await saveHorse(h); await save(); render();
   });
   wrap.querySelectorAll('[data-act="view-profile"]').forEach(b=>b.onclick=()=>goToProfile(b.dataset.id));
-  wrap.querySelectorAll('[data-act="edit-artlog-img"]').forEach(b=>b.onclick=()=>{
+  wrap.querySelectorAll('[data-act="edit-training"]').forEach(b=>b.onclick=()=>{
     const h=state.horses.find(x=>x.id===b.dataset.id);
-    if(h) editArtLogImage(h, b.dataset.entry);
-  });
-  wrap.querySelectorAll('[data-act="toggle-featured"]').forEach(b=>b.onclick=()=>{
-    const h=state.horses.find(x=>x.id===b.dataset.id); if(!h) return;
-    const kind=b.dataset.kind;
-    const src = kind==='competition'
-      ? (h.compHistory||[]).find(r=>r.id===b.dataset.entry)
-      : (h.artLog||[]).find(e=>e.id===b.dataset.entry);
-    if(src) toggleRiderFeatured(h, src, kind==='competition'?'competition':'training');
+    if(h) showTrainingEditModal(h, b.dataset.entry);
   });
   wrap.querySelectorAll('[data-act="delete-artlog"]').forEach(b=>b.onclick=()=>{
     const h=state.horses.find(x=>x.id===b.dataset.id);
@@ -3344,7 +3421,7 @@ function renderArtLog(){
               <b>${e.label}</b>
               ${placeLabel?`<span class="tag">${placeLabel}</span>`:""}
               <span class="tag" style="background:rgba(122,155,110,.15);color:#7a9b6e;border-color:#7a9b6e;">+${e.exp} EXP</span>
-              <span data-act="toggle-featured" data-id="${h.id}" data-entry="${e.id}" data-kind="training" style="cursor:pointer;color:${e.featuredRiderId?'#c9a8e8':'#8a7a6a'};font-size:.92em;margin-left:6px;font-weight:bold;" title="${e.featuredRiderId?'Rider featured — grants PP. Click to remove.':'Mark that this horse\u2019s rider is featured here (grants Prestige)'}">${e.featuredRiderId?'\u2605 Rider PP':'\u2606 Rider PP'}</span><span data-act="edit-artlog-img" data-id="${h.id}" data-entry="${e.id}" style="cursor:pointer;color:#c98a3a;font-size:.92em;margin-left:6px;font-weight:bold;" title="Replace this entry's image link">Edit image</span><span data-act="delete-artlog" data-id="${h.id}" data-entry="${e.id}" style="cursor:pointer;color:#c96a3a;font-size:.92em;margin-left:6px;font-weight:bold;" title="Delete this entry (reverses its EXP/stats)">✕ Delete</span>
+              <span data-act="edit-training" data-id="${h.id}" data-entry="${e.id}" style="cursor:pointer;color:#c98a3a;font-size:.92em;margin-left:6px;font-weight:bold;" title="Edit this entry (image, art type, link, rider PP)">${e.featuredRiderId?'\u2605 ':''}Edit</span><span data-act="delete-artlog" data-id="${h.id}" data-entry="${e.id}" style="cursor:pointer;color:#c96a3a;font-size:.92em;margin-left:6px;font-weight:bold;" title="Delete this entry (reverses its EXP/stats)">✕ Delete</span>
               ${e.link?`<a href="${e.link}" target="_blank" class="artlog-link" style="font-size:1em;margin-left:4px;"></a>`:""}
               <div class="small" style="margin-top:2px;">${[e.art,e.lit,...(e.bonuses||[])].filter(Boolean).join(" · ")}</div>
             </div>
@@ -3362,17 +3439,9 @@ function renderArtLog(){
   wrap.querySelectorAll('[data-lightbox]').forEach(img=>{
     img.onclick=e=>{ e.stopPropagation(); openLightbox(img.dataset.lightbox, img.dataset.caption); };
   });
-  wrap.querySelectorAll('[data-act="edit-artlog-img"]').forEach(b=>b.onclick=()=>{
+  wrap.querySelectorAll('[data-act="edit-training"]').forEach(b=>b.onclick=()=>{
     const h=state.horses.find(x=>x.id===b.dataset.id);
-    if(h) editArtLogImage(h, b.dataset.entry);
-  });
-  wrap.querySelectorAll('[data-act="toggle-featured"]').forEach(b=>b.onclick=()=>{
-    const h=state.horses.find(x=>x.id===b.dataset.id); if(!h) return;
-    const kind=b.dataset.kind;
-    const src = kind==='competition'
-      ? (h.compHistory||[]).find(r=>r.id===b.dataset.entry)
-      : (h.artLog||[]).find(e=>e.id===b.dataset.entry);
-    if(src) toggleRiderFeatured(h, src, kind==='competition'?'competition':'training');
+    if(h) showTrainingEditModal(h, b.dataset.entry);
   });
   wrap.querySelectorAll('[data-act="delete-artlog"]').forEach(b=>b.onclick=()=>{
     const h=state.horses.find(x=>x.id===b.dataset.id);
