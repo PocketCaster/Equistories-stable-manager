@@ -1954,9 +1954,9 @@ function showTrainingEditModal(horse, entryId){
   const litNum = e.lit ? (parseInt(e.lit,10)||0) : 0;
 
   const overlay=el('div');
-  overlay.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:9999;display:flex;align-items:flex-start;justify-content:center;overflow:auto;padding:24px;';
+  overlay.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:9999;display:flex;align-items:flex-start;justify-content:center;overflow:auto;padding:24px;';
   overlay.innerHTML=`
-    <div class="card" style="max-width:560px;width:100%;margin-top:20px;">
+    <div class="card" style="max-width:560px;width:100%;margin-top:20px;background:#241a14;border:1px solid #4a392a;box-shadow:0 12px 40px rgba(0,0,0,.6);">
       <h3 style="margin-top:0;">Edit Training Entry</h3>
       <div style="margin-top:6px;">
         <label>Art Image URL</label>
