@@ -350,27 +350,97 @@ function riderPP(rider){
 }
 
 // ---- PP earned from a horse's training/competition entry that features a rider ----
-// Rider PP entries created this way are LINKED to the source via sourceId, so they
-// can be removed cleanly if the feature is toggled off or the source is deleted.
+// Art-side options (apply to any image the rider appears in) and show-side options.
+// These drive the "Rider Prestige" block on the Training and Competition tabs, so
+// PP is chosen deliberately at log time instead of guessed from the record.
+const RIDER_PP_ART = {
+  "Rider in a personal image":1,
+  "Rider in a collaboration image":2,
+  "Full-body image":1,
+  "Rider in a group image (3+ riders)":2,
+  "Main focus / POV":1,
+  "Drawn by someone else (gift/commission)":1,
+};
+const RIDER_PP_SHOW = {
+  "Show or clinic entry":2,
+  "Top 3 in show":1,
+  "Judge's Choice / special ribbon":1,
+  "Collaborative show / clinic entry":3,
+};
+
+// Renders the rider picker + PP pills. mode: 'training' | 'competition'.
+function riderPPBlockHtml(prefix, mode, horse){
+  if(!state.riders.length){
+    return `<div class="small" style="margin-top:8px;opacity:.75;">Add a rider on the Riders tab to award Prestige from this entry.</div>`;
+  }
+  const assigned = horse && horse.riderId ? horse.riderId : '';
+  const opts = mode==='competition' ? {...RIDER_PP_SHOW, ...RIDER_PP_ART} : RIDER_PP_ART;
+  // Nothing is preselected — the player ticks what actually applies. (A commission
+  // is "Drawn by someone else", not a personal image; only they know which.)
+  return `
+    <div class="rpp-block" data-rpp="${prefix}" style="margin-top:10px;border:1px solid #4a392a;border-radius:8px;padding:10px;background:#1a1410;">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+        <label style="margin:0;">Rider Prestige</label>
+        <select class="rpp_rider" style="width:auto;display:inline-block;font-size:.95em;">
+          <option value="">— no rider featured —</option>
+          ${state.riders.map(r=>`<option value="${r.id}"${r.id===assigned?' selected':''}>${r.name} · ${riderTitle(riderPP(r)).name}</option>`).join("")}
+        </select>
+        <span class="small">This entry: <b class="rpp_sum" style="color:#c9a8e8;">0</b> PP</span>
+      </div>
+      <div class="pill-select rpp_opts" style="margin-top:8px;">
+        ${Object.keys(opts).map(k=>`<div class="pill" data-ppopt="${k}" data-pp="${opts[k]}">${k} (+${opts[k]})</div>`).join("")}
+      </div>
+      <div class="small" style="margin-top:6px;opacity:.7;">Nothing is ticked by default — choose only what applies to this piece. Leave the rider on "no rider featured" to award no Prestige.</div>
+    </div>`;
+}
+
+// Binds the block; returns collect() -> {riderId, pp, sources} (or null).
+function bindRiderPPBlock(scope, prefix){
+  const block = scope.querySelector(`[data-rpp="${prefix}"]`);
+  if(!block) return { collect:()=>null, setTop3:()=>{} };
+  const sel=block.querySelector('.rpp_rider');
+  const recalc=()=>{
+    let sum=0;
+    if(sel.value) block.querySelectorAll('.pill.active[data-pp]').forEach(p=>sum+=Number(p.dataset.pp)||0);
+    block.querySelector('.rpp_sum').textContent=sum;
+    return sum;
+  };
+  block.querySelectorAll('[data-ppopt]').forEach(p=>p.onclick=()=>{ p.classList.toggle('active'); recalc(); });
+  sel.onchange=recalc;
+  recalc();
+  return {
+    collect(){
+      if(!sel.value) return null;
+      const picked=[...block.querySelectorAll('.pill.active[data-pp]')];
+      const pp=picked.reduce((n,p)=>n+(Number(p.dataset.pp)||0),0);
+      if(pp<=0) return null;
+      return { riderId:sel.value, pp, sources:picked.map(p=>`${p.dataset.ppopt} (+${p.dataset.pp})`) };
+    },
+    setTop3(){ /* intentionally a no-op: nothing is auto-ticked */ },
+  };
+}
+
 function riderPPForSource(sourceType, source){
+  // Fallback only (used by the retro "rider featured" toggle). Deliberate PP is
+  // chosen in the form's Rider Prestige block at log time.
   if(sourceType==='competition'){
     let pp=2; const sources=['Show or clinic entry (+2)'];
     if(source.placement>=1 && source.placement<=3){ pp+=1; sources.push('Top 3 in show (+1)'); }
-    if((source.prizes&&source.prizes.length) || source.ribbon){ pp+=1; sources.push("Judge's Choice / special ribbon (+1)"); }
+    // NOTE: a placement prize is NOT a Judge's Choice — only an explicit flag counts.
+    if(source.specialRibbon){ pp+=1; sources.push("Judge's Choice / special ribbon (+1)"); }
     return { pp, sources };
   }
-  // training / art featuring the rider
   return { pp:1, sources:['Rider in a personal image (+1)'] };
 }
 function linkedRiderEntry(rider, sourceId){
   return (rider.artLog||[]).find(e=>e.sourceId===sourceId);
 }
 // Grant (or refresh) a rider's PP for a horse entry. Idempotent per sourceId.
-async function grantRiderPPForEntry(rider, sourceType, source, horse){
+async function grantRiderPPForEntry(rider, sourceType, source, horse, explicit){
   if(!rider) return;
   if(!rider.artLog) rider.artLog=[];
   const existing=linkedRiderEntry(rider, source.id);
-  const {pp, sources}=riderPPForSource(sourceType, source);
+  const {pp, sources} = explicit || riderPPForSource(sourceType, source);
   const label = sourceType==='competition'
     ? `${source.discipline||'Show'}${source.venue?` — ${source.venue}`:''} (${horse.name})`
     : `${source.label||'Training'} (${horse.name})`;
@@ -979,7 +1049,7 @@ async function migrateToFirestore(){
   if(!bankAccount.linked){ alert('Sign in first.'); return; }
   const DB = await waitForDB();
   if(!DB){ alert('Could not reach Firestore. Check the browser console for details.'); return; }
-  if(!confirm(`Copy your data to Firestore?\n\n• ${state.horses.length} horses\n• ${state.riders.length} riders\n• profile + inventories\n\nYour Google Sheets data is NOT changed or deleted — this only copies it. You can switch back anytime.`)) return;
+  if(!confirm(`Copy your data to Firestore?\n\n• ${state.horses.length} horses\n• ${state.riders.length} riders\n• ${(state.customBreeds||[]).length} custom breeds, ${(state.customGenes||[]).length} custom genes\n• profile + inventories\n\nYour Google Sheets data is NOT changed or deleted — this only copies it. You can switch back anytime.`)) return;
 
   try{
     const uid=bankAccount.userId;
@@ -990,7 +1060,22 @@ async function migrateToFirestore(){
     await window.EquiDB.put('stables', uid, uid, {
       id: uid, log: state.log, tackInventory: state.tackInventory, attireInventory: state.attireInventory,
     });
-    alert(`Migration complete.\n\n${nH} horses and ${nR} riders copied to Firestore.\n\nNow turn on "Use Firestore" to run on the fast backend.`);
+    // Shared custom breeds/genes/markings/mutations (global, not per-user).
+    // Guard: never overwrite an existing populated config with an empty one —
+    // that could happen if you migrate while already running on Firestore.
+    const haveLocal = (state.customBreeds||[]).length || (state.customGenes||[]).length
+                    || (state.customMarkings||[]).length || (state.customMutations||[]).length;
+    const existingCfg = await window.EquiDB.get('config','global');
+    const haveRemote = existingCfg && ((existingCfg.customBreeds||[]).length || (existingCfg.customGenes||[]).length);
+    if(haveLocal || !haveRemote){
+      await window.EquiDB.put('config', 'global', 'global', {
+        id:'global',
+        customBreeds: state.customBreeds||[], customGenes: state.customGenes||[],
+        customMarkings: state.customMarkings||[], customMutations: state.customMutations||[] });
+    } else {
+      console.warn('[Migration] kept the existing Firestore breed/gene config (nothing loaded locally to copy).');
+    }
+    alert(`Migration complete.\n\n• ${nH} horses\n• ${nR} riders\n• ${(state.customBreeds||[]).length} custom breeds, ${(state.customGenes||[]).length} custom genes\n• profile + inventories\n\nNow turn on "Use Firestore" to run on the fast backend.`);
     render();
   }catch(err){
     console.error('[Migration] failed:', err);
@@ -1136,6 +1221,21 @@ async function transferHorseToMember(h){
 }
 
 async function loadGlobalBreeds(){
+  // Custom breeds/genes/markings/mutations are GLOBAL (shared by every player),
+  // stored under one config record rather than per-user.
+  if(fsEnabled()){
+    const DB = await waitForDB();
+    if(DB){
+      try{
+        const cfg = await DB.get('config', 'global');
+        state.customBreeds    = Array.isArray(cfg?.customBreeds)    ? cfg.customBreeds    : [];
+        state.customGenes     = Array.isArray(cfg?.customGenes)     ? cfg.customGenes     : [];
+        state.customMarkings  = Array.isArray(cfg?.customMarkings)  ? cfg.customMarkings  : [];
+        state.customMutations = Array.isArray(cfg?.customMutations) ? cfg.customMutations : [];
+        return;
+      }catch(e){ console.error('[EquiDB] loadGlobalBreeds failed:', e); }
+    }
+  }
   if(!STABLE_URL){ state.customBreeds=[]; state.customGenes=[]; state.customMarkings=[]; state.customMutations=[]; return; }
   const res = await stableGas({ action:'loadStableState', userId:GLOBAL_CONFIG_USER_ID });
   if(res?.success && res.data){
@@ -1152,6 +1252,14 @@ async function loadGlobalBreeds(){
 }
 
 async function saveGlobalBreeds(){
+  if(fsReady()){
+    try{
+      return await window.EquiDB.put('config', 'global', 'global', {
+        id:'global',
+        customBreeds: state.customBreeds, customGenes: state.customGenes,
+        customMarkings: state.customMarkings, customMutations: state.customMutations });
+    }catch(e){ console.error('[EquiDB] saveGlobalBreeds failed:', e); return false; }
+  }
   if(!STABLE_URL) return false;
   return await sendTextChunked(GLOBAL_CONFIG_USER_ID, 'stateJson', 'stable',
     JSON.stringify({ customBreeds: state.customBreeds, customGenes: state.customGenes, customMarkings: state.customMarkings, customMutations: state.customMutations }));
@@ -1167,6 +1275,7 @@ async function loadFromSheets(){
       try{
         const t0=performance.now();
         const fb = await fbLoadAll(userId);
+        await loadGlobalBreeds();     // shared breeds/genes live in their own doc
         state.horses  = fb.horses||[];
         state.riders  = fb.riders||[];
         state.profile = fb.profile||null;
@@ -3219,6 +3328,7 @@ function renderTraining(){
       </div>
     </div>
     <div style="margin-top:8px;"><label>Link to Art <span class="small">(optional)</span></label><input id="tr_link" placeholder="https://…" /></div>
+    <div id="tr_rpp_slot"></div>
     <button id="tr_go" style="margin-top:12px;">✓ Log Training</button>
     <div id="tr_result"></div>
   `;
@@ -3260,11 +3370,20 @@ function renderTraining(){
     };
   }
 
+  let trRPP={collect:()=>null};
+  function refreshRPP(){
+    const slot=card.querySelector('#tr_rpp_slot');
+    if(!slot) return;
+    slot.innerHTML=riderPPBlockHtml('train','training',currentHorse());
+    trRPP=bindRiderPPBlock(card,'train');
+  }
+  refreshRPP();
   refreshPrompt();
   refreshMilestoneStatus();
   card.querySelector('#tr_type').onchange=refreshPrompt;
   card.querySelector('#tr_type2').onchange=refreshPrompt;
   card.querySelector('#tr_horse').onchange=()=>{
+    refreshRPP();   // default the rider to the newly selected horse's rider
     const h=currentHorse();
     card.querySelector('#tr_type').innerHTML=buildTrainingOpts(h);
     card.querySelector('#tr_type2').innerHTML=buildTrainingOpts(h);
@@ -3362,6 +3481,17 @@ function renderTraining(){
     checkLevelUp(h);
 
     const trainEntry={id:uid2(),day:state.log.length+1,type:"training",label,art:artType,lit:litWords?`${litWords} words`:null,bonuses:[...selectedBonuses],exp:expGain,link:link||null,image:uploadedImage,statsDelta:allStats,milestoneIds};
+
+    // Rider Prestige chosen in the form's Rider Prestige block.
+    const rppPick = trRPP.collect();
+    if(rppPick){
+      const rdr = state.riders.find(r=>r.id===rppPick.riderId);
+      if(rdr){
+        trainEntry.featuredRiderId = rdr.id;
+        await grantRiderPPForEntry(rdr, 'training', trainEntry, h, { pp:rppPick.pp, sources:rppPick.sources });
+        sources.push(`${rdr.name} +${rppPick.pp} PP`);
+      }
+    }
     h.artLog.unshift(trainEntry);
     const statsStr=Object.entries(allStats).map(([s,v])=>`+${v} ${STAT_LABELS[s]}`).join(", ");
     const statsNote=statsStr||"EXP only";
@@ -3518,10 +3648,22 @@ function buildShowLogForm(){
 
     <hr style="border:none;border-top:1px solid #4a392a;margin:14px 0;" />
 
+    <div id="cs_rpp_slot"></div>
+
     <button id="cs_go" style="width:100%;margin-top:4px;">✓ Save Show Record</button>
     <div id="cs_result"></div>
   `;
   wrap.appendChild(card);
+
+  let csRPP={collect:()=>null,setTop3:()=>{}};
+  function refreshCsRPP(){
+    const slot=card.querySelector('#cs_rpp_slot'); if(!slot) return;
+    const h=state.horses.find(x=>x.id===card.querySelector('#cs_horse')?.value);
+    slot.innerHTML=riderPPBlockHtml('show','competition',h);
+    csRPP=bindRiderPPBlock(card,'show');
+  }
+  refreshCsRPP();
+  if(card.querySelector('#cs_horse')) card.querySelector('#cs_horse').addEventListener('change', refreshCsRPP);
 
   card.querySelector('#cs_disc').onchange=()=>{
     const disc=card.querySelector('#cs_disc').value;
@@ -3651,11 +3793,14 @@ function buildShowLogForm(){
     };
     h.compHistory.unshift(rec);
 
-    // A rider is always riding in a competition — the horse's assigned rider earns
-    // show PP automatically (journal: +2 entry, +1 top-3, +1 special ribbon).
-    if(h.riderId){
-      const rider=state.riders.find(r=>r.id===h.riderId);
-      if(rider){ rec.featuredRiderId=rider.id; await grantRiderPPForEntry(rider, 'competition', rec, h); }
+    // Rider Prestige exactly as ticked in the form's Rider Prestige block.
+    const csPick = csRPP.collect();
+    if(csPick){
+      const rider=state.riders.find(r=>r.id===csPick.riderId);
+      if(rider){
+        rec.featuredRiderId=rider.id;
+        await grantRiderPPForEntry(rider, 'competition', rec, h, { pp:csPick.pp, sources:csPick.sources });
+      }
     }
 
     const placeLabel=placement?["1st","2nd","3rd","4th","5th","6th"][placement-1]||placement+"th":"Participant";
