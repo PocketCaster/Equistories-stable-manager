@@ -133,6 +133,21 @@
   #app details.collapse > .collapse-body { padding-top:14px; }
   @media (prefers-reduced-motion:reduce) { #app details.collapse .chev { transition:none; } }
 </style>
+<script>
+// Set up a readiness promise SYNCHRONOUSLY, before the deferred module below
+// runs. The main app script executes before any module script, so it can't touch
+// window.EquiDB directly at boot — it awaits this promise instead.
+window.__equiDBReady = new Promise(resolve => { window.__equiDBResolve = resolve; });
+// Safety valve: ?fs=off in the URL force-disables Firestore mode. If a bad state
+// ever leaves the app unable to start, that link always gets you back in.
+try{
+  if(new URLSearchParams(location.search).get('fs')==='off'){
+    localStorage.setItem('equi_use_firestore','0');
+    console.warn('[EquiStories] Firestore mode disabled via ?fs=off');
+  }
+}catch(e){}
+</script>
+
 <script type="module">
 // ============================================
 // FIRESTORE DATA LAYER  (fast replacement for the Apps Script + JSONP transport)
@@ -167,6 +182,9 @@ const ready = (async()=>{
     return true;
   }catch(e){ console.error('[EquiDB] init failed:', e); db=null; return false; }
 })();
+// Tell the main app script that the module has finished loading (success OR not).
+ready.then(v=>{ try{ window.__equiDBResolve(v); }catch(e){} })
+     .catch(()=>{ try{ window.__equiDBResolve(false); }catch(e){} });
 
 window.EquiDB = {
   ready,
@@ -223,6 +241,20 @@ window.EquiDB = {
 </script>
 
 <script>
+// Last-resort safety net: if anything throws hard enough to stop the app from
+// rendering, show the error (and a way out) instead of a blank white page.
+window.addEventListener('error', function(ev){
+  try{
+    const app=document.getElementById('app');
+    if(app && !app.hasChildNodes()){
+      app.innerHTML='<div style="font-family:Georgia,serif;color:#f1e6d8;background:#241a14;border:1px solid #c98a3a;border-radius:8px;max-width:640px;margin:40px auto;padding:20px;">'
+        +'<h3 style="color:#c98a3a;margin-top:0;">The app hit an error while starting</h3>'
+        +'<div style="font-family:monospace;font-size:.9em;background:#15100c;padding:10px;border-radius:6px;overflow:auto;">'+String(ev.message||ev.error||'Unknown error')+'</div>'
+        +'<p>If you just switched database backends, this link puts you back on the old one:</p>'
+        +'<p><a href="?fs=off" style="color:#c98a3a;font-weight:bold;">← Reload on Google Sheets (safe mode)</a></p></div>';
+    }
+  }catch(e){}
+});
 (function(){
 
 // ============================================
@@ -904,8 +936,19 @@ function resolveImageRefs(horse){
 // chunked JSONP calls — that's the speed difference.
 // ============================================
 const FS_FLAG='equi_use_firestore';
-function fsEnabled(){ return localStorage.getItem(FS_FLAG)==='1'; }
+function fsEnabled(){ try{ return localStorage.getItem(FS_FLAG)==='1'; }catch(e){ return false; } }
 function fsReady(){ return fsEnabled() && window.EquiDB && window.EquiDB.available; }
+// The Firebase module is a <script type="module">, so it runs AFTER this script.
+// Never touch window.EquiDB directly at boot — always come through here.
+async function waitForDB(ms=8000){
+  try{
+    await Promise.race([
+      window.__equiDBReady || Promise.resolve(false),
+      new Promise(r=>setTimeout(()=>r(false), ms)),
+    ]);
+  }catch(e){}
+  return (window.EquiDB && window.EquiDB.available) ? window.EquiDB : null;
+}
 
 // Legacy base64 images can't ride inside a Firestore doc (1 MiB cap) any better
 // than they could inside a sheet — strip them out of what we persist.
@@ -918,7 +961,8 @@ function stripBig(obj){
 }
 
 async function fbLoadAll(userId){
-  await window.EquiDB.ready;
+  const DB = await waitForDB();
+  if(!DB) throw new Error('Firestore not available');
   const [horses, riders, profile, stateDoc] = await Promise.all([
     window.EquiDB.listByOwner('horses', userId),
     window.EquiDB.listByOwner('riders', userId),
@@ -933,8 +977,8 @@ async function fbLoadAll(userId){
 // can flip back at any time.
 async function migrateToFirestore(){
   if(!bankAccount.linked){ alert('Sign in first.'); return; }
-  await window.EquiDB.ready;
-  if(!window.EquiDB.available){ alert('Could not reach Firestore. Check the browser console for details.'); return; }
+  const DB = await waitForDB();
+  if(!DB){ alert('Could not reach Firestore. Check the browser console for details.'); return; }
   if(!confirm(`Copy your data to Firestore?\n\n• ${state.horses.length} horses\n• ${state.riders.length} riders\n• profile + inventories\n\nYour Google Sheets data is NOT changed or deleted — this only copies it. You can switch back anytime.`)) return;
 
   try{
@@ -1118,8 +1162,8 @@ async function loadFromSheets(){
 
   // Firestore path: four indexed reads, no chunking, no row scans.
   if(fsEnabled()){
-    await window.EquiDB.ready;
-    if(window.EquiDB.available){
+    const DB = await waitForDB();
+    if(DB){
       try{
         const t0=performance.now();
         const fb = await fbLoadAll(userId);
@@ -1137,6 +1181,8 @@ async function loadFromSheets(){
       }catch(err){
         console.error('[EquiDB] load failed, falling back to Sheets:', err);
       }
+    } else {
+      console.warn('[EquiDB] Firestore unavailable — loading from Sheets instead.');
     }
   }
 
@@ -4015,8 +4061,8 @@ function renderAdmin(){
 
   (async()=>{
     const st=fsCard.querySelector('#fs_status');
-    if(!window.EquiDB){ st.innerHTML='<span style="color:#e08080;">Firestore module not loaded.</span>'; return; }
-    await window.EquiDB.ready;
+    const DB = await waitForDB();
+    if(!DB){ st.innerHTML='<span style="color:#e08080;">✗ Firestore module not loaded — check the browser console.</span>'; return; }
     st.innerHTML = window.EquiDB.available
       ? `<span style="color:#8ae88a;">✓ Connected to Firestore</span>${window.EquiDB.authed?'':' <span style="color:#e8c86a;">(anonymous sign-in is off — enable it in Firebase → Authentication)</span>'}`
       : '<span style="color:#e08080;">✗ Could not reach Firestore — see the browser console.</span>';
@@ -4031,8 +4077,8 @@ function renderAdmin(){
     location.reload();
   };
   fsCard.querySelector('#fs_verify').onclick=async()=>{
-    await window.EquiDB.ready;
-    if(!window.EquiDB.available){ alert('Not connected to Firestore.'); return; }
+    const DB = await waitForDB();
+    if(!DB){ alert('Not connected to Firestore.'); return; }
     try{
       const t0=performance.now();
       const [h,r]=await Promise.all([
