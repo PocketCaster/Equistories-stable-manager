@@ -133,6 +133,95 @@
   #app details.collapse > .collapse-body { padding-top:14px; }
   @media (prefers-reduced-motion:reduce) { #app details.collapse .chev { transition:none; } }
 </style>
+<script type="module">
+// ============================================
+// FIRESTORE DATA LAYER  (fast replacement for the Apps Script + JSONP transport)
+// Loads as a module and exposes window.EquiDB for the main app script.
+// Docs are stored as { owner, id, json, updatedAt } — the same shape the Sheets
+// backend used (a JSON blob keyed by owner), so nothing else had to be redesigned
+// and Firestore's type quirks (no undefined, no nested arrays) can't bite us.
+// ============================================
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import { getFirestore, doc, getDoc, setDoc, deleteDoc, collection, query, where, getDocs, writeBatch }
+  from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyAJfBnY0sDc6W_yzzrpm8NKkNZv1cu7jMU",
+  authDomain: "equistories-rpg.firebaseapp.com",
+  projectId: "equistories-rpg",
+  storageBucket: "equistories-rpg.firebasestorage.app",
+  messagingSenderId: "801283742596",
+  appId: "1:801283742596:web:370951947bf862efcfdbd1"
+};
+
+let db=null, authOk=false;
+const ready = (async()=>{
+  try{
+    const app = initializeApp(firebaseConfig);
+    db = getFirestore(app);
+    // Silent anonymous sign-in: no login screen, but it lets the security rules
+    // require an authenticated caller instead of leaving the DB world-writable.
+    try { await signInAnonymously(getAuth(app)); authOk=true; }
+    catch(e){ console.warn('[EquiDB] anonymous auth unavailable (enable it in Firebase → Authentication):', e.code||e); }
+    return true;
+  }catch(e){ console.error('[EquiDB] init failed:', e); db=null; return false; }
+})();
+
+window.EquiDB = {
+  ready,
+  get available(){ return !!db; },
+  get authed(){ return authOk; },
+
+  async put(col, id, owner, obj){
+    if(!db) return false;
+    await setDoc(doc(db, col, String(id)), {
+      owner: String(owner), id: String(id),
+      json: JSON.stringify(obj),
+      updatedAt: new Date().toISOString(),
+    });
+    return true;
+  },
+  async get(col, id){
+    if(!db) return null;
+    const s = await getDoc(doc(db, col, String(id)));
+    if(!s.exists()) return null;
+    try { return JSON.parse(s.data().json); } catch(e){ return null; }
+  },
+  async remove(col, id){
+    if(!db) return false;
+    await deleteDoc(doc(db, col, String(id)));
+    return true;
+  },
+  // One indexed query instead of scanning every row of a sheet — this is the
+  // whole reason the app gets fast.
+  async listByOwner(col, owner){
+    if(!db) return [];
+    const snap = await getDocs(query(collection(db, col), where('owner','==',String(owner))));
+    const out=[];
+    snap.forEach(d=>{ try{ out.push(JSON.parse(d.data().json)); }catch(e){} });
+    return out;
+  },
+  // Bulk write for the one-time migration (batched = far fewer round trips).
+  async putMany(col, owner, items){
+    if(!db) return 0;
+    let done=0;
+    for(let i=0;i<items.length;i+=400){
+      const batch = writeBatch(db);
+      items.slice(i,i+400).forEach(it=>{
+        batch.set(doc(db, col, String(it.id)), {
+          owner: String(owner), id: String(it.id),
+          json: JSON.stringify(it), updatedAt: new Date().toISOString(),
+        });
+      });
+      await batch.commit();
+      done += Math.min(400, items.length-i);
+    }
+    return done;
+  },
+};
+</script>
+
 <script>
 (function(){
 
@@ -684,7 +773,18 @@ function saveBankAccount(){
 // horse's id (or ids) so only the horse(s) that actually changed get
 // re-uploaded — not the whole roster.
 async function save(horseIds){
-  if(!bankAccount.linked || !STABLE_URL) return;
+  if(!bankAccount.linked) return;
+  if(fsReady()){
+    try{
+      await window.EquiDB.put('stables', bankAccount.userId, bankAccount.userId, {
+        id: bankAccount.userId, log: state.log,
+        tackInventory: state.tackInventory, attireInventory: state.attireInventory });
+      const ids = horseIds===undefined ? [] : (Array.isArray(horseIds)?horseIds:[horseIds]);
+      await Promise.all(state.horses.filter(h=>ids.includes(h.id)).map(h=>saveHorse(h)));
+    }catch(e){ console.error('[EquiDB] save failed:', e); }
+    return;
+  }
+  if(!STABLE_URL) return;
   const userId = bankAccount.userId;
   const ids = horseIds===undefined ? [] : (Array.isArray(horseIds) ? horseIds : [horseIds]);
   const tasks = [
@@ -796,8 +896,72 @@ function resolveImageRefs(horse){
   usedKeys.forEach(k=>{ delete horse[k]; });
 }
 
+// ============================================
+// FIRESTORE MODE
+// The app can persist to either the old Sheets/Apps Script backend or Firestore.
+// The flag below flips it. Firestore keeps each horse/rider as ONE document
+// (art log included), so a save is a single fast write instead of dozens of
+// chunked JSONP calls — that's the speed difference.
+// ============================================
+const FS_FLAG='equi_use_firestore';
+function fsEnabled(){ return localStorage.getItem(FS_FLAG)==='1'; }
+function fsReady(){ return fsEnabled() && window.EquiDB && window.EquiDB.available; }
+
+// Legacy base64 images can't ride inside a Firestore doc (1 MiB cap) any better
+// than they could inside a sheet — strip them out of what we persist.
+function stripBig(obj){
+  const clean={...obj};
+  ['profileImage','referenceImage'].forEach(k=>{
+    if(typeof clean[k]==='string' && clean[k].startsWith('data:')) delete clean[k];
+  });
+  return clean;
+}
+
+async function fbLoadAll(userId){
+  await window.EquiDB.ready;
+  const [horses, riders, profile, stateDoc] = await Promise.all([
+    window.EquiDB.listByOwner('horses', userId),
+    window.EquiDB.listByOwner('riders', userId),
+    window.EquiDB.get('profiles', userId),
+    window.EquiDB.get('stables', userId),
+  ]);
+  return { horses, riders, profile, state: stateDoc };
+}
+
+// One-time copy of everything currently in memory (loaded from Sheets) into
+// Firestore. Non-destructive: the Sheets data is left exactly as it is, so you
+// can flip back at any time.
+async function migrateToFirestore(){
+  if(!bankAccount.linked){ alert('Sign in first.'); return; }
+  await window.EquiDB.ready;
+  if(!window.EquiDB.available){ alert('Could not reach Firestore. Check the browser console for details.'); return; }
+  if(!confirm(`Copy your data to Firestore?\n\n• ${state.horses.length} horses\n• ${state.riders.length} riders\n• profile + inventories\n\nYour Google Sheets data is NOT changed or deleted — this only copies it. You can switch back anytime.`)) return;
+
+  try{
+    const uid=bankAccount.userId;
+    const horses = state.horses.map(h=>{ const {profileImage,referenceImage,...rest}=h; return stripBig(h); });
+    const nH = await window.EquiDB.putMany('horses', uid, horses);
+    const nR = await window.EquiDB.putMany('riders', uid, state.riders);
+    await window.EquiDB.put('profiles', uid, uid, state.profile || newPlayerProfile());
+    await window.EquiDB.put('stables', uid, uid, {
+      id: uid, log: state.log, tackInventory: state.tackInventory, attireInventory: state.attireInventory,
+    });
+    alert(`Migration complete.\n\n${nH} horses and ${nR} riders copied to Firestore.\n\nNow turn on "Use Firestore" to run on the fast backend.`);
+    render();
+  }catch(err){
+    console.error('[Migration] failed:', err);
+    alert('Migration failed: '+(err&&err.message?err.message:err)+'\n\nYour Sheets data is untouched.');
+  }
+}
+
 async function saveHorse(horse){
-  if(!bankAccount.linked || !STABLE_URL) return false;
+  if(!bankAccount.linked) return false;
+  if(fsReady()){
+    // One document per horse — art log included. A single write, no chunking.
+    try{ return await window.EquiDB.put('horses', horse.id, bankAccount.userId, stripBig(horse)); }
+    catch(e){ console.error('[EquiDB] saveHorse failed:', e); return false; }
+  }
+  if(!STABLE_URL) return false;
   const {artLog,...horseData}=horse;
 
   // Legacy base64 images (from the old file-upload scheme) are hundreds of KB and
@@ -836,7 +1000,9 @@ async function saveHorse(horse){
 }
 
 async function saveArtEntry(horse, entry){
-  if(!bankAccount.linked || !STABLE_URL) return false;
+  if(!bankAccount.linked) return false;
+  if(fsReady()) return await saveHorse(horse);   // art log rides in the horse doc
+  if(!STABLE_URL) return false;
   // FIX: art log images are pasted links now (see the note at the top of
   // the app), not uploaded files, so there's nothing to chunk-upload here
   // anymore — just strip any leftover flag from the old scheme and send.
@@ -847,13 +1013,24 @@ async function saveArtEntry(horse, entry){
 }
 
 async function deleteHorseFromSheets(horseId){
-  if(!bankAccount.linked || !STABLE_URL) return;
+  if(!bankAccount.linked) return;
+  if(fsReady()){ try{ await window.EquiDB.remove('horses', horseId); }catch(e){ console.error(e); } return; }
+  if(!STABLE_URL) return;
   await stableGas({ action:'deleteHorse', userId:bankAccount.userId, horseId });
 }
 
 // ---- rider persistence (mirrors horses; art log in its own sheet) ----
 async function saveRider(rider){
-  if(!bankAccount.linked || !STABLE_URL) return false;
+  if(!bankAccount.linked) return false;
+  if(fsReady()){
+    const inv0 = state.attireInventory||[];
+    const riderDoc = { ...rider, attireItems: (rider.attireEquipped||[])
+      .map(id=>inv0.find(t=>t.id===id)).filter(Boolean)
+      .map(t=>({ id:t.id, name:t.name, category:t.category, image:t.image||"" })) };
+    try{ return await window.EquiDB.put('riders', rider.id, bankAccount.userId, riderDoc); }
+    catch(e){ console.error('[EquiDB] saveRider failed:', e); return false; }
+  }
+  if(!STABLE_URL) return false;
   const { artLog, ...riderData } = rider;   // art log saved as separate rows
   // Embed a snapshot of equipped attire (id, name, category, image) so a public
   // visitor — who doesn't have our wardrobe — can still see it on the profile.
@@ -865,12 +1042,16 @@ async function saveRider(rider){
   return !!(res && res.success);
 }
 async function saveRiderEntry(rider, entry){
-  if(!bankAccount.linked || !STABLE_URL) return false;
+  if(!bankAccount.linked) return false;
+  if(fsReady()) return await saveRider(rider);   // art log rides in the rider doc
+  if(!STABLE_URL) return false;
   const res = await stableGas({ action:'saveRiderArtLogEntry', userId:bankAccount.userId, riderId:rider.id, entryJson:JSON.stringify(entry) });
   return !!(res && res.success);
 }
 async function deleteRiderFromSheets(riderId){
-  if(!bankAccount.linked || !STABLE_URL) return;
+  if(!bankAccount.linked) return;
+  if(fsReady()){ try{ await window.EquiDB.remove('riders', riderId); }catch(e){ console.error(e); } return; }
+  if(!STABLE_URL) return;
   await stableGas({ action:'deleteRider', userId:bankAccount.userId, riderId });
 }
 
@@ -934,6 +1115,31 @@ async function saveGlobalBreeds(){
 
 async function loadFromSheets(){
   const userId = bankAccount.userId;
+
+  // Firestore path: four indexed reads, no chunking, no row scans.
+  if(fsEnabled()){
+    await window.EquiDB.ready;
+    if(window.EquiDB.available){
+      try{
+        const t0=performance.now();
+        const fb = await fbLoadAll(userId);
+        state.horses  = fb.horses||[];
+        state.riders  = fb.riders||[];
+        state.profile = fb.profile||null;
+        state.log             = fb.state?.log || [];
+        state.tackInventory   = fb.state?.tackInventory || [];
+        state.attireInventory = fb.state?.attireInventory || [];
+        state.horses.forEach(h=>{ if(!h.artLog) h.artLog=[]; recomputeHorse(h); });
+        state.loaded=true;
+        console.log(`[EquiDB] loaded ${state.horses.length} horses + ${state.riders.length} riders in ${Math.round(performance.now()-t0)}ms`);
+        render();
+        return;
+      }catch(err){
+        console.error('[EquiDB] load failed, falling back to Sheets:', err);
+      }
+    }
+  }
+
   const [stateRes, horsesRes, ridersRes, profileRes] = await Promise.all([
     stableGas({ action:'loadStableState', userId }),
     stableGas({ action:'loadStable', userId }),
@@ -1610,6 +1816,10 @@ function newPlayerProfile(){
 }
 async function savePlayerProfile(profile){
   state.profile=profile;
+  if(bankAccount.linked && fsReady()){
+    try{ await window.EquiDB.put('profiles', bankAccount.userId, bankAccount.userId, profile); return; }
+    catch(e){ console.error('[EquiDB] saveProfile failed:', e); }
+  }
   if(bankAccount.linked && STABLE_URL){
     await stableGas({ action:'saveProfile', userId:bankAccount.userId, profileJson:JSON.stringify(profile) });
   }
@@ -2086,7 +2296,8 @@ function bindRiderCardEvents(wrap){
     if(!confirm('Delete this entry? Its PP will be removed.')) return;
     const entryId=b.dataset.entry;
     rider.artLog=(rider.artLog||[]).filter(e=>e.id!==entryId);
-    if(bankAccount.linked && STABLE_URL){
+    if(fsReady()){ await saveRider(rider); }          // log lives in the rider doc
+    else if(bankAccount.linked && STABLE_URL){
       await stableGas({ action:'deleteRiderArtLogEntry', userId:bankAccount.userId, riderId:rider.id, entryId });
     }
     await save(); render();
@@ -3779,6 +3990,58 @@ let editingMutationId = null;
 
 function renderAdmin(){
   const wrap = el('div');
+
+  // ---- Firestore backend panel (available without the admin passcode: it only
+  // ever touches YOUR OWN account's data) ----
+  const on=fsEnabled();
+  const fsCard=el('div','card');
+  fsCard.innerHTML=`
+    <h3 style="margin-top:0;">Database Backend <span class="tag" style="background:${on?'#1a3a1a':'#3a2a10'};color:${on?'#8ae88a':'#e8c86a'};border-color:${on?'#4a8a4a':'#c98a3a'};">${on?'Firestore (fast)':'Google Sheets (legacy)'}</span></h3>
+    <p class="small" style="margin-top:0;">
+      The original backend sends data to Google Sheets in tiny pieces over a slow connection — that's what makes big stables crawl.
+      Firestore stores each horse as a single document and loads them with one indexed query.
+    </p>
+    <div class="small" id="fs_status" style="margin-bottom:8px;">Checking Firestore connection…</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+      <button id="fs_migrate" class="btn" style="margin-top:0;">1 · Copy my data to Firestore</button>
+      <button id="fs_toggle" class="secondary" style="margin-top:0;">2 · ${on?'Switch back to Sheets':'Use Firestore'}</button>
+      <button id="fs_verify" class="secondary" style="margin-top:0;">Check what's in Firestore</button>
+    </div>
+    <p class="small" style="margin-top:8px;opacity:.8;">
+      Migrating only <b>copies</b> data — your Sheets stay exactly as they are, so you can switch back anytime.
+      Do step 1, then step 2, then reload the page.
+    </p>`;
+  wrap.appendChild(fsCard);
+
+  (async()=>{
+    const st=fsCard.querySelector('#fs_status');
+    if(!window.EquiDB){ st.innerHTML='<span style="color:#e08080;">Firestore module not loaded.</span>'; return; }
+    await window.EquiDB.ready;
+    st.innerHTML = window.EquiDB.available
+      ? `<span style="color:#8ae88a;">✓ Connected to Firestore</span>${window.EquiDB.authed?'':' <span style="color:#e8c86a;">(anonymous sign-in is off — enable it in Firebase → Authentication)</span>'}`
+      : '<span style="color:#e08080;">✗ Could not reach Firestore — see the browser console.</span>';
+  })();
+
+  fsCard.querySelector('#fs_migrate').onclick=()=>migrateToFirestore();
+  fsCard.querySelector('#fs_toggle').onclick=()=>{
+    const next = !fsEnabled();
+    if(next && !confirm('Switch the app to Firestore?\n\nMake sure you ran step 1 first, or the app will look empty.\nYour Sheets data stays untouched — you can switch back here anytime.')) return;
+    localStorage.setItem(FS_FLAG, next?'1':'0');
+    alert(next?'Firestore mode ON. Reloading…':'Back on Google Sheets. Reloading…');
+    location.reload();
+  };
+  fsCard.querySelector('#fs_verify').onclick=async()=>{
+    await window.EquiDB.ready;
+    if(!window.EquiDB.available){ alert('Not connected to Firestore.'); return; }
+    try{
+      const t0=performance.now();
+      const [h,r]=await Promise.all([
+        window.EquiDB.listByOwner('horses', bankAccount.userId),
+        window.EquiDB.listByOwner('riders', bankAccount.userId),
+      ]);
+      alert(`Firestore currently holds:\n\n• ${h.length} horses\n• ${r.length} riders\n\n(fetched in ${Math.round(performance.now()-t0)}ms)`);
+    }catch(err){ alert('Read failed: '+(err&&err.message?err.message:err)); }
+  };
 
   if(!adminPanelUnlocked){
     const gate = el('div','card',`
