@@ -1679,7 +1679,7 @@ function render(){
     <div class="tabs" style="align-items:center;">
       ${["roster","riders","prestige","train","compete","tack","admin"].map(t=>`
         <div class="tab${activeTab===t?' active':''}" data-tab="${t}">
-          ${t==="roster"?"Stable Roster":t==="riders"?"Riders":t==="prestige"?"Rider Prestige":t==="train"?"Training":t==="compete"?"Competitions":t==="tack"?"Tack Inventory":"Admin"}
+          ${t==="roster"?"Stable Roster":t==="riders"?"Riders":t==="prestige"?"Rider Prestige":t==="train"?"Training":t==="compete"?"Competitions":t==="tack"?"Inventory":"Admin"}
         </div>`).join("")}
       <div style="flex:1;"></div>
       <span class="small" style="color:var(--dim);margin-right:6px;">${bankAccount.userId}</span>
@@ -2142,6 +2142,67 @@ function renderPlayerProfilePage(app, data){
   app.querySelectorAll('[data-act="pp-open-rider"]').forEach(b=>b.onclick=()=>goToRiderProfile(b.dataset.id));
 }
 
+
+// ============================================
+// RIDER PROFILE EDIT MODAL  (mirrors showProfileModal for horses)
+// ============================================
+function showRiderProfileModal(riderId){
+  const r=state.riders.find(x=>x.id===riderId);
+  if(!r) return;
+  const pp=riderPP(r);
+  const overlay=document.createElement('div');
+  overlay.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.9);z-index:9999;display:flex;align-items:flex-start;justify-content:center;padding:16px;overflow-y:auto;';
+
+  function field(id, label, val, placeholder, type='input'){
+    const inp = type==='textarea'
+      ? `<textarea id="${id}" rows="4" placeholder="${placeholder}" style="width:100%;padding:7px;background:#15100c;border:1px solid #4a392a;color:#f1e6d8;border-radius:5px;margin-top:3px;box-sizing:border-box;font-family:Georgia,serif;resize:vertical;">${val||''}</textarea>`
+      : `<input id="${id}" value="${escAttr(val||'')}" placeholder="${placeholder}" style="width:100%;padding:7px;background:#15100c;border:1px solid #4a392a;color:#f1e6d8;border-radius:5px;margin-top:3px;box-sizing:border-box;" />`;
+    return `<div style="margin-bottom:10px;"><label style="font-size:.98em;color:#b5a392;text-transform:uppercase;display:block;">${label}</label>${inp}</div>`;
+  }
+
+  overlay.innerHTML=`<div style="background:#2c1f16;border:2px solid #c98a3a;border-radius:10px;padding:24px;max-width:760px;width:100%;color:#f1e6d8;font-family:Georgia,serif;margin:auto;">
+    <h3 style="margin-top:0;color:#c98a3a;">Edit Profile — ${r.name}</h3>
+    <div style="display:flex;gap:10px;">
+      <div style="flex:1;">${field('rm_name','Rider Name',r.name,'e.g. Natalia Jones')}</div>
+      <div style="width:150px;">${field('rm_pronouns','Pronouns (optional)',r.pronouns,'she/her')}</div>
+    </div>
+    ${field('rm_barn','Barn / Stable (optional)',r.barn,'e.g. Claymont Acres')}
+    ${field('rm_image','Profile Image Link (optional)',r.image,'https://… direct image address')}
+    <div id="rm_preview" style="margin:-4px 0 10px;">${r.image?urlImagePreviewHTML(r.image,'Rider'):''}</div>
+    ${field('rm_link','Reference / Profile Sheet Link (optional)',r.link,'https://…')}
+    ${pp>=100?field('rm_title','Custom Prestige Title (100+ PP)',r.customTitle,'Your awarded title'):''}
+    ${field('rm_bio','Bio',r.bio,'Name, age, occupation, personality, backstory…','textarea')}
+    <button id="rm_save" style="width:100%;background:#c98a3a;color:#241a14;border:none;padding:10px;border-radius:6px;font-weight:bold;cursor:pointer;font-size:1.1em;">Save</button>
+    <button id="rm_cancel" style="margin-top:8px;width:100%;background:#2c2118;color:#f1e6d8;border:1px solid #4a392a;padding:10px;border-radius:6px;cursor:pointer;font-size:1.1em;">Cancel</button>
+    <div id="rm_status" style="margin-top:8px;font-size:.92em;color:#b5a392;text-align:center;min-height:1.2em;"></div>
+  </div>`;
+  document.body.appendChild(overlay);
+
+  overlay.querySelector('#rm_image').oninput=e=>{
+    overlay.querySelector('#rm_preview').innerHTML=urlImagePreviewHTML(e.target.value.trim()||null,'Rider');
+  };
+  overlay.querySelector('#rm_cancel').onclick=()=>overlay.remove();
+  overlay.querySelector('#rm_save').onclick=async()=>{
+    const btn=overlay.querySelector('#rm_save'), st=overlay.querySelector('#rm_status');
+    btn.disabled=true; btn.textContent='Saving…'; st.textContent='Saving…';
+    try{
+      r.name     = overlay.querySelector('#rm_name').value.trim() || r.name;
+      r.pronouns = overlay.querySelector('#rm_pronouns').value.trim();
+      r.barn     = overlay.querySelector('#rm_barn').value.trim();
+      r.image    = overlay.querySelector('#rm_image').value.trim();
+      r.link     = overlay.querySelector('#rm_link').value.trim();
+      r.bio      = overlay.querySelector('#rm_bio').value.trim();
+      const t=overlay.querySelector('#rm_title'); if(t) r.customTitle=t.value.trim();
+      await saveRider(r); await save();
+      overlay.remove(); render();
+    }catch(err){
+      console.error('[Rider save]', err);
+      btn.disabled=false; btn.textContent='Save';
+      st.textContent='Could not save: '+(err&&err.message?err.message:err);
+    }
+  };
+}
+
 function renderRiderProfilePage(app, rider){
   const shareUrl = new URL(window.location.origin + window.location.pathname);
   shareUrl.searchParams.set('rider', rider.id);
@@ -2213,6 +2274,7 @@ function renderRiderProfilePage(app, rider){
             <div style="margin-top:8px;"><span class="tag" style="font-size:1.02em;">${pp} PP</span> <span class="tag" style="font-size:1.02em;">${prog.next?`${prog.toNext} to ${prog.next.name}`:"Top tier"}</span></div>
             <div class="expbar-bg" style="margin-top:6px;max-width:260px;"><div class="expbar-fill" style="width:${pct}%"></div></div>
             <div class="small" style="margin-top:10px;font-style:italic;">${title.note}</div>
+            ${state.riders.some(x=>x.id===rider.id)?`<button data-act="rider-edit-profile" data-id="${rider.id}" class="secondary" style="margin-top:12px;font-size:.95em;padding:6px 14px;">Edit Profile</button>`:''}
           </div>
         </div>
       </div>
@@ -2239,6 +2301,8 @@ function renderRiderProfilePage(app, rider){
     </div>
   `;
 
+  const rEdit=app.querySelector('[data-act="rider-edit-profile"]');
+  if(rEdit) rEdit.onclick=()=>showRiderProfileModal(rider.id);
   const back=app.querySelector('[data-act="back-from-rider"]');
   if(back) back.onclick=()=>{ const owned=state.riders.some(r=>r.id===rider.id); if(owned) backFromRider(); else location.href=location.pathname; };
 }
@@ -2291,8 +2355,6 @@ function renderRiders(){
     await saveRider(rider); await save(); render();
   };
 
-  // --- rider attire inventory (mirrors the tack system) ---
-  wrap.appendChild(renderAttireInventory());
 
   if(!state.riders.length){
     wrap.appendChild(el('div','small','<div style="padding:12px;color:#5a4a3a;">No riders yet — add one above to start earning Prestige.</div>'));
@@ -2334,11 +2396,9 @@ function renderRiders(){
         </div>
       </div>
       <div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap;">
-        <button class="secondary" data-ract="open-rider" data-id="${rider.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">View Profile</button>
         <button class="secondary" data-ract="toggle-rlog" data-id="${rider.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">${logOpen?"Hide":"Show"} Prestige Log (${(rider.artLog||[]).length})</button>
         <button class="secondary" data-ract="toggle-attire" data-id="${rider.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">${attireOpen?"Hide":"Attire"} (${(rider.attireEquipped||[]).length})</button>
-        ${pp>=100?`<button class="secondary" data-ract="edit-title" data-id="${rider.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">Custom Title</button>`:""}
-        <button class="secondary" data-ract="edit-rider" data-id="${rider.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">Edit</button>
+
         <button class="danger" data-ract="del-rider" data-id="${rider.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">Remove</button>
       </div>
       ${attireOpen?`<div class="artlog-panel" style="margin-top:10px;">
@@ -2416,16 +2476,7 @@ function bindRiderCardEvents(wrap){
   });
   wrap.querySelectorAll('[data-ract="open-rider"]').forEach(b=>b.onclick=()=>goToRiderProfile(b.dataset.id));
   wrap.querySelectorAll('[data-act="open-horse"]').forEach(b=>b.onclick=()=>goToProfile(b.dataset.id));
-  wrap.querySelectorAll('[data-ract="edit-rider"]').forEach(b=>b.onclick=async()=>{
-    const rider=state.riders.find(r=>r.id===b.dataset.id); if(!rider) return;
-    const name=prompt('Rider name:', rider.name); if(name===null) return;
-    const barn=prompt('Barn / stable they ride for (blank to clear):', rider.barn||""); if(barn===null) return;
-    const image=prompt('Profile image link (blank to clear):', rider.image||""); if(image===null) return;
-    const link=prompt('Reference / profile sheet link (blank to clear):', rider.link||""); if(link===null) return;
-    const bio=prompt('Bio (blank to clear):', rider.bio||""); if(bio===null) return;
-    rider.name=name.trim()||rider.name; rider.barn=barn.trim(); rider.image=image.trim(); rider.link=link.trim(); rider.bio=bio.trim();
-    await saveRider(rider); await save(); render();
-  });
+  wrap.querySelectorAll('[data-ract="edit-rider"]').forEach(b=>b.onclick=()=>showRiderProfileModal(b.dataset.id));
   wrap.querySelectorAll('[data-ract="equip-attire"]').forEach(sel=>sel.onchange=async()=>{
     const rider=state.riders.find(r=>r.id===sel.dataset.id); if(!rider||!sel.value) return;
     if(!rider.attireEquipped) rider.attireEquipped=[];
@@ -4075,6 +4126,7 @@ function renderArtLog(){
 
 function renderTackInventory(){
   const wrap=el('div');
+  wrap.appendChild(el('div','small','<div style="margin-bottom:10px;color:#b5a392;">Everything your stable owns — <b>tack</b> for your horses and <b>attire</b> for your riders. Equip tack from a horse\'s roster card, and attire from a rider\'s card.</div>'));
 
   const form=el('div','card',`
     <h3>Add Tack Item</h3>
@@ -4165,6 +4217,11 @@ function renderTackInventory(){
     });
     save(affectedIds); render();
   });
+
+  // --- Rider attire lives here too: one Inventory tab for tack + attire ---
+  const hr=el('div'); hr.style.cssText='border-top:1px solid #4a392a;margin:22px 0 4px;';
+  wrap.appendChild(hr);
+  wrap.appendChild(renderAttireInventory());
 
   return wrap;
 }
