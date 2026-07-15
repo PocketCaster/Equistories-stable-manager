@@ -2912,9 +2912,9 @@ function renderRoster(){
     const statBars = STATS.map(s=>{
       const base=h.stats[s]||0, bonus=getEquippedStatBonus(h,s), eff=base+bonus;
       const key = dStats.includes(s);
-      return `<div style="padding:1px 0;white-space:nowrap;flex:0 0 auto;${key?'background:#2a1f12;border-radius:4px;padding-left:4px;padding-right:4px;':''}" ${key?`title="Key stat for ${h.discipline}"`:''}>
-        <span style="font-size:.92em;color:${key?'#e8c86a':'var(--dim)'};font-weight:${key?'bold':'normal'};">${key?'★ ':''}${STAT_LABELS[s]}:</span>
-        <span style="font-size:.92em;font-weight:bold;color:var(--accent);margin-left:4px;" title="${bonus?`Base ${base} + ${bonus} from tack = ${eff}`:`Base ${base}`}">${base}${bonus?` <span style="color:var(--good);font-weight:normal;">(+${bonus})</span>`:""}</span>
+      return `<div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px;padding:3px 8px;border-radius:5px;white-space:nowrap;${key?'background:#2a1f12;border:1px solid #4a3a1a;':'border:1px solid transparent;'}" ${key?`title="Key stat for ${h.discipline}"`:''}>
+        <span style="font-size:.92em;color:${key?'#e8c86a':'var(--dim)'};font-weight:${key?'bold':'normal'};">${key?'★ ':''}${STAT_LABELS[s]}</span>
+        <span style="font-size:.92em;font-weight:bold;color:var(--accent);" title="${bonus?`Base ${base} + ${bonus} from tack = ${eff}`:`Base ${base}`}">${base}${bonus?` <span style="color:var(--good);font-weight:normal;">(+${bonus})</span>`:""}</span>
       </div>`;
     }).join("");
 
@@ -2971,7 +2971,7 @@ function renderRoster(){
           </div>
           <div class="small">EXP: ${h.exp} / ${h.level<10?LEVEL_TABLE[h.level+1].exp:"MAX"}</div>
           <div class="expbar-bg"><div class="expbar-fill" style="width:${pct}%"></div></div>
-          <div style="display:flex;flex-wrap:wrap;gap:2px 16px;margin-top:6px;">${statBars}</div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:6px 12px;margin-top:6px;">${statBars}</div>
         </div>
       </div>
 
@@ -5548,12 +5548,15 @@ function renderHorseProfilePage(app, h){
   const slotPrice    = calcSlotPrice(h);
 
   const dStatsP = disciplineStats(h);
+  // Each stat is one uniform grid cell: label pinned left, number pinned right,
+  // so the gap between a stat and its number reads the same on every row, and
+  // the grid gap keeps neighbouring cells (highlighted or not) clearly apart.
   const statBars = STATS.map(s=>{
     const base=h.stats[s]||0, bonus=getEquippedStatBonus(h,s), eff=base+bonus;
     const key = dStatsP.includes(s);
-    return `<div style="padding:4px 0;white-space:nowrap;${key?'background:#2a1f12;border-radius:4px;padding-left:6px;':''}" ${key?`title="Key stat for ${h.discipline}"`:''}>
-      <span style="font-size:1em;color:${key?'#e8c86a':'#b5a392'};font-weight:${key?'bold':'normal'};">${key?'★ ':''}${STAT_LABELS[s]}:</span>
-      <span style="font-size:1em;font-weight:bold;color:#c98a3a;margin-left:6px;" title="${bonus?`Base ${base} + ${bonus} from tack = ${eff}`:`Base ${base}`}">${base}${bonus?` <span style="color:#7a9b6e;font-weight:normal;">(+${bonus})</span>`:""}</span>
+    return `<div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px;padding:5px 10px;border-radius:5px;white-space:nowrap;${key?'background:#2a1f12;border:1px solid #4a3a1a;':'border:1px solid transparent;'}" ${key?`title="Key stat for ${h.discipline}"`:''}>
+      <span style="font-size:1em;color:${key?'#e8c86a':'#b5a392'};font-weight:${key?'bold':'normal'};">${key?'★ ':''}${STAT_LABELS[s]}</span>
+      <span style="font-size:1em;font-weight:bold;color:#c98a3a;" title="${bonus?`Base ${base} + ${bonus} from tack = ${eff}`:`Base ${base}`}">${base}${bonus?` <span style="color:#7a9b6e;font-weight:normal;">(+${bonus})</span>`:""}</span>
     </div>`;
   }).join("");
 
@@ -5693,7 +5696,7 @@ function renderHorseProfilePage(app, h){
           <div class="expbar-bg" style="margin-top:6px;max-width:260px;"><div class="expbar-fill" style="width:${pct}%"></div></div>
           <div style="margin-top:12px;">
             <h3 style="margin-bottom:8px;">Stats</h3>
-            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:4px;">${statBars}</div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px 14px;">${statBars}</div>
           </div>
           <div style="margin-top:16px;font-size:.98em;color:#b5a392;">Net Worth: <b style="color:#c98a3a;">฿${netWorth.toLocaleString()}</b> &nbsp;|&nbsp; Breeding Slot: <b style="color:#c98a3a;">฿${slotPrice.toLocaleString()}</b></div>
           <details style="margin-top:4px;">
