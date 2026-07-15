@@ -161,7 +161,9 @@ try{
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import { getFirestore, doc, getDoc, setDoc, deleteDoc, collection, query, where, getDocs, writeBatch }
   from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+import { getAuth, signInAnonymously, createUserWithEmailAndPassword, signInWithEmailAndPassword,
+         sendPasswordResetEmail, signOut as fbSignOut, onAuthStateChanged, updatePassword }
+  from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAJfBnY0sDc6W_yzzrpm8NKkNZv1cu7jMU",
@@ -172,18 +174,69 @@ const firebaseConfig = {
   appId: "1:801283742596:web:370951947bf862efcfdbd1"
 };
 
-let db=null, authOk=false;
+let db=null, authOk=false, auth=null;
 const ready = (async()=>{
   try{
     const app = initializeApp(firebaseConfig);
     db = getFirestore(app);
-    // Silent anonymous sign-in: no login screen, but it lets the security rules
-    // require an authenticated caller instead of leaving the DB world-writable.
-    try { await signInAnonymously(getAuth(app)); authOk=true; }
-    catch(e){ console.warn('[EquiDB] anonymous auth unavailable (enable it in Firebase → Authentication):', e.code||e); }
+    auth = getAuth(app);
+    // Wait for Firebase to restore any existing session before we decide who the
+    // user is — otherwise a refresh briefly looks like a signed-out visitor.
+    await new Promise(res=>{ const un=onAuthStateChanged(auth, ()=>{ un(); res(); }); });
+    // No real account yet? Fall back to an anonymous session so existing players
+    // keep working during the migration. Once everyone has linked, Anonymous can
+    // be switched off in the Firebase console and this line becomes a no-op.
+    if(!auth.currentUser){
+      try { await signInAnonymously(auth); } catch(e){ console.warn('[EquiDB] anon auth off:', e.code||e); }
+    }
+    authOk = !!auth.currentUser;
     return true;
   }catch(e){ console.error('[EquiDB] init failed:', e); db=null; return false; }
 })();
+
+// Real identity: Google stores and checks the password, sends reset emails, and
+// rate-limits attacks. This app never sees a password.
+const friendly = e => ({
+  'auth/invalid-email':'That email address doesn\'t look right.',
+  'auth/user-not-found':'No account found with that email.',
+  'auth/wrong-password':'Incorrect password.',
+  'auth/invalid-credential':'Incorrect email or password.',
+  'auth/email-already-in-use':'That email already has an account — sign in instead.',
+  'auth/weak-password':'Password must be at least 6 characters.',
+  'auth/too-many-requests':'Too many attempts. Wait a minute and try again.',
+  'auth/network-request-failed':'Network problem — check your connection.',
+}[e && e.code] || (e && e.message) || 'Something went wrong.');
+
+window.EquiAuth = {
+  ready,
+  get user(){ return auth && auth.currentUser && !auth.currentUser.isAnonymous ? auth.currentUser : null; },
+  get email(){ const u=this.user; return u ? u.email : ''; },
+  async token(){
+    const u = this.user;
+    if(!u) return null;
+    try { return await u.getIdToken(); } catch(e){ return null; }
+  },
+  async signUp(email, password){
+    try { const c = await createUserWithEmailAndPassword(auth, email, password); return {success:true, user:c.user}; }
+    catch(e){ return {success:false, error:friendly(e)}; }
+  },
+  async signIn(email, password){
+    try { const c = await signInWithEmailAndPassword(auth, email, password); return {success:true, user:c.user}; }
+    catch(e){ return {success:false, error:friendly(e)}; }
+  },
+  async resetPassword(email){
+    try { await sendPasswordResetEmail(auth, email); return {success:true}; }
+    catch(e){ return {success:false, error:friendly(e)}; }
+  },
+  async changePassword(newPassword){
+    try { await updatePassword(auth.currentUser, newPassword); return {success:true}; }
+    catch(e){ return {success:false, error:friendly(e)}; }
+  },
+  async signOut(){
+    try { await fbSignOut(auth); }catch(e){}
+    try { await signInAnonymously(auth); }catch(e){}   // keep writes working pre-migration
+  },
+};
 // Tell the main app script that the module has finished loading (success OR not).
 ready.then(v=>{ try{ window.__equiDBResolve(v); }catch(e){} })
      .catch(()=>{ try{ window.__equiDBResolve(false); }catch(e){} });
@@ -1749,6 +1802,8 @@ function render(){
   if(signOutBtn) signOutBtn.onclick=async()=>{
     if(!confirm('Sign out? Your stable data is saved to Google Sheets — sign back in anytime.')) return;
     bankAccount={userId:'',password:'',linked:false};
+    window.__loginMode='signin';
+    if(window.EquiAuth) await window.EquiAuth.signOut();
     state.horses=[]; state.riders=[]; state.profile=null; state.log=[]; state.tackInventory=[]; state.attireInventory=[]; state.loaded=false;
     saveBankAccount();
     load();
@@ -1770,18 +1825,74 @@ function render(){
 
 function renderLoginScreen(app){
   const stableSet = !!STABLE_URL;
+  // mode: 'signin' | 'signup' | 'link' | 'forgot'
+  if(!window.__loginMode) window.__loginMode = 'signin';
+  const mode = window.__loginMode;
+
+  const field=(id,label,type,ph)=>`<div style="margin-bottom:8px;">
+    <label class="small">${label}</label>
+    <input id="${id}" type="${type}" placeholder="${ph}" autocomplete="${type==='password'?'current-password':'email'}"
+      style="width:100%;padding:8px;background:#15100c;border:1px solid #4a392a;color:#f1e6d8;border-radius:5px;box-sizing:border-box;margin-top:3px;" /></div>`;
+
+  let body='';
+  if(mode==='signin'){
+    body = `
+      <h3 style="margin-top:0;color:#c98a3a;">Sign in</h3>
+      <p class="small">Sign in with your email. Your Buxx, horses and riders are all still here.</p>
+      ${field('li_email','Email','email','you@example.com')}
+      ${field('li_pass','Password','password','Your password')}
+      <button id="li_go" style="width:100%;padding:10px;background:#c98a3a;color:#241a14;border:none;border-radius:6px;font-weight:bold;cursor:pointer;font-size:1.1em;">Sign In</button>
+      <div style="display:flex;justify-content:space-between;margin-top:10px;">
+        <span data-mode="forgot" class="small" style="color:#c98a3a;cursor:pointer;">Forgot password?</span>
+        <span data-mode="signup" class="small" style="color:#c98a3a;cursor:pointer;">Create an account</span>
+      </div>`;
+  } else if(mode==='signup'){
+    body = `
+      <h3 style="margin-top:0;color:#c98a3a;">Create an account</h3>
+      <p class="small">Already play EquiStories? Create your login here, then you'll link it to your existing
+      stable on the next screen — <b>nothing is lost</b>.</p>
+      ${field('li_email','Email','email','you@example.com')}
+      ${field('li_pass','Password','password','At least 6 characters')}
+      <button id="li_go" style="width:100%;padding:10px;background:#c98a3a;color:#241a14;border:none;border-radius:6px;font-weight:bold;cursor:pointer;font-size:1.1em;">Create Account</button>
+      <div style="margin-top:10px;text-align:center;">
+        <span data-mode="signin" class="small" style="color:#c98a3a;cursor:pointer;">← Back to sign in</span>
+      </div>`;
+  } else if(mode==='forgot'){
+    body = `
+      <h3 style="margin-top:0;color:#c98a3a;">Reset your password</h3>
+      <p class="small">We'll email you a link to set a new password. No admin needed.</p>
+      ${field('li_email','Email','email','you@example.com')}
+      <button id="li_go" style="width:100%;padding:10px;background:#c98a3a;color:#241a14;border:none;border-radius:6px;font-weight:bold;cursor:pointer;font-size:1.1em;">Send Reset Email</button>
+      <div style="margin-top:10px;text-align:center;">
+        <span data-mode="signin" class="small" style="color:#c98a3a;cursor:pointer;">← Back to sign in</span>
+      </div>`;
+  } else { // link
+    body = `
+      <h3 style="margin-top:0;color:#c98a3a;">Connect your stable</h3>
+      <p class="small">Signed in as <b>${(window.EquiAuth && window.EquiAuth.email)||''}</b>.
+      Enter your <b>old</b> Bank User ID and password once, and this login takes over from here.
+      Your Buxx and horses stay exactly as they are.</p>
+      ${field('li_user','Bank User ID','text','e.g. PocketCaster')}
+      ${field('li_oldpass','Old bank password','password','Your old password')}
+      <button id="li_go" style="width:100%;padding:10px;background:#c98a3a;color:#241a14;border:none;border-radius:6px;font-weight:bold;cursor:pointer;font-size:1.1em;">Link My Stable</button>
+      <div style="margin-top:12px;padding-top:10px;border-top:1px solid #4a392a;">
+        <p class="small" style="margin:0 0 6px;">Brand new to EquiStories? Pick a User ID instead — this is permanent and stamps everything you own.</p>
+        ${field('li_newid','New User ID','text','3-24 letters, numbers, _ or -')}
+        <button id="li_new" style="width:100%;padding:8px;background:#2c2118;color:#f1e6d8;border:1px solid #4a392a;border-radius:5px;cursor:pointer;">Create a new stable</button>
+      </div>
+      <div style="margin-top:10px;text-align:center;">
+        <span data-mode="signout" class="small" style="color:#b5a392;cursor:pointer;">Sign out</span>
+      </div>`;
+  }
+
   app.innerHTML=`
     <div style="text-align:center;margin-bottom:8px;">
       <img src="${LOGO_DATA_URL}" alt="EquiStories" style="max-width:min(320px,70vw);height:auto;" />
     </div>
     <h1 style="text-align:center;border-bottom:none;">EquiStories Art Tracker</h1>
     <div style="max-width:460px;margin:clamp(16px,6vh,40px) auto;background:#241a14;border:1px solid #4a392a;border-radius:8px;padding:clamp(16px,4vw,20px);">
-      <h3 style="margin-top:0;color:#c98a3a;">Sign in to your stable</h3>
-      <p class="small">Use the same User ID and password as your Buxx Bank account.</p>
-      ${!stableSet?'<div style="background:rgba(177,71,63,.15);border:1px solid #b1473f;border-radius:6px;padding:8px;margin-bottom:10px;font-size:1.02em;color:#e08080;">⚠ Stable Data URL not configured — expand Admin section below first.</div>':""}
-      <div style="margin-bottom:8px;"><label class="small">Bank User ID</label><input id="li_user" placeholder="Your userId" style="width:100%;padding:8px;background:#15100c;border:1px solid #4a392a;color:#f1e6d8;border-radius:5px;box-sizing:border-box;margin-top:3px;" /></div>
-      <div style="margin-bottom:10px;"><label class="small">Password</label><input id="li_pass" type="password" placeholder="Your password" style="width:100%;padding:8px;background:#15100c;border:1px solid #4a392a;color:#f1e6d8;border-radius:5px;box-sizing:border-box;margin-top:3px;" /></div>
-      <button id="li_go" style="width:100%;padding:10px;background:#c98a3a;color:#241a14;border:none;border-radius:6px;font-weight:bold;cursor:pointer;font-size:1.1em;">Sign In</button>
+      ${!stableSet?'<div style="background:rgba(177,71,63,.15);border:1px solid #b1473f;border-radius:6px;padding:8px;margin-bottom:10px;font-size:1.02em;color:#e08080;">&#9888; Stable Data URL not configured — expand Admin section below first.</div>':""}
+      ${body}
       <div id="li_result" style="margin-top:8px;"></div>
       <hr style="border:none;border-top:1px solid #4a392a;margin:16px 0;" />
       <details ${adminPanelUnlocked?"open":""}>
@@ -1804,25 +1915,90 @@ function renderLoginScreen(app){
     </div>
   `;
 
-  app.querySelector('#li_go').onclick = async()=>{
-    const userId=app.querySelector('#li_user').value.trim();
-    const password=app.querySelector('#li_pass').value.trim();
-    const res=app.querySelector('#li_result');
-    if(!userId||!password){ res.innerHTML='<div style="color:#e08080;font-size:1.02em;">Please enter both User ID and password.</div>'; return; }
-    if(!STABLE_URL){ res.innerHTML='<div style="color:#e08080;font-size:1.02em;">⚠ Configure the Stable Data URL first (Admin section below).</div>'; return; }
-    res.innerHTML='<div class="small">Signing in…</div>';
-    const data=await gasPost({action:'loginPlayer',userId,password});
-    if(data?.success){
-      bankAccount={userId,password,linked:true};
+  const res = app.querySelector('#li_result');
+  const say = (msg,color)=>{ res.innerHTML=`<div style="color:${color};font-size:1.02em;">${msg}</div>`; };
+
+  app.querySelectorAll('[data-mode]').forEach(el=>el.onclick=async()=>{
+    if(el.dataset.mode==='signout'){ await window.EquiAuth.signOut(); window.__loginMode='signin'; render(); return; }
+    window.__loginMode = el.dataset.mode; render();
+  });
+
+  // After a Firebase sign-in, ask the bank which stable this login owns.
+  async function afterAuth(){
+    say('Checking your stable…','#b5a392');
+    const token = await window.EquiAuth.token();
+    const who = await gasPost({ action:'getMyAccount', idToken:token });
+    if(who?.success && who.data?.linked){
+      bankAccount = { userId: who.data.userId, password:'', linked:true };
       saveBankAccount();
-      res.innerHTML='<div style="color:#7a9b6e;font-size:1.02em;">✓ Welcome, '+data.data.displayName+'! Loading stable…</div>';
+      say(`✓ Welcome back, ${who.data.displayName}! Loading your stable…`, '#7a9b6e');
       await loadFromSheets();
       render();
     } else {
-      res.innerHTML='<div style="color:#e08080;font-size:1.02em;">✗ '+(data?.error||'Login failed — check your User ID and password.')+'</div>';
+      window.__loginMode = 'link';
+      render();
     }
+  }
+
+  const go = app.querySelector('#li_go');
+  if(go) go.onclick = async()=>{
+    if(!STABLE_URL){ say('&#9888; Configure the Stable Data URL first (Admin section below).','#e08080'); return; }
+    go.disabled=true;
+
+    if(mode==='forgot'){
+      const email=app.querySelector('#li_email').value.trim();
+      if(!email){ say('Enter your email.','#e08080'); go.disabled=false; return; }
+      say('Sending…','#b5a392');
+      const r = await window.EquiAuth.resetPassword(email);
+      go.disabled=false;
+      if(r.success) say('✓ Check your email for a reset link. It may take a minute, and check spam.','#7a9b6e');
+      else say('✗ '+r.error,'#e08080');
+      return;
+    }
+
+    const email=app.querySelector('#li_email').value.trim();
+    const pass =app.querySelector('#li_pass').value;
+    if(!email||!pass){ say('Enter your email and password.','#e08080'); go.disabled=false; return; }
+    say(mode==='signup'?'Creating your account…':'Signing in…','#b5a392');
+    const r = mode==='signup' ? await window.EquiAuth.signUp(email,pass) : await window.EquiAuth.signIn(email,pass);
+    go.disabled=false;
+    if(!r.success){ say('✗ '+r.error,'#e08080'); return; }
+    await afterAuth();
   };
-  app.querySelector('#li_pass').onkeydown=e=>{ if(e.key==='Enter') app.querySelector('#li_go').click(); };
+
+  // Link an existing bank account to this login (the migration path).
+  const linkBtn = app.querySelector('#li_go');
+  if(mode==='link' && linkBtn) linkBtn.onclick = async()=>{
+    const userId=app.querySelector('#li_user').value.trim();
+    const oldPass=app.querySelector('#li_oldpass').value;
+    if(!userId||!oldPass){ say('Enter your old User ID and password.','#e08080'); return; }
+    linkBtn.disabled=true; say('Linking…','#b5a392');
+    const token = await window.EquiAuth.token();
+    const r = await gasPost({ action:'linkFirebaseAccount', idToken:token, userId, password:oldPass });
+    linkBtn.disabled=false;
+    if(r?.success){
+      bankAccount={ userId:r.data.userId, password:'', linked:true };
+      saveBankAccount();
+      say(`✓ Linked! Welcome back, ${r.data.displayName} — ฿${r.data.balance} intact. Loading…`,'#7a9b6e');
+      await loadFromSheets(); render();
+    } else say('✗ '+(r?.error||'Could not link that account.'),'#e08080');
+  };
+
+  const newBtn = app.querySelector('#li_new');
+  if(newBtn) newBtn.onclick = async()=>{
+    const userId=app.querySelector('#li_newid').value.trim();
+    if(!userId){ say('Pick a User ID.','#e08080'); return; }
+    newBtn.disabled=true; say('Creating your stable…','#b5a392');
+    const token = await window.EquiAuth.token();
+    const r = await gasPost({ action:'registerFirebaseAccount', idToken:token, userId, displayName:userId });
+    newBtn.disabled=false;
+    if(r?.success){
+      bankAccount={ userId:r.data.userId, password:'', linked:true };
+      saveBankAccount();
+      say(`✓ Welcome to EquiStories, ${r.data.displayName}! You start with ฿${r.data.balance}.`,'#7a9b6e');
+      await loadFromSheets(); render();
+    } else say('✗ '+(r?.error||'Could not create that account.'),'#e08080');
+  };
 
   const saveUrlBtn = app.querySelector('#li_save_url');
   if(saveUrlBtn){
