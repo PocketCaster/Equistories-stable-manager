@@ -6,6 +6,8 @@
   <title>EquiStories — Art Tracker</title>
 </head>
 <body>
+<div style="background:#15100c;border-bottom:1px solid #4a392a;padding:8px 16px;font-family:Georgia,serif;"><a data-hublink href="https://pocketcaster.github.io/equistories-hub/" style="color:#c98a3a;text-decoration:none;font-size:1.02em;">&#8592; Community Hub</a><span style="color:#6a5a4a;margin:0 8px;">|</span><a href="https://pocketcaster.github.io/equistories-shows/" style="color:#c98a3a;text-decoration:none;font-size:1.02em;">Shows</a></div>
+
 <div id="app"></div>
 <style>
   /* Base type scale: significantly larger baseline for readability/accessibility,
@@ -1339,12 +1341,58 @@ async function loadPublicHorse(horseId, urlOverride){
   // returning success:false) into the same null made it impossible to
   // tell "the link is broken" apart from "the backend can't find this
   // horse" apart from "the request never reached the server at all".
+  if(fsEnabled()){
+    const DB = await waitForDB();
+    if(DB){
+      try{
+        const h = await DB.get('horses', horseId);
+        if(h) return { success:true, data:h };
+        return { success:false, error:'That horse is not in the database.' };
+      }catch(e){ console.error('[EquiDB] loadPublicHorse failed:', e); }
+    }
+  }
   const res = await stableGas({ action:'loadPublicHorse', horseId }, urlOverride);
   return res;
 }
 
 async function loadPublicRider(riderId, urlOverride){
+  if(fsEnabled()){
+    const DB = await waitForDB();
+    if(DB){
+      try{
+        const r = await DB.get('riders', riderId);
+        if(r) return { success:true, data:r };
+        return { success:false, error:'That rider is not in the database.' };
+      }catch(e){ console.error('[EquiDB] loadPublicRider failed:', e); }
+    }
+  }
   return await stableGas({ action:'loadPublicRider', riderId }, urlOverride);
+}
+
+// Public PLAYER profile: the profile doc plus lightweight summaries of that
+// player's horses and riders, assembled from indexed queries.
+async function loadPublicPlayer(userId, urlOverride){
+  if(fsEnabled()){
+    const DB = await waitForDB();
+    if(DB){
+      try{
+        const [profile, horses, riders] = await Promise.all([
+          DB.get('profiles', userId),
+          DB.listByOwner('horses', userId),
+          DB.listByOwner('riders', userId),
+        ]);
+        return { success:true, data:{
+          userId,
+          profile: profile || null,
+          horses: (horses||[]).map(h=>({ id:h.id, name:h.name, breed:h.breed, level:h.level||1,
+            gender:h.gender||'', image:(typeof h.profileImage==='string' && !h.profileImage.startsWith('data:')) ? h.profileImage : '' })),
+          riders: (riders||[]).map(r=>({ id:r.id, name:r.name, image:r.image||'',
+            pp:(r.artLog||[]).reduce((n,e)=>n+(Number(e.pp)||0),0) })),
+        }};
+      }catch(e){ console.error('[EquiDB] loadPublicPlayer failed:', e); }
+    }
+  }
+  return await stableGas({ action:'loadPublicProfile', userId }, urlOverride);
 }
 
 async function load(){
@@ -1615,7 +1663,7 @@ function render(){
     app.innerHTML='<div style="padding:40px;text-align:center;color:#b5a392;font-family:Georgia,serif;">Loading player profile…</div>';
     const stableOverride = params.get('stable');
     if(stableOverride && !STABLE_URL) STABLE_URL = stableOverride;
-    stableGas({ action:'loadPublicProfile', userId:playerProfileId }, stableOverride).then(res=>{
+    loadPublicPlayer(playerProfileId, stableOverride).then(res=>{
       if(res?.success && res.data){ renderPlayerProfilePage(app, res.data); return; }
       app.innerHTML=`<div style="padding:40px;text-align:center;color:#b5a392;font-family:Georgia,serif;max-width:500px;margin:0 auto;">
         Player not found.<br><div style="font-size:1em;opacity:.8;margin-top:10px;">${res&&res.error?('Server said: "'+res.error+'"'):'Check the share link, and that the Stable script is redeployed with loadPublicProfile.'}</div>
