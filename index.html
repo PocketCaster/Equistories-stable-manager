@@ -1439,6 +1439,8 @@ function newHorse(data){
     ownerLink: data.ownerLink||"",
     height: data.height||"",
     importLink: data.importLink||"",
+    barnName: data.barnName||"",     // everyday/barn name (vs the registered show name)
+    discipline: data.discipline||"", // chosen discipline — highlights the stats to train
     riderId: data.riderId||null,   // assigned primary rider (drives training bonuses)
     riderName: data.riderName||"",
     stableName: data.stableName||"",
@@ -2855,10 +2857,12 @@ function renderRoster(){
     const photoHtml = h.profileImage
       ? `<img src="${h.profileImage}" class="horse-photo" />`
       : `<div class="horse-photo-placeholder"></div>`;
+    const dStats = disciplineStats(h);
     const statBars = STATS.map(s=>{
       const base=h.stats[s]||0, bonus=getEquippedStatBonus(h,s), eff=base+bonus;
-      return `<div style="padding:1px 0;white-space:nowrap;flex:0 0 auto;">
-        <span style="font-size:.92em;color:var(--dim);">${STAT_LABELS[s]}:</span>
+      const key = dStats.includes(s);
+      return `<div style="padding:1px 0;white-space:nowrap;flex:0 0 auto;${key?'background:#2a1f12;border-radius:4px;padding-left:4px;padding-right:4px;':''}" ${key?`title="Key stat for ${h.discipline}"`:''}>
+        <span style="font-size:.92em;color:${key?'#e8c86a':'var(--dim)'};font-weight:${key?'bold':'normal'};">${key?'★ ':''}${STAT_LABELS[s]}:</span>
         <span style="font-size:.92em;font-weight:bold;color:var(--accent);margin-left:4px;" title="${bonus?`Base ${base} + ${bonus} from tack = ${eff}`:`Base ${base}`}">${base}${bonus?` <span style="color:var(--good);font-weight:normal;">(+${bonus})</span>`:""}</span>
       </div>`;
     }).join("");
@@ -2905,7 +2909,8 @@ function renderRoster(){
             <span class="tag">Lvl ${h.level}</span>
             ${(h.badges||[]).map(b=>`<span class="tag" title="${b} Trophy" style="background:#3a2a10;color:#e8c86a;border-color:#c98a3a;">${b}</span>`).join("")}
           </div>
-          <div class="small">${h.breed} · Age ${h.age} (${h.stage})${h.gender?` · ${h.gender}`:""}${h.height?` · ${h.height}`:""}</div>
+          ${h.barnName?`<div class="small" style="color:#8a7a6a;margin-top:-2px;">"${h.barnName}"</div>`:""}
+          <div class="small">${h.breed} · Age ${h.age} (${h.stage})${h.gender?` · ${h.gender}`:""}${h.height?` · ${h.height}`:""}${h.discipline?` · <span style="color:#e8c86a;">${h.discipline}</span>`:""}</div>
           ${h.importLink?`<div class="small"><a href="${h.importLink}" target="_blank" rel="noopener" style="color:var(--accent);">Import sheet ↗</a></div>`:""}
           <div class="small" style="margin-top:2px;">Rider:
             <select data-act="assign-rider" data-id="${h.id}" style="width:auto;display:inline-block;font-size:.95em;padding:2px 6px;min-height:0;">
@@ -2934,9 +2939,7 @@ function renderRoster(){
 
       <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">
         <button class="secondary" data-act="toggle-log" data-id="${h.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">${open?"Hide":"Show"} Art Log (${h.artLog.length})</button>
-        <button class="secondary" data-act="edit-lineage" data-id="${h.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">Lineage</button>
-        <button class="secondary" data-act="edit-worth" data-id="${h.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">Net Worth</button>
-        <button class="secondary" data-act="edit-details" data-id="${h.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">Details</button>
+
         <button class="danger" data-act="del" data-id="${h.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">Remove</button>
         <button class="secondary" data-act="transfer-horse" data-id="${h.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">Sell / Transfer</button>
       </div>
@@ -3136,53 +3139,43 @@ function pedLink(entry, label){
   return `<span style="color:${name==="Unknown"?"#4a392a":"#f1e6d8"};font-weight:${name!=="Unknown"?"bold":"normal"};">${name}</span>`;
 }
 
+// Stats the horse's chosen discipline calls for (used to highlight them).
+function disciplineStats(h){
+  const d = h && h.discipline ? DISCIPLINES[h.discipline] : null;
+  return d ? d.stats : [];
+}
+
 function renderPedigreeChart(h){
-  const p = h.pedigree || {};
-
-  function row(key, label, indent){
-    const e = pedEntry(h, key);
-    const indentStyle = `padding-left:${indent}px;`;
-    return `<div style="${indentStyle}font-size:1em;padding:2px 0;display:flex;align-items:center;gap:6px;">
-      <span style="color:#4a392a;min-width:32px;font-size:1.06em;">${label}:</span>
-      ${pedLink(e, label)}
-    </div>`;
+  // Laid out to match the bloodline block used in the horse logs: third
+  // generation on the long leader, second generation on the short leader, and
+  // the Sire/Dam flush left between their own halves of the tree.
+  const L3='------------------------------------------';
+  const L2='-----------------';
+  function nm(key){
+    const e=pedEntry(h,key);
+    return (e && (e.name||'').trim()) ? pedLink(e,key.toUpperCase()) : '<span style="color:#6a5a4a;">Unknown</span>';
   }
+  const line=(lead,label,key,strong)=>`<div style="padding:1px 0;white-space:pre;overflow-x:auto;">`
+    +`<span style="color:#3a2e22;">${lead}</span>`
+    +`<span style="color:${strong?'#c98a3a':'#b5a392'};font-weight:${strong?'bold':'normal'};">${lead?' ':''}${label}: </span>`
+    +`${nm(key)}</div>`;
 
-  return `<div style="font-family:'Courier New',monospace;background:#15100c;border:1px solid #4a392a;border-radius:8px;padding:14px;line-height:1.8;">
-    <div style="font-size:.98em;color:#b5a392;margin-bottom:8px;font-family:Georgia,serif;">Bloodline:</div>
-
-    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0;">
-      <div>
-        <div style="font-size:1.02em;padding:2px 0;"><b style="color:#c98a3a;">Sire:</b> ${pedLink(pedEntry(h,'sire'),'Sire')}</div>
-        <div style="font-size:1.02em;padding:2px 0;margin-top:4px;"><b style="color:#c98a3a;">Dam:</b> ${pedLink(pedEntry(h,'dam'),'Dam')}</div>
-      </div>
-    </div>
-
-    <div style="margin-top:10px;border-left:2px solid #4a392a;padding-left:10px;">
-      <div style="margin-bottom:2px;">${row('ss','SS',0)}</div>
-      <div style="margin-bottom:8px;padding-left:20px;">
-        ${row('sss','SSS',0)}
-        ${row('ssd','SSD',0)}
-      </div>
-      <div style="margin-bottom:2px;">${row('sd','SD',0)}</div>
-      <div style="margin-bottom:8px;padding-left:20px;">
-        ${row('sds','SDS',0)}
-        ${row('sdd','SDD',0)}
-      </div>
-    </div>
-
-    <div style="margin-top:6px;border-left:2px solid #4a392a;padding-left:10px;">
-      <div style="margin-bottom:2px;">${row('ds','DS',0)}</div>
-      <div style="margin-bottom:8px;padding-left:20px;">
-        ${row('dss','DSS',0)}
-        ${row('dsd','DSD',0)}
-      </div>
-      <div style="margin-bottom:2px;">${row('dd','DD',0)}</div>
-      <div style="padding-left:20px;">
-        ${row('dds','DDS',0)}
-        ${row('ddd','DDD',0)}
-      </div>
-    </div>
+  return `<div style="font-family:'Courier New',monospace;font-size:.95em;background:#15100c;border:1px solid #4a392a;border-radius:8px;padding:14px;line-height:1.7;">
+    <div style="font-family:Georgia,serif;color:#c98a3a;margin-bottom:8px;font-weight:bold;">Bloodline:</div>
+    ${line(L3,'SSS','sss')}
+    ${line(L2,'SS','ss')}
+    ${line(L3,'SSD','ssd')}
+    ${line('','Sire','sire',true)}
+    ${line(L3,'SDS','sds')}
+    ${line(L2,'SD','sd')}
+    ${line(L3,'SDD','sdd')}
+    ${line(L3,'DSS','dss')}
+    ${line(L2,'DS','ds')}
+    ${line(L3,'DSD','dsd')}
+    ${line('','Dam','dam',true)}
+    ${line(L3,'DDS','dds')}
+    ${line(L2,'DD','dd')}
+    ${line(L3,'DDD','ddd')}
   </div>`;
 }
 
@@ -3343,10 +3336,16 @@ function renderTraining(){
     const allStats={...t.stats};
     if(t2) Object.entries(t2.stats).forEach(([s,v])=>allStats[s]=(allStats[s]||0)+v);
     const statsStr=Object.entries(allStats).map(([s,v])=>`+${v} ${STAT_LABELS[s]}`).join(", ");
+    // Highlight which of this training's stats matter for the horse's discipline.
+    const dS=disciplineStats(h);
+    const statsMarked=Object.entries(allStats).map(([s,v])=>
+      dS.includes(s) ? `<b style="color:#e8c86a;">★ +${v} ${STAT_LABELS[s]}</b>` : `+${v} ${STAT_LABELS[s]}`).join(", ");
     card.querySelector('#tr_prompt').innerHTML=`<div class="prompt-box">
       ${t2?`<b>${t.name}</b> + <b>${t2.name}</b>`:`<b>${t.name}</b>`}<br>
       <span style="font-size:1.02em;">${t.prompt}${t2?`<br><span style="opacity:.8;">${t2.prompt}</span>`:""}</span><br>
-      <span class="small">Stats: ${statsStr}</span>
+      <span class="small">Stats: ${statsMarked}</span>
+      ${h.discipline?`<br><span class="small" style="color:#e8c86a;">${h.discipline} needs: ${dS.map(x=>STAT_LABELS[x]).join(", ")}</span>`
+        :`<br><span class="small" style="opacity:.7;">No discipline chosen — set one in Edit Profile to see which stats to train.</span>`}
     </div>`;
   }
 
@@ -5472,6 +5471,9 @@ function calcSlotPrice(h){
 // ============================================
 
 function renderHorseProfilePage(app, h){
+  // Owner-only controls (Edit Lineage) — a public visitor's horse won't be in
+  // our own roster, so this is a safe check.
+  const isOwn = state.horses.some(x=>x.id===h.id);
   if(!h.pedigree) h.pedigree={};
 
   // Build the shareable link so it also carries the Stable Data URL as a
@@ -5488,10 +5490,12 @@ function renderHorseProfilePage(app, h){
   const netWorth     = calcNetWorth(h);
   const slotPrice    = calcSlotPrice(h);
 
+  const dStatsP = disciplineStats(h);
   const statBars = STATS.map(s=>{
     const base=h.stats[s]||0, bonus=getEquippedStatBonus(h,s), eff=base+bonus;
-    return `<div style="padding:4px 0;white-space:nowrap;">
-      <span style="font-size:1em;color:#b5a392;">${STAT_LABELS[s]}:</span>
+    const key = dStatsP.includes(s);
+    return `<div style="padding:4px 0;white-space:nowrap;${key?'background:#2a1f12;border-radius:4px;padding-left:6px;':''}" ${key?`title="Key stat for ${h.discipline}"`:''}>
+      <span style="font-size:1em;color:${key?'#e8c86a':'#b5a392'};font-weight:${key?'bold':'normal'};">${key?'★ ':''}${STAT_LABELS[s]}:</span>
       <span style="font-size:1em;font-weight:bold;color:#c98a3a;margin-left:6px;" title="${bonus?`Base ${base} + ${bonus} from tack = ${eff}`:`Base ${base}`}">${base}${bonus?` <span style="color:#7a9b6e;font-weight:normal;">(+${bonus})</span>`:""}</span>
     </div>`;
   }).join("");
@@ -5660,8 +5664,11 @@ function renderHorseProfilePage(app, h){
       </div>` : ""}
 
       <div class="pcard">
-        <h3>Pedigree</h3>
-        ${renderPedigreeChart(h)}
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
+          <h3 style="margin:0;">Pedigree</h3>
+          ${isOwn?`<button data-act="edit-lineage-profile" data-id="${h.id}" class="secondary" style="margin-top:0;font-size:.98em;padding:4px 12px;">Edit Lineage</button>`:''}
+        </div>
+        <div style="margin-top:10px;">${renderPedigreeChart(h)}</div>
         <h3 style="margin-top:16px;">Breeding Slots</h3>
         <div class="breedslots">${slotsHtml||'<span class="small">none yet</span>'}</div>
         <div style="margin-top:10px;">${breedingRecHtml}</div>
@@ -5696,6 +5703,8 @@ function renderHorseProfilePage(app, h){
 
   const editProfileBtn = app.querySelector('#pp_edit_profile_btn');
   if(editProfileBtn) editProfileBtn.onclick = ()=>showProfileModal(h.id);
+  const editLinBtn = app.querySelector('[data-act="edit-lineage-profile"]');
+  if(editLinBtn) editLinBtn.onclick = ()=>showLineageModal(h.id);
 
   // FIX: profile photo used to be a file upload run through resizeImageFile
   // and base64-encoded, which could still blow past the JSONP/Sheets size
@@ -5787,6 +5796,19 @@ function showProfileModal(horseId){
       <div style="width:110px;">${field('pm_age','Age',h.age,'e.g. 5')}</div>
     </div>
     <div class="small" style="margin:-4px 0 10px;opacity:.7;">Changing age here won't skip training age-up milestones — the horse's stage (foal/yearling/adult) still updates from those. Changing breed won't recompute existing genetics.</div>
+    <div style="display:flex;gap:10px;">
+      <div style="flex:1;">${field('pm_barn','Barn Name (optional)',h.barnName,'e.g. Fortune — the everyday name')}</div>
+      <div style="width:150px;">${field('pm_height','Height (optional)',h.height,'e.g. 16.2 hh')}</div>
+    </div>
+    <div style="margin-bottom:10px;">
+      <label style="font-size:.98em;color:#b5a392;text-transform:uppercase;display:block;">Discipline</label>
+      <select id="pm_discipline" style="width:100%;padding:7px;background:#15100c;border:1px solid #4a392a;color:#f1e6d8;border-radius:5px;margin-top:3px;box-sizing:border-box;font-family:Georgia,serif;">
+        <option value="">— none chosen —</option>
+        ${Object.keys(DISCIPLINES).map(d=>`<option value="${d}"${h.discipline===d?' selected':''}>${d} — ${DISCIPLINES[d].stats.map(x=>STAT_LABELS[x]).join(', ')}</option>`).join("")}
+      </select>
+      <div class="small" style="opacity:.7;margin-top:3px;">The stats for this discipline get highlighted on the horse's card, profile and training tab.</div>
+    </div>
+    ${field('pm_import','Import Sheet Link (optional)',h.importLink,'https://… reference/import sheet')}
     ${field('pm_owner','Owner Name',h.ownerName,'e.g. @YourUsername')}
     ${field('pm_ownerlink','Owner Link (optional)',h.ownerLink,'https://… (DeviantArt, Toyhouse…)')}
     ${field('pm_rider','Rider Name (optional)',h.riderName,'e.g. Jane Smith')}
@@ -5815,6 +5837,10 @@ function showProfileModal(horseId){
       h.breed = overlay.querySelector('#pm_breed').value.trim() || h.breed;
       const newAge = Number(overlay.querySelector('#pm_age').value);
       if(!isNaN(newAge) && newAge >= 0) h.age = newAge;
+      h.barnName   = overlay.querySelector('#pm_barn').value.trim();
+      h.height     = overlay.querySelector('#pm_height').value.trim();
+      h.importLink = overlay.querySelector('#pm_import').value.trim();
+      h.discipline = overlay.querySelector('#pm_discipline').value;
       h.ownerName  = overlay.querySelector('#pm_owner').value.trim();
       h.ownerLink  = overlay.querySelector('#pm_ownerlink').value.trim();
       h.riderName  = overlay.querySelector('#pm_rider').value.trim();
