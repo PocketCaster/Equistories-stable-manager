@@ -1747,7 +1747,7 @@ async function editArtLogImage(h, entryId){
   addLog(`${h.name} — updated an art log image.`);
   const ok = await saveArtEntry(h, e);
   await saveHorse(h); await save(); render();
-  if(!ok) alert("The entry updated here, but saving to the Stable Data sheet failed. Try again.");
+  if(!ok) alert("The entry updated here, but saving to the database failed. Try again — if it keeps happening, sign out and sign back in.");
 }
 
 function deleteArtLogEntry(h, entryId){
@@ -3897,7 +3897,7 @@ function renderTraining(){
     if(hOk && entryOk){
       res.innerHTML=`<div class="result success">✓ Training logged & saved! ${statsNote} · +${expGain} EXP (${sources.join(", ")})</div>`;
     } else {
-      res.innerHTML=`<div class="result fail">⚠ Training was recorded here, but saving it to the Stable Data sheet failed. Try again, or check your Stable Data URL in Admin settings.</div>`;
+      res.innerHTML=`<div class="result fail">⚠ Training was recorded here, but saving it to the database failed. Try again — if it keeps happening, sign out and sign back in (top of the page).</div>`;
     }
 
     uploadedImage=null;
@@ -4205,7 +4205,7 @@ function buildShowLogForm(){
     if(hOk && entryOk){
       res.innerHTML=`<div class="result success">✓ Show logged & saved!${expGain?` +${expGain} EXP (${sources.join(", ")})`:""} ${prizeImages.length?`${prizeImages.length} prize(s) saved.`:""}</div>`;
     } else {
-      res.innerHTML=`<div class="result fail">⚠ Show was recorded here, but saving it to the Stable Data sheet failed. Try again, or check your Stable Data URL in Admin settings.<br><span class="small">(Open your browser's console — F12 or right-click → Inspect → Console — for the specific error, tagged "[EquiStories save failed]".)</span></div>`;
+      res.innerHTML=`<div class="result fail">⚠ Show was recorded here, but saving it to the database failed. Try again — if it keeps happening, sign out and sign back in (top of the page).<br><span class="small">(Open your browser's console — F12 or right-click → Inspect → Console — for the specific error, tagged "[EquiStories save failed]".)</span></div>`;
     }
 
     artImage=null; prizeImages.length=0;
@@ -4404,7 +4404,7 @@ function showEditCompModal(h, recId){
     await save();
     overlay.remove();
     render();
-    if(!ok) alert(`The edit was applied here, but saving it to the Stable Data sheet failed. Try again, or check your Stable Data URL in Admin settings.`);
+    if(!ok) alert(`The edit was applied here, but saving it to the database failed. Try again — if it keeps happening, sign out and sign back in (top of the page).`);
   };
 }
 
@@ -6140,7 +6140,7 @@ function renderHorseProfilePage(app, h){
       h.profileImage = url;
       render();
       const ok = await saveHorse(h);
-      if(!ok) alert(`${h.name}'s photo was updated here, but saving it to the Stable Data sheet failed. Try again, or check your Stable Data URL in Admin settings.`);
+      if(!ok) alert(`${h.name}'s photo was updated here, but saving it to the database failed. Try again — if it keeps happening, sign out and sign back in (top of the page).`);
     };
   }
 
@@ -6163,7 +6163,7 @@ function renderHorseProfilePage(app, h){
       }
       render();
       const ok = await saveHorse(h);
-      if(!ok) alert(`${h.name}'s reference sheet was updated here, but saving it to the Stable Data sheet failed. Try again, or check your Stable Data URL in Admin settings.`);
+      if(!ok) alert(`${h.name}'s reference sheet was updated here, but saving it to the database failed. Try again — if it keeps happening, sign out and sign back in (top of the page).`);
       else if(bonusMsg) alert(`Reference sheet saved for ${h.name}.${bonusMsg}`);
     };
   }
@@ -6228,7 +6228,7 @@ function showProfileModal(horseId){
     saveBtn.disabled = true;
     const origLabel = saveBtn.textContent;
     saveBtn.textContent = 'Saving…';
-    statusEl.textContent = 'Saving to your Stable Data sheet — this can take up to 15 seconds…';
+    statusEl.textContent = 'Saving — this can take up to 15 seconds…';
     const slowNotice = setTimeout(()=>{
       statusEl.textContent = "Still working — slow connections or a busy sheet can take a bit longer. Don't close this window.";
     }, 6000);
@@ -6254,7 +6254,7 @@ function showProfileModal(horseId){
       const [ok] = await Promise.all([ saveHorse(h), save() ]);
       clearTimeout(slowNotice);
       overlay.remove(); render();
-      if(!ok) alert(`Profile was updated here, but saving it to the Stable Data sheet failed. Try again, or check your Stable Data URL in Admin settings.`);
+      if(!ok) alert(`Profile was updated here, but saving it to the database failed. Try again — if it keeps happening, sign out and sign back in (top of the page).`);
     }catch(err){
       clearTimeout(slowNotice);
       console.error('[EquiStories] Edit Profile save failed:', err);
@@ -6400,7 +6400,7 @@ function showNetWorthModal(horseId){
     const ok = await saveHorse(h);
     await save();
     overlay.remove(); render();
-    if(!ok) alert(`Net worth was updated here, but saving it to the Stable Data sheet failed. Try again, or check your Stable Data URL in Admin settings.`);
+    if(!ok) alert(`Net worth was updated here, but saving it to the database failed. Try again — if it keeps happening, sign out and sign back in (top of the page).`);
   };
 }
 
