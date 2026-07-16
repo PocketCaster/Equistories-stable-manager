@@ -938,13 +938,21 @@ function saveBankAccount(){
 async function save(horseIds){
   if(!bankAccount.linked) return;
   if(fsReady()){
-    try{
+    const writeAll = async()=>{
       await window.EquiDB.put('stables', bankAccount.userId, bankAccount.userId, {
         id: bankAccount.userId, log: state.log,
         tackInventory: state.tackInventory, attireInventory: state.attireInventory });
       const ids = horseIds===undefined ? [] : (Array.isArray(horseIds)?horseIds:[horseIds]);
       await Promise.all(state.horses.filter(h=>ids.includes(h.id)).map(h=>saveHorse(h)));
-    }catch(e){ console.error('[EquiDB] save failed:', e); fsSaveProblem(e); }
+    };
+    try{ await writeAll(); }
+    catch(e){
+      if(isPermissionDenied(e) && await recoverOwnerSession()){
+        try{ await writeAll(); return; }
+        catch(e2){ console.error('[EquiDB] save retry failed:', e2); fsSaveProblem(e2); return; }
+      }
+      console.error('[EquiDB] save failed:', e); fsSaveProblem(e);
+    }
     return;
   }
   if(!STABLE_URL) return;
@@ -1148,11 +1156,31 @@ async function migrateToFirestore(){
 // stays on screen, so the player thinks it saved and loses it on reload. Warn
 // loudly the first time it happens (once per visit, not per keystroke).
 let __fsSaveWarned = false;
+function isPermissionDenied(e){
+  return !!(e && (e.code==='permission-denied' || /permission[- ]denied/i.test(e.message||'')));
+}
 function fsSaveProblem(e){
   if(__fsSaveWarned) return;
   __fsSaveWarned = true;
+  if(isPermissionDenied(e)){
+    alert('⚠ The database refused the save (permission-denied).\n\nThis is a sign-in problem, not a connection problem: the database no longer trusts this browser\u2019s session.\n\nFix: Sign out (top of the page) and sign back in with your email. That refreshes your database permissions.\n\nIf it STILL fails right after a fresh sign-in, tell the admin to check the Firestore security rules and the Anonymous sign-in setting.');
+    return;
+  }
   const why = (e && (e.code || e.message)) || String(e);
   alert('⚠ Saving to the database failed ('+why+').\n\nYour change is still on screen but may NOT survive a reload. Check your internet connection and try the action again. If this keeps happening, open the browser console (F12) and send the red error to the admin.');
+}
+
+// If a write is denied, the most common cause is a stale session (the owner
+// upgrade never ran, or Anonymous auth was switched off under an anonymous
+// session). Try ONE owner-session upgrade per visit, then let the caller
+// retry the write. Requires an email session — without one there is nothing
+// to upgrade and the player has to sign in again.
+let __ownerRecoveryTried = false;
+async function recoverOwnerSession(){
+  if(__ownerRecoveryTried) return false;
+  __ownerRecoveryTried = true;
+  console.warn('[EquiDB] write denied — attempting owner session upgrade…');
+  try{ return await upgradeToOwnerSession(); }catch(e){ return false; }
 }
 
 async function saveHorse(horse){
@@ -1160,7 +1188,13 @@ async function saveHorse(horse){
   if(fsReady()){
     // One document per horse — art log included. A single write, no chunking.
     try{ return await window.EquiDB.put('horses', horse.id, bankAccount.userId, stripBig(horse)); }
-    catch(e){ console.error('[EquiDB] saveHorse failed:', e); fsSaveProblem(e); return false; }
+    catch(e){
+      if(isPermissionDenied(e) && await recoverOwnerSession()){
+        try{ return await window.EquiDB.put('horses', horse.id, bankAccount.userId, stripBig(horse)); }
+        catch(e2){ console.error('[EquiDB] saveHorse retry failed:', e2); fsSaveProblem(e2); return false; }
+      }
+      console.error('[EquiDB] saveHorse failed:', e); fsSaveProblem(e); return false;
+    }
   }
   if(!STABLE_URL) return false;
   const {artLog,...horseData}=horse;
@@ -1229,7 +1263,13 @@ async function saveRider(rider){
       .map(id=>inv0.find(t=>t.id===id)).filter(Boolean)
       .map(t=>({ id:t.id, name:t.name, category:t.category, image:t.image||"" })) };
     try{ return await window.EquiDB.put('riders', rider.id, bankAccount.userId, riderDoc); }
-    catch(e){ console.error('[EquiDB] saveRider failed:', e); fsSaveProblem(e); return false; }
+    catch(e){
+      if(isPermissionDenied(e) && await recoverOwnerSession()){
+        try{ return await window.EquiDB.put('riders', rider.id, bankAccount.userId, riderDoc); }
+        catch(e2){ console.error('[EquiDB] saveRider retry failed:', e2); fsSaveProblem(e2); return false; }
+      }
+      console.error('[EquiDB] saveRider failed:', e); fsSaveProblem(e); return false;
+    }
   }
   if(!STABLE_URL) return false;
   const { artLog, ...riderData } = rider;   // art log saved as separate rows
