@@ -944,7 +944,7 @@ async function save(horseIds){
         tackInventory: state.tackInventory, attireInventory: state.attireInventory });
       const ids = horseIds===undefined ? [] : (Array.isArray(horseIds)?horseIds:[horseIds]);
       await Promise.all(state.horses.filter(h=>ids.includes(h.id)).map(h=>saveHorse(h)));
-    }catch(e){ console.error('[EquiDB] save failed:', e); }
+    }catch(e){ console.error('[EquiDB] save failed:', e); fsSaveProblem(e); }
     return;
   }
   if(!STABLE_URL) return;
@@ -1144,12 +1144,23 @@ async function migrateToFirestore(){
   }
 }
 
+// A failed Firestore save currently only whispers into the console — the horse
+// stays on screen, so the player thinks it saved and loses it on reload. Warn
+// loudly the first time it happens (once per visit, not per keystroke).
+let __fsSaveWarned = false;
+function fsSaveProblem(e){
+  if(__fsSaveWarned) return;
+  __fsSaveWarned = true;
+  const why = (e && (e.code || e.message)) || String(e);
+  alert('⚠ Saving to the database failed ('+why+').\n\nYour change is still on screen but may NOT survive a reload. Check your internet connection and try the action again. If this keeps happening, open the browser console (F12) and send the red error to the admin.');
+}
+
 async function saveHorse(horse){
   if(!bankAccount.linked) return false;
   if(fsReady()){
     // One document per horse — art log included. A single write, no chunking.
     try{ return await window.EquiDB.put('horses', horse.id, bankAccount.userId, stripBig(horse)); }
-    catch(e){ console.error('[EquiDB] saveHorse failed:', e); return false; }
+    catch(e){ console.error('[EquiDB] saveHorse failed:', e); fsSaveProblem(e); return false; }
   }
   if(!STABLE_URL) return false;
   const {artLog,...horseData}=horse;
@@ -1218,7 +1229,7 @@ async function saveRider(rider){
       .map(id=>inv0.find(t=>t.id===id)).filter(Boolean)
       .map(t=>({ id:t.id, name:t.name, category:t.category, image:t.image||"" })) };
     try{ return await window.EquiDB.put('riders', rider.id, bankAccount.userId, riderDoc); }
-    catch(e){ console.error('[EquiDB] saveRider failed:', e); return false; }
+    catch(e){ console.error('[EquiDB] saveRider failed:', e); fsSaveProblem(e); return false; }
   }
   if(!STABLE_URL) return false;
   const { artLog, ...riderData } = rider;   // art log saved as separate rows
@@ -1472,6 +1483,40 @@ async function loadPublicPlayer(userId, urlOverride){
   return await stableGas({ action:'loadPublicProfile', userId }, urlOverride);
 }
 
+// Finish-the-migration fix: Firestore mode was a per-browser localStorage toggle,
+// so a new browser/device (or cleared storage) silently fell back to Sheets even
+// for players whose data already lives in Firestore — new horses then never
+// reached Firestore. If the flag is UNSET and this player's stable exists in
+// Firestore, switch the flag on automatically. An explicit '0' (the settings
+// toggle or ?fs=off) is always respected.
+async function autoEnableFirestore(){
+  try{
+    if(!bankAccount.linked) return;
+    if(localStorage.getItem(FS_FLAG)!==null) return;   // player already chose a backend
+    const DB = await waitForDB();
+    if(!DB) return;
+    const stable = await window.EquiDB.get('stables', bankAccount.userId);
+    if(stable){
+      localStorage.setItem(FS_FLAG,'1');
+      console.log('[EquiDB] found this stable in Firestore — Firestore mode enabled automatically.');
+    }
+  }catch(e){ console.warn('[EquiDB] auto-enable check failed:', e); }
+}
+
+// Boot-path fix: upgradeToOwnerSession() used to run ONLY inside the sign-in
+// flow, so a returning visitor's restored session never got the owner uid.
+// Harmless while the Firestore rules are permissive, but the moment they check
+// request.auth.uid every write from a return visit would fail silently. Skip
+// the round-trip when the restored session already IS the owner (custom-token
+// sessions persist across reloads, so this is the common case).
+async function ensureOwnerSession(){
+  try{
+    await waitForDB();
+    const u = window.EquiAuth && window.EquiAuth.user;
+    if(u && u.uid !== bankAccount.userId) await upgradeToOwnerSession();
+  }catch(e){ console.warn('[EquiAuth] boot owner check failed:', e); }
+}
+
 async function load(){
   try{
     const b=localStorage.getItem('equi-lite-bank');
@@ -1479,6 +1524,8 @@ async function load(){
   }catch(e){}
 
   if(bankAccount.linked && STABLE_URL){
+    await autoEnableFirestore();
+    if(fsEnabled()) await ensureOwnerSession();
     await loadFromSheets();
   } else {
     state.horses=[]; state.log=[]; state.tackInventory=[]; state.attireInventory=[];
@@ -1956,6 +2003,7 @@ function renderLoginScreen(app){
       bankAccount = { userId: who.data.userId, password:'', linked:true };
       saveBankAccount();
       await upgradeToOwnerSession();
+      await autoEnableFirestore();
       say(`✓ Welcome back, ${who.data.displayName}! Loading your stable…`, '#7a9b6e');
       await loadFromSheets();
       render();
@@ -2004,6 +2052,8 @@ function renderLoginScreen(app){
     if(r?.success){
       bankAccount={ userId:r.data.userId, password:'', linked:true };
       saveBankAccount();
+      await upgradeToOwnerSession();
+      await autoEnableFirestore();
       say(`✓ Linked! Welcome back, ${r.data.displayName} — ฿${r.data.balance} intact. Loading…`,'#7a9b6e');
       await loadFromSheets(); render();
     } else say('✗ '+(r?.error||'Could not link that account.'),'#e08080');
