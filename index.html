@@ -1344,7 +1344,6 @@ async function deleteRiderFromSheets(riderId){
 // your own account owns).
 async function transferHorseToMember(h){
   if(!bankAccount.linked || !bankAccount.userId){ alert('Sign in first — you can only transfer a horse from the account that owns it.'); return; }
-  if(!STABLE_URL){ alert('No Stable Data URL configured.'); return; }
   const buyer = prompt(`Transfer "${h.name}" to another member.\n\nType the buyer's exact Bank User ID (their username). This moves the whole horse — art log, ribbons, everything — into their stable and removes it from yours.`);
   if(buyer===null) return;
   const toId = buyer.trim();
@@ -1362,9 +1361,31 @@ async function transferHorseToMember(h){
 
   if(!confirm(`Transfer "${h.name}" to ${buyerName} (${toId})?\n\nThis cannot be undone. The horse and its entire history leave your stable and become theirs.`)) return;
 
-  const res = await stableGas({ action:'transferHorse', horseId:h.id, fromUserId:bankAccount.userId, toUserId:toId });
-  if(!res || res.success===false){
-    alert('Transfer failed: ' + (res?.error || 'no response from the stable.') + '\n\nThe horse is unchanged and still yours.');
+  // FIRESTORE transfer: rewriting the horse doc with the buyer as its owner
+  // moves it — the buyer's next load (an owner-indexed query) picks it up, and
+  // ours no longer sees it. Falls back to the legacy Sheets action only if a
+  // Stable URL is somehow still configured (it isn't, in Firestore-only mode).
+  let ok=false, why='';
+  const DB = await waitForDB();
+  if(DB){
+    try{
+      ok = await window.EquiDB.put('horses', h.id, toId, stripBig(h));
+      if(!ok) why='the database rejected the write';
+    }catch(e){
+      if(isPermissionDenied(e) && await recoverOwnerSession()){
+        try{ ok = await window.EquiDB.put('horses', h.id, toId, stripBig(h)); }
+        catch(e2){ why=(e2&&e2.message)?e2.message:String(e2); }
+      } else { why=(e&&e.message)?e.message:String(e); }
+    }
+  } else if(STABLE_URL){
+    const res = await stableGas({ action:'transferHorse', horseId:h.id, fromUserId:bankAccount.userId, toUserId:toId });
+    ok = !!(res && res.success);
+    if(!ok) why = res?.error || 'no response from the stable';
+  } else {
+    why='not connected to the database';
+  }
+  if(!ok){
+    alert('Transfer failed: ' + why + '\n\nThe horse is unchanged and still yours.');
     return;
   }
   // Success: drop it from our local stable and refresh.
@@ -2066,7 +2087,6 @@ function renderLoginScreen(app){
 
   const go = app.querySelector('#li_go');
   if(go) go.onclick = async()=>{
-    if(!STABLE_URL){ say('&#9888; Configure the Stable Data URL first (Admin section below).','#e08080'); return; }
     go.disabled=true;
 
     if(mode==='forgot'){
