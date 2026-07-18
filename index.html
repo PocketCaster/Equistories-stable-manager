@@ -4576,8 +4576,27 @@ let editingMutationId = null;
 function renderAdmin(){
   const wrap = el('div');
 
-  // ---- Firestore backend panel (available without the admin passcode: it only
-  // ever touches YOUR OWN account's data) ----
+  if(!adminPanelUnlocked){
+    const gate = el('div','card',`
+      <h3>Admin</h3>
+      <p class="small">Enter the admin passcode to manage Custom/Created breeds and genes.</p>
+      <input id="ad_pass" type="password" placeholder="Admin passcode" style="max-width:280px;" />
+      <button id="ad_unlock" style="margin-top:8px;">Unlock</button>
+      <div id="ad_pass_err" class="small" style="color:#e08080;margin-top:6px;"></div>
+    `);
+    wrap.appendChild(gate);
+    gate.querySelector('#ad_unlock').onclick=()=>{
+      if(gate.querySelector('#ad_pass').value===ADMIN_PASSCODE){
+        adminPanelUnlocked=true;
+        render();
+      } else {
+        gate.querySelector('#ad_pass_err').textContent='Incorrect passcode.';
+      }
+    };
+    return wrap;
+  }
+
+  // ---- Firestore backend panel (admin-only: shown after the passcode gate) ----
   const fsCard=el('div','card');
   fsCard.innerHTML=`
     <h3 style="margin-top:0;">Database Backend <span class="tag" style="background:#1a3a1a;color:#8ae88a;border-color:#4a8a4a;">Firestore</span></h3>
@@ -4612,26 +4631,6 @@ function renderAdmin(){
       alert(`Firestore currently holds:\n\n• ${h.length} horses\n• ${r.length} riders\n\n(fetched in ${Math.round(performance.now()-t0)}ms)`);
     }catch(err){ alert('Read failed: '+(err&&err.message?err.message:err)); }
   };
-
-  if(!adminPanelUnlocked){
-    const gate = el('div','card',`
-      <h3>Admin</h3>
-      <p class="small">Enter the admin passcode to manage Custom/Created breeds and genes.</p>
-      <input id="ad_pass" type="password" placeholder="Admin passcode" style="max-width:280px;" />
-      <button id="ad_unlock" style="margin-top:8px;">Unlock</button>
-      <div id="ad_pass_err" class="small" style="color:#e08080;margin-top:6px;"></div>
-    `);
-    wrap.appendChild(gate);
-    gate.querySelector('#ad_unlock').onclick=()=>{
-      if(gate.querySelector('#ad_pass').value===ADMIN_PASSCODE){
-        adminPanelUnlocked=true;
-        render();
-      } else {
-        gate.querySelector('#ad_pass_err').textContent='Incorrect passcode.';
-      }
-    };
-    return wrap;
-  }
 
   const ALWAYS_ON_LOCI = []; // unlocked for testing — Extension/Agouti can now be toggled per breed like any other gene
   const APPALOOSA_COMBO_KEYS = ["leopard","patn1","patn2"];
