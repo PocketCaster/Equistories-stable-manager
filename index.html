@@ -140,12 +140,12 @@
 // runs. The main app script executes before any module script, so it can't touch
 // window.EquiDB directly at boot — it awaits this promise instead.
 window.__equiDBReady = new Promise(resolve => { window.__equiDBResolve = resolve; });
-// Safety valve: ?fs=off in the URL force-disables Firestore mode. If a bad state
-// ever leaves the app unable to start, that link always gets you back in.
+// NOTE: the old ?fs=off safety valve used to flip the app back to Google
+// Sheets. Sheets has been retired as a data backend, so the switch now does
+// nothing except explain itself.
 try{
   if(new URLSearchParams(location.search).get('fs')==='off'){
-    localStorage.setItem('equi_use_firestore','0');
-    console.warn('[EquiStories] Firestore mode disabled via ?fs=off');
+    console.warn('[EquiStories] ?fs=off is no longer supported — the app is Firestore-only now.');
   }
 }catch(e){}
 </script>
@@ -311,8 +311,8 @@ window.addEventListener('error', function(ev){
       app.innerHTML='<div style="font-family:Georgia,serif;color:#f1e6d8;background:#241a14;border:1px solid #c98a3a;border-radius:8px;max-width:640px;margin:40px auto;padding:20px;">'
         +'<h3 style="color:#c98a3a;margin-top:0;">The app hit an error while starting</h3>'
         +'<div style="font-family:monospace;font-size:.9em;background:#15100c;padding:10px;border-radius:6px;overflow:auto;">'+String(ev.message||ev.error||'Unknown error')+'</div>'
-        +'<p>If you just switched database backends, this link puts you back on the old one:</p>'
-        +'<p><a href="?fs=off" style="color:#c98a3a;font-weight:bold;">← Reload on Google Sheets (safe mode)</a></p></div>';
+        +'<p>Try reloading the page. If it keeps happening, send the error above to the admin.</p>'
+        +'<p><a href="javascript:location.reload()" style="color:#c98a3a;font-weight:bold;">↻ Reload the page</a></p></div>';
     }
   }catch(e){}
 });
@@ -520,8 +520,9 @@ async function removeRiderPPForSource(sourceId){
     const e=linkedRiderEntry(rider, sourceId);
     if(e){
       rider.artLog=rider.artLog.filter(x=>x!==e);
-      if(bankAccount.linked && STABLE_URL){
-        await stableGas({ action:'deleteRiderArtLogEntry', userId:bankAccount.userId, riderId:rider.id, entryId:e.id });
+      if(bankAccount.linked){
+        if(fsReady()) await saveRider(rider);   // the art log lives inside the rider doc
+        else if(STABLE_URL) await stableGas({ action:'deleteRiderArtLogEntry', userId:bankAccount.userId, riderId:rider.id, entryId:e.id });
       }
     }
   }
@@ -711,8 +712,13 @@ const SHOW_EARNING_VALUES = {1:1000, 2:500, 3:250};
 const SHOW_EARNING_OTHER = 100;
 
 const BANK_URL = 'https://script.google.com/macros/s/AKfycby9WLxUPDAPg9EH5aTPATzTkHd8XeSKXuQ0WYqyQoHusEbws85qxwaML6cSovDod80/exec';
-const DEFAULT_STABLE_URL = 'https://script.google.com/macros/s/AKfycbwNF02tC8_U9MjAvJJzjVLNgHUyAf2ND-drxjhQPnOikJdw_seUIIxrYEsTsAlhG-o/exec';
-let STABLE_URL = localStorage.getItem('equi_stable_url') || DEFAULT_STABLE_URL;
+// FIRESTORE-ONLY: the Google Sheets "Stable Data" backend is retired.
+// STABLE_URL stays as an (empty) variable so every legacy `if(!STABLE_URL)
+// return` fallback path safely no-ops instead of crashing. The stored
+// localStorage override is deliberately ignored. Old public share links that
+// still carry a ?stable= param can pass it as urlOverride so ancient links
+// keep working, but nothing writes to Sheets anymore.
+let STABLE_URL = '';
 
 let state = { horses:[], riders:[], profile:null, log:[], tackInventory:[], attireInventory:[], customBreeds:[], customGenes:[], loaded:false };
 // Custom/Created breeds (and custom genes) are shared config, visible to every affiliate
@@ -1075,7 +1081,10 @@ function resolveImageRefs(horse){
 // chunked JSONP calls — that's the speed difference.
 // ============================================
 const FS_FLAG='equi_use_firestore';
-function fsEnabled(){ try{ return localStorage.getItem(FS_FLAG)==='1'; }catch(e){ return false; } }
+// FIRESTORE-ONLY: Google Sheets has been retired as a data backend. Firestore
+// is always on — no per-browser toggle, no ?fs=off fallback, no silent Sheets
+// mode on a fresh device.
+function fsEnabled(){ return true; }
 function fsReady(){ return fsEnabled() && window.EquiDB && window.EquiDB.available; }
 // The Firebase module is a <script type="module">, so it runs AFTER this script.
 // Never touch window.EquiDB directly at boot — always come through here.
@@ -1248,10 +1257,30 @@ async function saveArtEntry(horse, entry){
 }
 
 async function deleteHorseFromSheets(horseId){
-  if(!bankAccount.linked) return;
-  if(fsReady()){ try{ await window.EquiDB.remove('horses', horseId); }catch(e){ console.error(e); } return; }
-  if(!STABLE_URL) return;
-  await stableGas({ action:'deleteHorse', userId:bankAccount.userId, horseId });
+  if(!bankAccount.linked) return false;
+  // FIX: if Firestore mode is ON but the Firebase module hasn't finished
+  // loading yet, wait for it instead of silently falling through to the
+  // Sheets path — that fall-through left the horse alive in Firestore.
+  if(fsEnabled() && !fsReady()) await waitForDB();
+  if(fsReady()){
+    try{
+      await window.EquiDB.remove('horses', horseId);
+      return true;
+    }catch(e){
+      // FIX: a delete used to swallow permission-denied silently (just a
+      // console.error), so the doc quietly survived in Firestore. Now we
+      // retry once after an owner-session upgrade — same recovery path
+      // saveHorse() already uses — and warn loudly if it still fails.
+      if(isPermissionDenied(e) && await recoverOwnerSession()){
+        try{ await window.EquiDB.remove('horses', horseId); return true; }
+        catch(e2){ console.error('[EquiDB] deleteHorse retry failed:', e2); fsSaveProblem(e2); return false; }
+      }
+      console.error('[EquiDB] deleteHorse failed:', e); fsSaveProblem(e); return false;
+    }
+  }
+  if(!STABLE_URL) return false;
+  const res = await stableGas({ action:'deleteHorse', userId:bankAccount.userId, horseId });
+  return !!(res && res.success);
 }
 
 // ---- rider persistence (mirrors horses; art log in its own sheet) ----
@@ -1290,10 +1319,23 @@ async function saveRiderEntry(rider, entry){
   return !!(res && res.success);
 }
 async function deleteRiderFromSheets(riderId){
-  if(!bankAccount.linked) return;
-  if(fsReady()){ try{ await window.EquiDB.remove('riders', riderId); }catch(e){ console.error(e); } return; }
-  if(!STABLE_URL) return;
-  await stableGas({ action:'deleteRider', userId:bankAccount.userId, riderId });
+  if(!bankAccount.linked) return false;
+  if(fsEnabled() && !fsReady()) await waitForDB();   // same fix as deleteHorseFromSheets
+  if(fsReady()){
+    try{
+      await window.EquiDB.remove('riders', riderId);
+      return true;
+    }catch(e){
+      if(isPermissionDenied(e) && await recoverOwnerSession()){
+        try{ await window.EquiDB.remove('riders', riderId); return true; }
+        catch(e2){ console.error('[EquiDB] deleteRider retry failed:', e2); fsSaveProblem(e2); return false; }
+      }
+      console.error('[EquiDB] deleteRider failed:', e); fsSaveProblem(e); return false;
+    }
+  }
+  if(!STABLE_URL) return false;
+  const res = await stableGas({ action:'deleteRider', userId:bankAccount.userId, riderId });
+  return !!(res && res.success);
 }
 
 // Sell / give a horse to another member. Moves the whole horse — art log, comp
@@ -1398,68 +1440,43 @@ async function upgradeToOwnerSession(){
 async function loadFromSheets(){
   const userId = bankAccount.userId;
 
-  // Firestore path: four indexed reads, no chunking, no row scans.
-  if(fsEnabled()){
-    const DB = await waitForDB();
-    if(DB){
-      try{
-        const t0=performance.now();
-        const fb = await fbLoadAll(userId);
-        await loadGlobalBreeds();     // shared breeds/genes live in their own doc
-        state.horses  = fb.horses||[];
-        state.riders  = fb.riders||[];
-        state.profile = fb.profile||null;
-        state.log             = fb.state?.log || [];
-        state.tackInventory   = fb.state?.tackInventory || [];
-        state.attireInventory = fb.state?.attireInventory || [];
-        state.horses.forEach(h=>{ if(!h.artLog) h.artLog=[]; recomputeHorse(h); });
-        state.loaded=true;
-        console.log(`[EquiDB] loaded ${state.horses.length} horses + ${state.riders.length} riders in ${Math.round(performance.now()-t0)}ms`);
-        render();
-        return;
-      }catch(err){
-        console.error('[EquiDB] load failed, falling back to Sheets:', err);
-      }
-    } else {
-      console.warn('[EquiDB] Firestore unavailable — loading from Sheets instead.');
-    }
+  // FIRESTORE-ONLY: four indexed reads, no chunking, no row scans — and no
+  // silent fallback to Google Sheets. If Firestore can't be reached, the
+  // player is told so instead of being handed an empty ghost stable.
+  const DB = await waitForDB();
+  if(!DB){
+    state.loaded = true;
+    alert('\u26a0 Could not connect to the database (the Firestore module failed to load).\n\nCheck your internet connection and reload the page. Nothing is lost \u2014 the app just can\u2019t reach your stable right now.');
+    return;
   }
-
-  const [stateRes, horsesRes, ridersRes, profileRes] = await Promise.all([
-    stableGas({ action:'loadStableState', userId }),
-    stableGas({ action:'loadStable', userId }),
-    stableGas({ action:'loadRiders', userId }),
-    stableGas({ action:'loadProfile', userId }),
-    loadGlobalBreeds(),
-  ]);
-  if(stateRes?.success && stateRes.data){
-    state.log           = stateRes.data.log || [];
-    state.tackInventory = stateRes.data.tackInventory || [];
-    state.attireInventory = stateRes.data.attireInventory || [];
-  } else {
-    state.log=[]; state.tackInventory=[]; state.attireInventory=[];
-  }
-  state.horses = horsesRes?.success ? (horsesRes.data||[]) : [];
-  state.riders = ridersRes?.success ? (ridersRes.data||[]) : [];
-  state.profile = (profileRes?.success && profileRes.data) ? profileRes.data : null;
-  const horsesToFix=[];
-  state.horses.forEach(h=>{
-    resolveImageRefs(h);
-    if(h.referenceImage && h.refBonusGiven===undefined) h.refBonusGiven=true;
-    if(!Array.isArray(h.completedMilestones)) h.completedMilestones=[];
-    if(!Array.isArray(h.badges)) h.badges=[];
-    if(h.level>=5 && !h.badges.includes("Quality Stock")) h.badges.push("Quality Stock");
-    if(h.level>=10 && !h.badges.includes("Excellent Stock")) h.badges.push("Excellent Stock");
-    // Migration: older show records added stats. If any competition entry still
-    // carries a non-empty statsDelta, recompute (which now ignores show stats)
-    // and re-save so the correction sticks. Runs once per affected horse.
-    const hasShowStats=(h.artLog||[]).some(e=>e.type==="competition" && e.statsDelta && Object.keys(e.statsDelta).length);
-    if(hasShowStats){ recomputeHorse(h); horsesToFix.push(h); }
-  });
-  state.loaded = true;
-  if(horsesToFix.length){
-    Promise.all(horsesToFix.map(h=>saveHorse(h))).then(()=>save()).catch(()=>{});
-    addLog(`Corrected ${horsesToFix.length} horse(s): shows no longer count toward stats.`);
+  try{
+    const t0=performance.now();
+    const fb = await fbLoadAll(userId);
+    await loadGlobalBreeds();     // shared breeds/genes live in their own doc
+    state.horses  = fb.horses||[];
+    state.riders  = fb.riders||[];
+    state.profile = fb.profile||null;
+    state.log             = fb.state?.log || [];
+    state.tackInventory   = fb.state?.tackInventory || [];
+    state.attireInventory = fb.state?.attireInventory || [];
+    state.horses.forEach(h=>{
+      if(!h.artLog) h.artLog=[];
+      // Normalisation that used to live in the Sheets loader — kept so horses
+      // migrated over from Sheets don't miss arrays newer code expects.
+      if(h.referenceImage && h.refBonusGiven===undefined) h.refBonusGiven=true;
+      if(!Array.isArray(h.completedMilestones)) h.completedMilestones=[];
+      if(!Array.isArray(h.badges)) h.badges=[];
+      if(h.level>=5 && !h.badges.includes("Quality Stock")) h.badges.push("Quality Stock");
+      if(h.level>=10 && !h.badges.includes("Excellent Stock")) h.badges.push("Excellent Stock");
+      recomputeHorse(h);
+    });
+    state.loaded=true;
+    console.log(`[EquiDB] loaded ${state.horses.length} horses + ${state.riders.length} riders in ${Math.round(performance.now()-t0)}ms`);
+    render();
+  }catch(err){
+    console.error('[EquiDB] load failed:', err);
+    state.loaded = true;
+    alert('\u26a0 Loading your stable from the database failed ('+(err&&err.message?err.message:err)+').\n\nReload the page to try again. If it keeps failing right after a fresh sign-in, tell the admin to check the Firestore security rules.');
   }
 }
 
@@ -1563,10 +1580,9 @@ async function load(){
     if(b){ const bd=JSON.parse(b); bankAccount={userId:bd.userId||'',password:bd.password||'',linked:bd.linked||false}; }
   }catch(e){}
 
-  if(bankAccount.linked && STABLE_URL){
-    await autoEnableFirestore();
-    if(fsEnabled()) await ensureOwnerSession();
-    await loadFromSheets();
+  if(bankAccount.linked){
+    await ensureOwnerSession();
+    await loadFromSheets();   // (name kept for history — it loads from Firestore)
   } else {
     state.horses=[]; state.log=[]; state.tackInventory=[]; state.attireInventory=[];
     state.loaded=true;
@@ -1935,7 +1951,7 @@ function render(){
 // ============================================
 
 function renderLoginScreen(app){
-  const stableSet = !!STABLE_URL;
+  const stableSet = true;   // FIRESTORE-ONLY: the Sheets Stable Data URL is retired; never nag about it
   // mode: 'signin' | 'signup' | 'link' | 'forgot'
   if(!window.__loginMode) window.__loginMode = 'signin';
   const mode = window.__loginMode;
@@ -2007,14 +2023,10 @@ function renderLoginScreen(app){
       <div id="li_result" style="margin-top:8px;"></div>
       <hr style="border:none;border-top:1px solid #4a392a;margin:16px 0;" />
       <details ${adminPanelUnlocked?"open":""}>
-        <summary style="cursor:pointer;font-size:1.02em;color:#b5a392;">Admin: Configure Stable Data URL</summary>
+        <summary style="cursor:pointer;font-size:1.02em;color:#b5a392;">Admin</summary>
         <div style="margin-top:10px;">
           ${adminPanelUnlocked ? `
-          <p class="small">Paste the /exec URL from your deployed Stable Data Apps Script.</p>
-          ${stableSet?'<div style="color:#7a9b6e;font-size:1em;margin-bottom:6px;">✓ Stable URL is configured.</div>':'<div style="color:#b1473f;font-size:1em;margin-bottom:6px;">⚠ Not configured yet.</div>'}
-          <input id="li_stable_url" placeholder="https://script.google.com/macros/s/…/exec" value="${STABLE_URL||''}" style="width:100%;padding:7px;background:#15100c;border:1px solid #4a392a;color:#f1e6d8;border-radius:5px;box-sizing:border-box;margin-bottom:6px;" />
-          <button id="li_save_url" style="width:100%;padding:8px;background:#2c2118;color:#f1e6d8;border:1px solid #4a392a;border-radius:5px;cursor:pointer;">Save Stable URL</button>
-          <div id="li_url_result" style="margin-top:4px;font-size:1em;"></div>
+          <p class="small">EquiStories now stores all stable data in <b>Firestore</b>. The old Google Sheets "Stable Data URL" has been retired and no longer needs configuring — there is nothing to set up here.</p>
           ` : `
           <p class="small">Enter the admin passcode to view or change the Stable Data URL.</p>
           <input id="li_admin_pass" type="password" placeholder="Admin passcode" style="width:100%;padding:7px;background:#15100c;border:1px solid #4a392a;color:#f1e6d8;border-radius:5px;box-sizing:border-box;margin-bottom:6px;" />
@@ -2043,7 +2055,6 @@ function renderLoginScreen(app){
       bankAccount = { userId: who.data.userId, password:'', linked:true };
       saveBankAccount();
       await upgradeToOwnerSession();
-      await autoEnableFirestore();
       say(`✓ Welcome back, ${who.data.displayName}! Loading your stable…`, '#7a9b6e');
       await loadFromSheets();
       render();
@@ -2093,7 +2104,6 @@ function renderLoginScreen(app){
       bankAccount={ userId:r.data.userId, password:'', linked:true };
       saveBankAccount();
       await upgradeToOwnerSession();
-      await autoEnableFirestore();
       say(`✓ Linked! Welcome back, ${r.data.displayName} — ฿${r.data.balance} intact. Loading…`,'#7a9b6e');
       await loadFromSheets(); render();
     } else say('✗ '+(r?.error||'Could not link that account.'),'#e08080');
@@ -2114,20 +2124,6 @@ function renderLoginScreen(app){
       await loadFromSheets(); render();
     } else say('✗ '+(r?.error||'Could not create that account.'),'#e08080');
   };
-
-  const saveUrlBtn = app.querySelector('#li_save_url');
-  if(saveUrlBtn){
-    saveUrlBtn.onclick=()=>{
-      const url=app.querySelector('#li_stable_url').value.trim();
-      const res=app.querySelector('#li_url_result');
-      if(!url){ res.innerHTML='<span style="color:#e08080;">Please paste a URL first.</span>'; return; }
-      if(!url.includes('script.google.com')){ res.innerHTML='<span style="color:#e08080;">That does not look like a Google Apps Script URL.</span>'; return; }
-      STABLE_URL=url;
-      localStorage.setItem('equi_stable_url',url);
-      res.innerHTML='<span style="color:#7a9b6e;">✓ Saved!</span>';
-      setTimeout(()=>renderLoginScreen(app), 800);
-    };
-  }
 
   const adminUnlockBtn = app.querySelector('#li_admin_unlock');
   if(adminUnlockBtn){
@@ -3345,11 +3341,14 @@ function renderRoster(){
     else expandedLogs.add(b.dataset.id);
     render();
   });
-  wrap.querySelectorAll('[data-act="del"]').forEach(b=>b.onclick=()=>{
+  wrap.querySelectorAll('[data-act="del"]').forEach(b=>b.onclick=async()=>{
     if(!confirm('Remove this horse? This cannot be undone.')) return;
     const delId=b.dataset.id;
     state.horses=state.horses.filter(x=>x.id!==delId);
-    deleteHorseFromSheets(delId);
+    const ok=await deleteHorseFromSheets(delId);
+    if(bankAccount.linked && !ok){
+      alert('⚠ The horse was removed from this screen, but deleting it on the server FAILED — it will reappear on reload.\n\nSign out (top of the page), sign back in, and remove it again.');
+    }
     save(); render();
   });
   wrap.querySelectorAll('[data-act="transfer-horse"]').forEach(b=>b.onclick=()=>{
@@ -4579,24 +4578,17 @@ function renderAdmin(){
 
   // ---- Firestore backend panel (available without the admin passcode: it only
   // ever touches YOUR OWN account's data) ----
-  const on=fsEnabled();
   const fsCard=el('div','card');
   fsCard.innerHTML=`
-    <h3 style="margin-top:0;">Database Backend <span class="tag" style="background:${on?'#1a3a1a':'#3a2a10'};color:${on?'#8ae88a':'#e8c86a'};border-color:${on?'#4a8a4a':'#c98a3a'};">${on?'Firestore (fast)':'Google Sheets (legacy)'}</span></h3>
+    <h3 style="margin-top:0;">Database Backend <span class="tag" style="background:#1a3a1a;color:#8ae88a;border-color:#4a8a4a;">Firestore</span></h3>
     <p class="small" style="margin-top:0;">
-      The original backend sends data to Google Sheets in tiny pieces over a slow connection — that's what makes big stables crawl.
-      Firestore stores each horse as a single document and loads them with one indexed query.
+      EquiStories now runs entirely on Firestore — each horse is a single document, loaded with one indexed query.
+      The old Google Sheets backend has been retired and is no longer read from or written to.
     </p>
     <div class="small" id="fs_status" style="margin-bottom:8px;">Checking Firestore connection…</div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;">
-      <button id="fs_migrate" class="btn" style="margin-top:0;">1 · Copy my data to Firestore</button>
-      <button id="fs_toggle" class="secondary" style="margin-top:0;">2 · ${on?'Switch back to Sheets':'Use Firestore'}</button>
       <button id="fs_verify" class="secondary" style="margin-top:0;">Check what's in Firestore</button>
-    </div>
-    <p class="small" style="margin-top:8px;opacity:.8;">
-      Migrating only <b>copies</b> data — your Sheets stay exactly as they are, so you can switch back anytime.
-      Do step 1, then step 2, then reload the page.
-    </p>`;
+    </div>`;
   wrap.appendChild(fsCard);
 
   (async()=>{
@@ -4608,14 +4600,6 @@ function renderAdmin(){
       : '<span style="color:#e08080;">✗ Could not reach Firestore — see the browser console.</span>';
   })();
 
-  fsCard.querySelector('#fs_migrate').onclick=()=>migrateToFirestore();
-  fsCard.querySelector('#fs_toggle').onclick=()=>{
-    const next = !fsEnabled();
-    if(next && !confirm('Switch the app to Firestore?\n\nMake sure you ran step 1 first, or the app will look empty.\nYour Sheets data stays untouched — you can switch back here anytime.')) return;
-    localStorage.setItem(FS_FLAG, next?'1':'0');
-    alert(next?'Firestore mode ON. Reloading…':'Back on Google Sheets. Reloading…');
-    location.reload();
-  };
   fsCard.querySelector('#fs_verify').onclick=async()=>{
     const DB = await waitForDB();
     if(!DB){ alert('Not connected to Firestore.'); return; }
