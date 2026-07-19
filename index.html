@@ -281,6 +281,16 @@ window.EquiDB = {
     snap.forEach(d=>{ try{ out.push(JSON.parse(d.data().json)); }catch(e){} });
     return out;
   },
+  // Read an ENTIRE collection (used for cross-owner things like breed genetics
+  // requests, which come from many different founders). Fine for small
+  // collections; don't use it on horses/riders.
+  async listAll(col){
+    if(!db) return [];
+    const snap = await getDocs(collection(db, col));
+    const out=[];
+    snap.forEach(d=>{ try{ out.push(JSON.parse(d.data().json)); }catch(e){} });
+    return out;
+  },
   // Bulk write for the one-time migration (batched = far fewer round trips).
   async putMany(col, owner, items){
     if(!db) return 0;
@@ -4593,6 +4603,80 @@ let editingGeneId = null;
 let editingMarkingId = null;
 let editingMutationId = null;
 
+// ── Breed genetics requests (submitted from the hub) ────────────────────────
+// Founders describe the genetics they want; these show up in the Admin area so
+// you can read a request, click "Build this" to pre-fill the breed editor, then
+// mark it done. The master gene list lives here, not in the hub, so it can't
+// drift — the hub only sends a request.
+async function loadGeneticsRequests(){
+  try{
+    const DB = await waitForDB();
+    if(!DB || !window.EquiDB.listAll) return [];
+    const all = await window.EquiDB.listAll('breedGeneticsRequests');
+    return (all||[]).filter(r=>r && r.status);
+  }catch(e){ console.warn('[Admin] genetics requests load failed:', e && e.message); return []; }
+}
+
+async function setGeneticsRequestStatus(reqId, ownerId, status, adminNote){
+  try{
+    const DB = await waitForDB();
+    if(!DB) return false;
+    const rec = await window.EquiDB.get('breedGeneticsRequests', reqId);
+    if(!rec) return false;
+    rec.status = status;
+    rec.adminNote = adminNote || '';
+    rec.decidedAt = new Date().toISOString();
+    return await window.EquiDB.put('breedGeneticsRequests', reqId, ownerId || rec.owner, rec);
+  }catch(e){ console.error('[Admin] set request status failed:', e); return false; }
+}
+
+function grCssEsc(s){ return String(s).replace(/[^a-zA-Z0-9_-]/g,'\\$&'); }
+
+async function renderGeneticsRequests(container){
+  if(!container) return;
+  const reqs = await loadGeneticsRequests();
+  const pending = reqs.filter(r=>r.status==='pending');
+  if(!pending.length){ container.innerHTML =
+    `<p class="small" style="opacity:.7;margin:0;">No pending breed genetics requests.</p>`; return; }
+
+  container.innerHTML = `<h3 style="margin:0 0 8px;">Pending breed genetics requests (${pending.length})</h3>`
+    + pending.map(r=>`
+      <div style="border:1px solid #4a392a;border-radius:8px;padding:12px;margin-bottom:10px;background:#15100c;">
+        <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center;">
+          <b style="color:var(--accent,#d29a3e);font-size:1.05em;">${escAttr(r.breedName||'(unnamed breed)')}</b>
+          <span class="small" style="opacity:.6;">by ${escAttr(r.owner||'?')} · ${String(r.submittedAt||'').slice(0,10)}</span>
+        </div>
+        <div class="small" style="margin:8px 0;white-space:pre-wrap;">${escAttr(r.desc||'')}</div>
+        ${r.special?`<div class="small" style="margin:6px 0;"><b>Special:</b> ${escAttr(r.special)}</div>`:''}
+        ${r.ref?`<div class="small" style="margin:6px 0;"><a href="${escAttr(r.ref)}" target="_blank" rel="noopener">Reference →</a></div>`:''}
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
+          <button data-build="${escAttr(r.breedName||'')}" style="min-height:0;padding:7px 14px;">Build this ↓</button>
+          <button data-done="${escAttr(r.id)}" data-owner="${escAttr(r.owner||'')}" style="min-height:0;padding:7px 14px;">Mark done</button>
+          <button data-decline="${escAttr(r.id)}" data-owner="${escAttr(r.owner||'')}" style="min-height:0;padding:7px 14px;background:#5a2020;">Decline</button>
+        </div>
+        <div class="small" data-msg="${escAttr(r.id)}" style="margin-top:6px;min-height:1em;"></div>
+      </div>`).join("");
+
+  container.querySelectorAll('[data-build]').forEach(b=>b.onclick=()=>{
+    const nameField = document.getElementById('ad_breed_name');
+    if(nameField){ nameField.value = b.dataset.build; nameField.scrollIntoView({behavior:'smooth',block:'center'}); nameField.focus(); }
+  });
+  container.querySelectorAll('[data-done]').forEach(b=>b.onclick=async()=>{
+    const note = prompt("Mark this request done. Optional note back to the founder:", "");
+    if(note===null) return;
+    const msg = container.querySelector(`[data-msg="${grCssEsc(b.dataset.done)}"]`);
+    if(msg) msg.textContent='Saving…';
+    await setGeneticsRequestStatus(b.dataset.done, b.dataset.owner, 'done', note);
+    renderGeneticsRequests(container);
+  });
+  container.querySelectorAll('[data-decline]').forEach(b=>b.onclick=async()=>{
+    const note = prompt("Decline this request. Optional reason for the founder:", "");
+    if(note===null) return;
+    await setGeneticsRequestStatus(b.dataset.decline, b.dataset.owner, 'declined', note);
+    renderGeneticsRequests(container);
+  });
+}
+
 function renderAdmin(){
   const wrap = el('div');
 
@@ -4702,6 +4786,9 @@ function renderAdmin(){
     ${editing?`<button id="ad_cancel_edit" class="secondary" style="margin-top:12px;">Cancel</button>`:""}
     <div id="ad_save_status" class="small" style="margin-top:6px;"></div>
   `);
+  const reqBox = el('div','card','<p class="small">Loading breed genetics requests…</p>');
+  wrap.appendChild(reqBox);
+  renderGeneticsRequests(reqBox);
   wrap.appendChild(form);
 
   form.querySelector('#ad_save_breed').onclick=async()=>{
