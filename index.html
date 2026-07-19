@@ -5407,8 +5407,8 @@ function getLocusOptions(locus, breed){
   // Hide any genotype needing an allele the breed cannot have.
   if(locus.key==="creampearl"){
     const list=breedLociFor(breed);
-    const hasCream = !list || list.includes("cream");
-    const hasPearl = !list || list.includes("pearl");
+    const hasCream = !list || list.includes("cream") || list.includes("creampearl");
+    const hasPearl = !list || list.includes("pearl") || list.includes("creampearl");
     options = options.filter(o=>{
       if(/Cr/.test(o.code)  && !hasCream) return false;
       if(/Prl/.test(o.code) && !hasPearl) return false;
