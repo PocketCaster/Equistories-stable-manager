@@ -424,19 +424,36 @@ function riderPP(rider){
 // Art-side options (apply to any image the rider appears in) and show-side options.
 // These drive the "Rider Prestige" block on the Training and Competition tabs, so
 // PP is chosen deliberately at log time instead of guessed from the record.
-const RIDER_PP_ART = {
-  "Rider in a personal image":1,
-  "Rider in a collaboration image":2,
-  "Full-body image":1,
-  "Rider in a group image (3+ riders)":2,
-  "Main focus / POV":1,
+// ── Rider Prestige rubric ───────────────────────────────────────────────────
+// ART and LITERATURE are distinct tracks so logging stays unambiguous. One
+// work may earn from both (an illustrated story ticks art AND lit) — players
+// tick each section for what the piece actually contains.
+const RIDER_PP_ART_BASE = {
+  "Full-body image":2,
+  "Half-body image":1,
   "Drawn by someone else (gift/commission)":1,
 };
+const RIDER_PP_ART_ADDON = {
+  "Image drawn by you":1,
+  "Rider in a group image (3+ riders)":2,
+  "Training / mentoring another rider (in the image)":2,
+  "Collaborative show entry / training image":2,
+};
+const RIDER_PP_LIT_BASE = {
+  "Rider in a 500+ word literature piece":2,
+  "Collab literature piece (500+ words per writer)":2,
+};
+const RIDER_PP_LIT_ADDON = {
+  "Rider is the main focus / POV of the lit":1,
+  "Featured in someone else's writing":1,
+  "Show / clinic lit entry":2,
+  "Written mentoring / training in lit (500+ words)":2,
+};
+// Show results — only offered when logging a competition.
 const RIDER_PP_SHOW = {
   "Show or clinic entry":2,
   "Top 3 in show":1,
   "Judge's Choice / special ribbon":1,
-  "Collaborative show / clinic entry":3,
 };
 
 // Renders the rider picker + PP pills. mode: 'training' | 'competition'.
@@ -445,7 +462,7 @@ function riderPPBlockHtml(prefix, mode, horse){
     return `<div class="small" style="margin-top:8px;opacity:.75;">Add a rider on the Riders tab to award Prestige from this entry.</div>`;
   }
   const assigned = horse && horse.riderId ? horse.riderId : '';
-  const opts = mode==='competition' ? {...RIDER_PP_SHOW, ...RIDER_PP_ART} : RIDER_PP_ART;
+  const pills=o=>Object.keys(o).map(k=>`<div class="pill" data-ppopt="${k}" data-pp="${o[k]}">${k} (+${o[k]})</div>`).join("");
   // Nothing is preselected — the player ticks what actually applies. (A commission
   // is "Drawn by someone else", not a personal image; only they know which.)
   return `
@@ -458,8 +475,32 @@ function riderPPBlockHtml(prefix, mode, horse){
         </select>
         <span class="small">This entry: <b class="rpp_sum" style="color:#c9a8e8;">0</b> PP</span>
       </div>
-      <div class="pill-select rpp_opts" style="margin-top:8px;">
-        ${Object.keys(opts).map(k=>`<div class="pill" data-ppopt="${k}" data-pp="${opts[k]}">${k} (+${opts[k]})</div>`).join("")}
+      <div style="margin-top:10px;">
+        <div class="small" style="font-weight:bold;color:#c9a8e8;">🎨 Art-Based PP <span style="font-weight:normal;opacity:.75;">— counted per image</span></div>
+        <div class="small" style="opacity:.7;margin:2px 0 4px;">Any art of the rider — riding, roleplays, stable stories, daily life. Not just riding images.</div>
+        <div class="small" style="opacity:.85;">Base <span style="opacity:.7;">(what the image is)</span>:</div>
+        <div class="pill-select rpp_opts">${pills(RIDER_PP_ART_BASE)}</div>
+        <div class="small" style="opacity:.85;margin-top:4px;">Add-ons:</div>
+        <div class="pill-select rpp_opts">${pills(RIDER_PP_ART_ADDON)}</div>
+      </div>
+      <div style="margin-top:12px;">
+        <div class="small" style="font-weight:bold;color:#8ec98e;">📖 Literature-Based PP <span style="font-weight:normal;opacity:.75;">— counted per submission</span></div>
+        <div class="small" style="opacity:.7;margin:2px 0 4px;">Anything written about your rider's life — solo pieces or lit attached to an image.</div>
+        <div class="small" style="opacity:.85;">Base:</div>
+        <div class="pill-select rpp_opts">${pills(RIDER_PP_LIT_BASE)}</div>
+        <div class="small" style="opacity:.85;margin-top:4px;">Add-ons:</div>
+        <div class="pill-select rpp_opts">${pills(RIDER_PP_LIT_ADDON)}</div>
+      </div>
+      ${mode==='competition' ? `<div style="margin-top:12px;">
+        <div class="small" style="font-weight:bold;color:#d2b25a;">🏆 Show results:</div>
+        <div class="pill-select rpp_opts">${pills(RIDER_PP_SHOW)}</div>
+      </div>` : ``}
+      <div style="margin-top:12px;">
+        <div class="small" style="font-weight:bold;">✨ Community event bonus <span style="font-weight:normal;opacity:.7;">(optional — type it in)</span></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px;">
+          <input class="rpp_evt_label" placeholder="e.g. Summer Festival bonus" style="flex:2;min-width:160px;" />
+          <input class="rpp_evt_pp" type="number" min="0" placeholder="+PP" style="flex:0 0 90px;" />
+        </div>
       </div>
       ${(() => {
         const appItems=(state.attireInventory||[]).filter(it=>Number(it.pp)>0);
@@ -471,7 +512,7 @@ function riderPPBlockHtml(prefix, mode, horse){
           </div>
         </div>`;
       })()}
-      <div class="small" style="margin-top:6px;opacity:.7;">Nothing is ticked by default — choose only what applies to this piece. Leave the rider on "no rider featured" to award no Prestige.</div>
+      <div class="small" style="margin-top:6px;opacity:.7;">Nothing is ticked by default — choose only what applies. <b>Art + lit can live in one work</b>: an illustrated story ticks from both sections. Leave the rider on "no rider featured" to award no Prestige.</div>
     </div>`;
 }
 
@@ -483,8 +524,12 @@ function bindRiderPPBlock(scope, prefix){
   const recalc=()=>{
     let sum=0;
     if(sel.value){
-      block.querySelectorAll('.pill.active[data-pp]').forEach(p=>sum+=Number(p.dataset.pp)||0);
+      // scoped to .rpp_opts so apparel chips aren't counted twice
+      block.querySelectorAll('.rpp_opts .pill.active[data-pp]').forEach(p=>sum+=Number(p.dataset.pp)||0);
       block.querySelectorAll('.rpp_apparel .pill.active[data-appid]').forEach(p=>sum+=Number(p.dataset.pp)||0);
+      const evtEl=block.querySelector('.rpp_evt_pp'), evtLblEl=block.querySelector('.rpp_evt_label');
+      const evtPP=Number(evtEl && evtEl.value)||0, evtLabel=((evtLblEl && evtLblEl.value)||'').trim();
+      if(evtLabel && evtPP>0) sum+=evtPP;
     }
     block.querySelector('.rpp_sum').textContent=sum;
     return sum;
@@ -492,17 +537,25 @@ function bindRiderPPBlock(scope, prefix){
   block.querySelectorAll('[data-ppopt]').forEach(p=>p.onclick=()=>{ p.classList.toggle('active'); recalc(); });
   block.querySelectorAll('[data-appid]').forEach(p=>p.onclick=()=>{ p.classList.toggle('active'); recalc(); });
   sel.onchange=recalc;
+  const evtIn=block.querySelector('.rpp_evt_pp'), evtLbl=block.querySelector('.rpp_evt_label');
+  if(evtIn) evtIn.oninput=recalc;
+  if(evtLbl) evtLbl.oninput=recalc;
   recalc();
   return {
     collect(){
       if(!sel.value) return null;
       const picked=[...block.querySelectorAll('.rpp_opts .pill.active[data-pp]')];
       const apparel=[...block.querySelectorAll('.rpp_apparel .pill.active[data-appid]')];
+      const evtEl=block.querySelector('.rpp_evt_pp'), evtLblEl=block.querySelector('.rpp_evt_label');
+      const evtPP=Number(evtEl && evtEl.value)||0, evtLabel=((evtLblEl && evtLblEl.value)||'').trim();
+      const evtOk=(evtLabel && evtPP>0);
       const pp=picked.reduce((n,p)=>n+(Number(p.dataset.pp)||0),0)
-             + apparel.reduce((n,p)=>n+(Number(p.dataset.pp)||0),0);
+             + apparel.reduce((n,p)=>n+(Number(p.dataset.pp)||0),0)
+             + (evtOk?evtPP:0);
       if(pp<=0) return null;
       const sources=[...picked.map(p=>`${p.dataset.ppopt} (+${p.dataset.pp})`),
-                     ...apparel.map(p=>`${p.textContent.replace(/\s*\(\+\d+\)$/,'')} apparel (+${p.dataset.pp})`)];
+                     ...apparel.map(p=>`${p.textContent.replace(/\s*\(\+\d+\)$/,'')} apparel (+${p.dataset.pp})`),
+                     ...(evtOk?[`${evtLabel} (+${evtPP})`]:[])];
       return { riderId:sel.value, pp, sources };
     },
     setTop3(){ /* intentionally a no-op: nothing is auto-ticked */ },
@@ -3849,6 +3902,11 @@ function renderTraining(){
       <div class="pill-select" id="tr_bonuses">
         ${Object.keys(BONUS_EXP).map(k=>`<div class="pill" data-bonus="${k}">${k} (+${BONUS_EXP[k]})</div>`).join("")}
       </div>
+      <div id="tr_creatureRow" class="hide" style="margin-top:6px;">
+        <label class="small" style="display:inline;">How many additional creatures?</label>
+        <input type="number" id="tr_creature_n" min="1" value="1" style="max-width:90px;padding:4px 6px;" />
+        <span class="small" style="opacity:.7;">(+2 EXP each)</span>
+      </div>
     </div>
     <div style="margin-top:8px;">
       <label>Images in this piece <span class="small">(collage / multi-image sheet)</span></label>
@@ -3959,6 +4017,7 @@ function renderTraining(){
     const k=p.dataset.bonus;
     if(selectedBonuses.has(k)){selectedBonuses.delete(k);p.classList.remove('active');}
     else{selectedBonuses.add(k);p.classList.add('active');}
+    if(k==="Additional Creature (per)"){ const row=card.querySelector('#tr_creatureRow'); if(row) row.classList.toggle('hide', !selectedBonuses.has(k)); }
   });
 
   // Depicted tack: toggleable chips from owned tack with stat/EXP bonuses.
@@ -4047,7 +4106,15 @@ function renderTraining(){
     const sources=[imgCount>1 ? `${artType} ×${imgCount} (+${(ART_EXP[artType]||0)*imgCount})` : `${artType} (+${ART_EXP[artType]})`];
     const litExp=calcLitExp(litWords);
     if(litExp>0){expGain+=litExp; sources.push(`Lit ${litWords}w (+${litExp})`);}
-    selectedBonuses.forEach(k=>{if(BONUS_EXP[k]){expGain+=BONUS_EXP[k]; sources.push(`${k} (+${BONUS_EXP[k]})`);}});
+    selectedBonuses.forEach(k=>{
+      if(!BONUS_EXP[k]) return;
+      if(k==="Additional Creature (per)"){
+        const nEl=card.querySelector('#tr_creature_n');
+        const n=Math.max(1, parseInt(nEl && nEl.value)||1);
+        const add=BONUS_EXP[k]*n;
+        expGain+=add; sources.push(`Additional Creature ×${n} (+${add})`);
+      } else { expGain+=BONUS_EXP[k]; sources.push(`${k} (+${BONUS_EXP[k]})`); }
+    });
     if(riderNote) sources.push(riderNote);
     const rExp=riderTrainingExp(h);
     if(rExp>0){ expGain+=rExp; sources.push(`Rider +${rExp} EXP`); }
@@ -4224,6 +4291,11 @@ function buildShowLogForm(){
       <div class="pill-select" id="cs_bonuses">
         ${Object.keys(BONUS_EXP).map(k=>`<div class="pill" data-bonus="${k}">${k} (+${BONUS_EXP[k]})</div>`).join("")}
       </div>
+      <div id="cs_creatureRow" class="hide" style="margin-top:6px;">
+        <label class="small" style="display:inline;">How many additional creatures?</label>
+        <input type="number" id="cs_creature_n" min="1" value="1" style="max-width:90px;padding:4px 6px;" />
+        <span class="small" style="opacity:.7;">(+2 EXP each)</span>
+      </div>
     </div>
     <div style="margin-top:8px;"><label>Link to Art <span class="small">(optional)</span></label>
       <input id="cs_link" placeholder="https://… (DeviantArt, Toyhouse, etc.)" />
@@ -4274,6 +4346,7 @@ function buildShowLogForm(){
     const k=p.dataset.bonus;
     if(selectedBonuses.has(k)){selectedBonuses.delete(k);p.classList.remove('active');}
     else{selectedBonuses.add(k);p.classList.add('active');}
+    if(k==="Additional Creature (per)"){ const row=card.querySelector('#cs_creatureRow'); if(row) row.classList.toggle('hide', !selectedBonuses.has(k)); }
   });
 
   // FIX (this was the show-art part of the bug): show art photos were
@@ -4353,7 +4426,15 @@ function buildShowLogForm(){
       const litExp=calcLitExp(litWords);
       if(litExp>0){expGain+=litExp; sources.push(`Lit ${litWords}w (+${litExp})`);}
       expGain+=1; sources.push(`Show Entry (+1)`);
-      selectedBonuses.forEach(k=>{if(BONUS_EXP[k]){expGain+=BONUS_EXP[k]; sources.push(`${k} (+${BONUS_EXP[k]})`);}});
+      selectedBonuses.forEach(k=>{
+      if(!BONUS_EXP[k]) return;
+      if(k==="Additional Creature (per)"){
+        const nEl=card.querySelector('#cs_creature_n');
+        const n=Math.max(1, parseInt(nEl && nEl.value)||1);
+        const add=BONUS_EXP[k]*n;
+        expGain+=add; sources.push(`Additional Creature ×${n} (+${add})`);
+      } else { expGain+=BONUS_EXP[k]; sources.push(`${k} (+${BONUS_EXP[k]})`); }
+    });
       nonPlacementExp=expGain;
       const placeExp={1:4,2:3,3:2}[placement]||1;
       if(placement){expGain+=placeExp; sources.push(`Placement (+${placeExp})`);}
