@@ -461,6 +461,16 @@ function riderPPBlockHtml(prefix, mode, horse){
       <div class="pill-select rpp_opts" style="margin-top:8px;">
         ${Object.keys(opts).map(k=>`<div class="pill" data-ppopt="${k}" data-pp="${opts[k]}">${k} (+${opts[k]})</div>`).join("")}
       </div>
+      ${(() => {
+        const appItems=(state.attireInventory||[]).filter(it=>Number(it.pp)>0);
+        if(!appItems.length) return '';
+        return `<div style="margin-top:8px;">
+          <div class="small" style="opacity:.85;">Apparel depicted <span style="opacity:.6;">(adds PP)</span></div>
+          <div class="pill-select rpp_apparel" style="margin-top:4px;">
+            ${appItems.map(it=>`<div class="pill" data-appid="${it.id}" data-pp="${Number(it.pp)}" title="+${Number(it.pp)} PP">${escAttr(it.name)} (+${Number(it.pp)})</div>`).join("")}
+          </div>
+        </div>`;
+      })()}
       <div class="small" style="margin-top:6px;opacity:.7;">Nothing is ticked by default — choose only what applies to this piece. Leave the rider on "no rider featured" to award no Prestige.</div>
     </div>`;
 }
@@ -472,20 +482,28 @@ function bindRiderPPBlock(scope, prefix){
   const sel=block.querySelector('.rpp_rider');
   const recalc=()=>{
     let sum=0;
-    if(sel.value) block.querySelectorAll('.pill.active[data-pp]').forEach(p=>sum+=Number(p.dataset.pp)||0);
+    if(sel.value){
+      block.querySelectorAll('.pill.active[data-pp]').forEach(p=>sum+=Number(p.dataset.pp)||0);
+      block.querySelectorAll('.rpp_apparel .pill.active[data-appid]').forEach(p=>sum+=Number(p.dataset.pp)||0);
+    }
     block.querySelector('.rpp_sum').textContent=sum;
     return sum;
   };
   block.querySelectorAll('[data-ppopt]').forEach(p=>p.onclick=()=>{ p.classList.toggle('active'); recalc(); });
+  block.querySelectorAll('[data-appid]').forEach(p=>p.onclick=()=>{ p.classList.toggle('active'); recalc(); });
   sel.onchange=recalc;
   recalc();
   return {
     collect(){
       if(!sel.value) return null;
-      const picked=[...block.querySelectorAll('.pill.active[data-pp]')];
-      const pp=picked.reduce((n,p)=>n+(Number(p.dataset.pp)||0),0);
+      const picked=[...block.querySelectorAll('.rpp_opts .pill.active[data-pp]')];
+      const apparel=[...block.querySelectorAll('.rpp_apparel .pill.active[data-appid]')];
+      const pp=picked.reduce((n,p)=>n+(Number(p.dataset.pp)||0),0)
+             + apparel.reduce((n,p)=>n+(Number(p.dataset.pp)||0),0);
       if(pp<=0) return null;
-      return { riderId:sel.value, pp, sources:picked.map(p=>`${p.dataset.ppopt} (+${p.dataset.pp})`) };
+      const sources=[...picked.map(p=>`${p.dataset.ppopt} (+${p.dataset.pp})`),
+                     ...apparel.map(p=>`${p.textContent.replace(/\s*\(\+\d+\)$/,'')} apparel (+${p.dataset.pp})`)];
+      return { riderId:sel.value, pp, sources };
     },
     setTop3(){ /* intentionally a no-op: nothing is auto-ticked */ },
   };
@@ -730,7 +748,7 @@ const BANK_URL = 'https://script.google.com/macros/s/AKfycby9WLxUPDAPg9EH5aTPATz
 // keep working, but nothing writes to Sheets anymore.
 let STABLE_URL = '';
 
-let state = { horses:[], riders:[], profile:null, log:[], tackInventory:[], attireInventory:[], customBreeds:[], customGenes:[], loaded:false };
+let state = { horses:[], riders:[], profile:null, log:[], tackInventory:[], attireInventory:[], customBreeds:[], customGenes:[], tackSets:[], loaded:false };
 // Custom/Created breeds (and custom genes) are shared config, visible to every affiliate
 // regardless of who's logged in — they're stored under this reserved userId
 // in the same Stable Data backend everyone already uses, rather than in any
@@ -1118,6 +1136,60 @@ function stripBig(obj){
   return clean;
 }
 
+// ── Pull shop-bought tack & attire from the shared saddlebag ────────────────
+// Shops (hub + Emporium) deliver purchases into inventory/{userId}. Wearable
+// items (tack/attire) should be usable here, carrying the bonuses the shop
+// authored (stats/EXP/PR). One-way, non-destructive, de-duped by a stable id
+// derived from the shop entry. Tokens/tickets/consumables are left alone.
+const SHOP_TACK_CATS   = ["Saddle","Bridle","Shoes","Boots","Blanket","Other","Tack"];
+const SHOP_ATTIRE_CATS = ["Jacket","Shirt","Breeches","Boots","Helmet","Gloves","Accessory","Attire","Apparel"];
+async function mergeShopInventory(userId){
+  try{
+    const DB = await waitForDB();
+    if(!DB || !window.EquiDB) return;
+    const inv = await window.EquiDB.get('inventory', userId);
+    const items = (inv && inv.items) || [];
+    if(!items.length) return;
+    if(!Array.isArray(state.tackInventory))   state.tackInventory=[];
+    if(!Array.isArray(state.attireInventory)) state.attireInventory=[];
+
+    const catIn=(c,list)=>list.map(x=>x.toLowerCase()).includes(String(c||'').toLowerCase());
+    const isConsumable=e=>Number(e.usesLeft)>0 || e.singleUse===true || Number(e.discountValue)>0;
+    let added=0;
+    for(const e of items){
+      if(isConsumable(e)) continue;                       // tokens/tickets stay in the saddlebag
+      const hasStats = e.stats && Object.keys(e.stats).length>0;
+      // The shop's explicit kind wins; otherwise infer — PP means apparel,
+      // stats/EXP mean tack, else the category decides.
+      let isApparel = e.wearKind==='apparel';
+      let isTack    = e.wearKind==='tack';
+      if(!isApparel && !isTack){
+        if(Number(e.pp)>0) isApparel=true;
+        else if(hasStats || Number(e.exp)>0) isTack=true;
+        else if(catIn(e.category, SHOP_ATTIRE_CATS)) isApparel=true;
+        else if(catIn(e.category, SHOP_TACK_CATS)) isTack=true;
+      }
+      if(!isTack && !isApparel) continue;                  // not wearable
+      const stableId = 'shop_' + (e.id || (e.source+'_'+e.itemId));
+      const target   = isApparel ? state.attireInventory : state.tackInventory;
+      if(target.some(t=>t.id===stableId)) continue;        // already merged
+      let cat = e.category || 'Other';
+      const validList = isApparel ? SHOP_ATTIRE_CATS : SHOP_TACK_CATS;
+      if(!catIn(cat, validList)) cat='Other';
+      else cat=validList.find(x=>x.toLowerCase()===String(cat).toLowerCase());
+      if(isApparel){
+        target.push({ id:stableId, name:e.name||'Shop item', category:cat, image:e.image||null,
+          stats:{}, pp:Number(e.pp)||0, fromShop:e.shopName||'a shop' });
+      } else {
+        target.push({ id:stableId, name:e.name||'Shop item', category:cat, image:e.image||null,
+          stats:hasStats?e.stats:{}, exp:Number(e.exp)||0, fromShop:e.shopName||'a shop' });
+      }
+      added++;
+    }
+    if(added){ addLog(`Added ${added} shop-bought item${added===1?'':'s'} to your inventory.`); await save(); }
+  }catch(err){ console.warn('[Stable] shop inventory merge skipped:', err && err.message || err); }
+}
+
 async function fbLoadAll(userId){
   const DB = await waitForDB();
   if(!DB) throw new Error('Firestore not available');
@@ -1159,7 +1231,8 @@ async function migrateToFirestore(){
       await window.EquiDB.put('config', 'global', 'global', {
         id:'global',
         customBreeds: state.customBreeds||[], customGenes: state.customGenes||[],
-        customMarkings: state.customMarkings||[], customMutations: state.customMutations||[] });
+        customMarkings: state.customMarkings||[], customMutations: state.customMutations||[],
+        tackSets: state.tackSets||[] });
     } else {
       console.warn('[Migration] kept the existing Firestore breed/gene config (nothing loaded locally to copy).');
     }
@@ -1417,6 +1490,7 @@ async function loadGlobalBreeds(){
         state.customGenes     = Array.isArray(cfg?.customGenes)     ? cfg.customGenes     : [];
         state.customMarkings  = Array.isArray(cfg?.customMarkings)  ? cfg.customMarkings  : [];
         state.customMutations = Array.isArray(cfg?.customMutations) ? cfg.customMutations : [];
+        state.tackSets        = Array.isArray(cfg?.tackSets)        ? cfg.tackSets        : [];
         return;
       }catch(e){ console.error('[EquiDB] loadGlobalBreeds failed:', e); }
     }
@@ -1442,7 +1516,8 @@ async function saveGlobalBreeds(){
       return await window.EquiDB.put('config', 'global', 'global', {
         id:'global',
         customBreeds: state.customBreeds, customGenes: state.customGenes,
-        customMarkings: state.customMarkings, customMutations: state.customMutations });
+        customMarkings: state.customMarkings, customMutations: state.customMutations,
+        tackSets: state.tackSets||[] });
     }catch(e){ console.error('[EquiDB] saveGlobalBreeds failed:', e); return false; }
   }
   if(!STABLE_URL) return false;
@@ -1490,6 +1565,7 @@ async function loadFromSheets(){
     state.log             = fb.state?.log || [];
     state.tackInventory   = fb.state?.tackInventory || [];
     state.attireInventory = fb.state?.attireInventory || [];
+    await mergeShopInventory(userId);   // fold in shop-bought tack/attire (with bonuses)
     state.horses.forEach(h=>{
       if(!h.artLog) h.artLog=[];
       // Normalisation that used to live in the Sheets loader — kept so horses
@@ -2252,6 +2328,10 @@ function renderAttireInventory(){
       <input type="text" id="at_image_url" placeholder="Paste a direct link to the item photo (.jpg/.png/.gif)" style="width:100%;max-width:420px;" />
       <div id="at_image_preview" style="margin-top:6px;"></div>
     </div>
+    <div style="margin-top:8px;max-width:220px;">
+      <label>PP bonus <span class="small">(Prestige Points when depicted on a rider)</span></label>
+      <input type="number" id="at_pp" value="0" style="padding:4px 6px;" />
+    </div>
     <button id="at_add" style="margin-top:10px;">+ Add to Wardrobe</button>`;
 
   let attireImage=null;
@@ -2264,6 +2344,8 @@ function renderAttireInventory(){
     if(!name){ alert("Give the attire item a name first!"); return; }
     const cat=wrap.querySelector('#at_cat').value;
     const item={ id:uid2(), name, category:cat, image:attireImage, stats:{} };
+    const pp=Number(wrap.querySelector('#at_pp').value)||0;
+    if(pp) item.pp=pp;
     if(!state.attireInventory) state.attireInventory=[];
     state.attireInventory.push(item);
     addLog(`Added "${name}" (${cat}) to the wardrobe.`);
@@ -3681,6 +3763,35 @@ function showLineageModal(horseId){
 // TRAINING TAB
 // ============================================
 
+// Resolve the bonus from depicted items: sum each item's individual
+// stats/EXP/PP, then add any set bonus whose every member is depicted.
+// Tack items carry stats/exp; apparel items carry pp. The caller reads the
+// fields it cares about (training uses stats/exp; prestige uses pp).
+// HORSE training depicts TACK: stats + EXP (apparel grants rider PP through
+// the Rider Prestige block instead — different animal, different form).
+function resolveDepictedBonus(depictedIds){
+  const pool=state.tackInventory||[];
+  const byId=id=>pool.find(i=>i.id===id);
+  const total={ stats:{}, exp:0, notes:[] };
+  depictedIds.forEach(id=>{
+    const it=byId(id); if(!it) return;
+    Object.entries(it.stats||{}).forEach(([s,v])=>total.stats[s]=(total.stats[s]||0)+v);
+    if(Number(it.exp)) total.exp+=Number(it.exp);
+    total.notes.push(it.name);
+  });
+  const depSet=new Set(depictedIds);
+  (state.tackSets||[]).forEach(set=>{
+    const members=pool.filter(i=>i.setId===set.id);
+    if(members.length>0 && members.every(m=>depSet.has(m.id))){
+      const b=set.bonus||{};
+      Object.entries(b.stats||{}).forEach(([s,v])=>total.stats[s]=(total.stats[s]||0)+v);
+      total.exp+=Number(b.exp)||0;
+      total.notes.push(`◈ ${set.name} set`);
+    }
+  });
+  return total;
+}
+
 function renderTraining(){
   const wrap=el('div');
   if(!state.horses.length){ wrap.innerHTML='<div class="card small">Add a horse on the Stable Roster tab first.</div>'; return wrap; }
@@ -3739,7 +3850,25 @@ function renderTraining(){
         ${Object.keys(BONUS_EXP).map(k=>`<div class="pill" data-bonus="${k}">${k} (+${BONUS_EXP[k]})</div>`).join("")}
       </div>
     </div>
+    <div style="margin-top:8px;">
+      <label>Images in this piece <span class="small">(collage / multi-image sheet)</span></label>
+      <input type="number" id="tr_imgcount" min="1" value="1" style="max-width:120px;" />
+      <p class="small" style="margin:4px 0 0;opacity:.75;">If this is a collage of several training pictures, set how many. Each image counts as its own training — the art EXP and stat gains multiply by this number. Word count, custom bonus, and rider bonus still count once.</p>
+    </div>
     <div style="margin-top:8px;"><label>Link to Art <span class="small">(optional)</span></label><input id="tr_link" placeholder="https://…" /></div>
+    <div style="margin-top:8px;">
+      <label>Tack / Attire Depicted <span class="small">(optional — applies the item's bonuses to this image)</span></label>
+      <div id="tr_depicted" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px;"></div>
+      <div id="tr_depicted_none" class="small" style="opacity:.7;">You don't own any bonus tack/attire yet — buy some from a shop.</div>
+    </div>
+    <div style="margin-top:8px;">
+      <label>Custom Bonus <span class="small">(optional — e.g. a seasonal or breed event bonus)</span></label>
+      <div class="row" style="gap:8px;">
+        <div style="flex:2;"><input id="tr_cb_label" placeholder="e.g. Summer Training Bonus" /></div>
+        <div style="flex:1;"><input type="number" id="tr_cb_exp" placeholder="+EXP e.g. 5" /></div>
+      </div>
+      <p class="small" style="margin:4px 0 0;opacity:.75;">Type the bonus name and how much EXP it's worth. It's added to this image's total and shown in the log.</p>
+    </div>
     <div id="tr_rpp_slot"></div>
     <button id="tr_go" style="margin-top:12px;">✓ Log Training</button>
     <div id="tr_result"></div>
@@ -3832,6 +3961,28 @@ function renderTraining(){
     else{selectedBonuses.add(k);p.classList.add('active');}
   });
 
+  // Depicted tack: toggleable chips from owned tack with stat/EXP bonuses.
+  // (Rider apparel is picked in the Rider Prestige form, not here.)
+  const depicted=new Set();
+  const bonusItems=(state.tackInventory||[])
+    .filter(it=> (it.stats && Object.keys(it.stats).length) || Number(it.exp)>0);
+  const depBox=card.querySelector('#tr_depicted');
+  const depNone=card.querySelector('#tr_depicted_none');
+  if(bonusItems.length && depBox){
+    depNone.style.display='none';
+    depBox.innerHTML=bonusItems.map(it=>{
+      const bits=[...Object.entries(it.stats||{}).map(([s,v])=>`+${v} ${STAT_LABELS[s]||s}`),
+        it.exp?`+${it.exp} EXP`:''].filter(Boolean).join(", ");
+      return `<button type="button" class="pill" data-dep="${it.id}" title="${escAttr(bits)}">${escAttr(it.name)}</button>`;
+    }).join("");
+    depBox.querySelectorAll('[data-dep]').forEach(b=>b.onclick=()=>{
+      const id=b.dataset.dep;
+      if(depicted.has(id)){depicted.delete(id);b.classList.remove('active');}
+      else{depicted.add(id);b.classList.add('active');}
+    });
+  }
+  card.__depicted=depicted;   // expose for submit handler
+
   card.querySelector('#tr_lit').oninput=()=>{
     const wc=parseInt(card.querySelector('#tr_lit').value)||0;
     const exp=calcLitExp(wc);
@@ -3870,8 +4021,13 @@ function renderTraining(){
     const t=trainingOptionsFor(h).find(x=>x.id===tId);
     const t2=tId2?trainingOptionsFor(h).find(x=>x.id===tId2):null;
     const label=t2?`${t.name} + ${t2.name}`:t.name;
+    // Collage: N images = N training sessions. Each image grants its own art EXP
+    // and stat gains, so we multiply both by the count. Word count / custom /
+    // rider bonuses are per-submission and are NOT multiplied.
+    const imgCount=Math.max(1, parseInt(card.querySelector('#tr_imgcount').value)||1);
     const allStats={...t.stats};
     if(t2) Object.entries(t2.stats).forEach(([s,v])=>allStats[s]=(allStats[s]||0)+v);
+    if(imgCount>1) Object.keys(allStats).forEach(s=>allStats[s]=allStats[s]*imgCount);
     const riderNote=applyRiderTrainingBonus(h, allStats);
     Object.entries(allStats).forEach(([s,v])=>h.stats[s]=(h.stats[s]||0)+v);
 
@@ -3887,18 +4043,34 @@ function renderTraining(){
       });
     }
 
-    let expGain=ART_EXP[artType]||0;
-    const sources=[`${artType} (+${ART_EXP[artType]})`];
+    let expGain=(ART_EXP[artType]||0)*imgCount;
+    const sources=[imgCount>1 ? `${artType} ×${imgCount} (+${(ART_EXP[artType]||0)*imgCount})` : `${artType} (+${ART_EXP[artType]})`];
     const litExp=calcLitExp(litWords);
     if(litExp>0){expGain+=litExp; sources.push(`Lit ${litWords}w (+${litExp})`);}
     selectedBonuses.forEach(k=>{if(BONUS_EXP[k]){expGain+=BONUS_EXP[k]; sources.push(`${k} (+${BONUS_EXP[k]})`);}});
     if(riderNote) sources.push(riderNote);
     const rExp=riderTrainingExp(h);
     if(rExp>0){ expGain+=rExp; sources.push(`Rider +${rExp} EXP`); }
+    // Custom bonus: a free-typed modifier (seasonal event, breed bonus, etc.).
+    const cbLabel=(card.querySelector('#tr_cb_label').value||'').trim();
+    const cbExp=parseInt(card.querySelector('#tr_cb_exp').value)||0;
+    let customBonus=null;
+    if(cbLabel && cbExp){ expGain+=cbExp; sources.push(`${cbLabel} (+${cbExp})`); customBonus={label:cbLabel, exp:cbExp}; }
+
+    // Depicted tack: individual bonuses + any COMPLETE set bonus (stats + EXP).
+    const depictedIds=[...(card.__depicted||[])];
+    let depictedNames=[];
+    if(depictedIds.length){
+      const b=resolveDepictedBonus(depictedIds);
+      Object.entries(b.stats).forEach(([s,v])=>{ allStats[s]=(allStats[s]||0)+v; });
+      if(b.exp){ expGain+=b.exp; }
+      b.notes.forEach(n=>sources.push(n));
+      depictedNames=b.notes;
+    }
     h.exp+=expGain;
     checkLevelUp(h);
 
-    const trainEntry={id:uid2(),day:state.log.length+1,type:"training",label,art:artType,lit:litWords?`${litWords} words`:null,bonuses:[...selectedBonuses],exp:expGain,link:link||null,image:uploadedImage,statsDelta:allStats,milestoneIds};
+    const trainEntry={id:uid2(),day:state.log.length+1,type:"training",label,art:artType,imgCount:imgCount>1?imgCount:undefined,lit:litWords?`${litWords} words`:null,bonuses:[...selectedBonuses],customBonus,depicted:depictedNames.length?depictedNames:undefined,exp:expGain,link:link||null,image:uploadedImage,statsDelta:allStats,milestoneIds};
 
     // Rider Prestige chosen in the form's Rider Prestige block.
     const rppPick = trRPP.collect();
@@ -4494,7 +4666,7 @@ function renderArtLog(){
 
 function renderTackInventory(){
   const wrap=el('div');
-  wrap.appendChild(el('div','small','<div style="margin-bottom:10px;color:#b5a392;">Everything your stable owns — <b>tack</b> for your horses and <b>attire</b> for your riders. Equip tack from a horse\'s roster card, and attire from a rider\'s card.</div>'));
+  wrap.appendChild(el('div','small','<div style="margin-bottom:10px;color:#b5a392;">Your stable\'s collection — <b>tack</b> for horses and <b>attire</b> for riders. This is your display case; items also appear in the per-image dropdowns when you log training or offsite art. Show-relevant tack can still be equipped from a horse\'s roster card (the Show app reads what\'s equipped at entry time).</div>'));
 
   const form=el('div','card',`
     <h3>Add Tack Item</h3>
@@ -4517,6 +4689,15 @@ function renderTackInventory(){
       <label>Stat Bonuses While Equipped <span class="small">(optional)</span></label>
       <div class="row">
         ${STATS.map(s=>`<div style="min-width:90px;"><label style="font-size:.96em;">${STAT_LABELS[s]}</label><input type="number" id="tk_stat_${s}" value="0" style="padding:4px 6px;" /></div>`).join("")}
+      </div>
+    </div>
+    <div class="row" style="margin-top:8px;">
+      <div style="min-width:120px;"><label>EXP bonus <span class="small">(when depicted)</span></label><input type="number" id="tk_exp" value="0" style="padding:4px 6px;" /></div>
+      <div style="min-width:200px;"><label>Part of a set? <span class="small">(optional)</span></label>
+        <select id="tk_set">
+          <option value="">— no set —</option>
+          ${(state.tackSets||[]).map(s=>`<option value="${s.id}">${escAttr(s.name)}</option>`).join("")}
+        </select>
       </div>
     </div>
     <button id="tk_add" style="margin-top:10px;">+ Add to Inventory</button>
@@ -4543,6 +4724,10 @@ function renderTackInventory(){
       if(v!==0) stats[s]=v;
     });
     const item={ id:uid2(), name, category:cat, image:tackImage, stats };
+    const exp=Number(form.querySelector('#tk_exp').value)||0;
+    const setId=form.querySelector('#tk_set').value||null;
+    if(exp) item.exp=exp;
+    if(setId) item.setId=setId;
     if(!state.tackInventory) state.tackInventory=[];
     state.tackInventory.push(item);
     addLog(`Added "${name}" (${cat}) to the tack inventory.`);
@@ -4551,6 +4736,61 @@ function renderTackInventory(){
   };
 
   const inv = state.tackInventory||[];
+
+  // ── SET BONUSES editor: named groups of items that grant an extra bonus
+  //    when ALL their members are depicted together in one submission. ──
+  const setsCard=el('div','card');
+  const setsList=(state.tackSets||[]).map(set=>{
+    const members=inv.filter(it=>it.setId===set.id);
+    const b=set.bonus||{};
+    const bstr=[...Object.entries(b.stats||{}).map(([s,v])=>`+${v} ${STAT_LABELS[s]||s}`),
+                b.exp?`+${b.exp} EXP`:''].filter(Boolean).join(" · ");
+    return `<div style="border:1px solid #4a392a;border-radius:8px;padding:10px;margin-bottom:8px;background:#15100c;">
+      <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;flex-wrap:wrap;">
+        <b style="color:#c9a8e8;">◈ ${escAttr(set.name)}</b>
+        <button class="danger" data-act="del-set" data-id="${set.id}" style="font-size:.9em;padding:3px 8px;">Delete set</button>
+      </div>
+      <div class="small" style="margin-top:4px;">Bonus when all worn together: <b style="color:var(--good);">${bstr||'none set'}</b></div>
+      <div class="small" style="margin-top:4px;opacity:.8;">Members (${members.length}): ${members.map(m=>escAttr(m.name)).join(", ")||'— assign items to this set in the Add Tack form above —'}</div>
+    </div>`;
+  }).join("");
+  setsCard.innerHTML=`
+    <h3>Set Bonuses <span class="small">(admin)</span></h3>
+    <p class="small" style="margin-top:0;">Create a named set (e.g. "Dressage Set"), give it a bonus, then assign items to it via the <b>Part of a set?</b> dropdown when adding tack. When a submission depicts <b>every</b> item in a set, the set bonus applies on top of the individual pieces.</p>
+    ${setsList||'<div class="small" style="opacity:.7;margin-bottom:8px;">No sets yet.</div>'}
+    <div style="border-top:1px solid #4a392a;margin-top:8px;padding-top:10px;">
+      <label>New set name</label>
+      <input id="set_name" placeholder="e.g. Winter Driving Set" style="max-width:320px;" />
+      <div class="row" style="margin-top:8px;">
+        ${STATS.map(s=>`<div style="min-width:78px;"><label style="font-size:.9em;">${STAT_LABELS[s]}</label><input type="number" id="set_stat_${s}" value="0" style="padding:4px 6px;" /></div>`).join("")}
+      </div>
+      <div class="row" style="margin-top:8px;">
+        <div style="min-width:120px;"><label>Set EXP</label><input type="number" id="set_exp" value="0" style="padding:4px 6px;" /></div>
+      </div>
+      <button id="set_add" style="margin-top:10px;">+ Create Set</button>
+    </div>`;
+  wrap.appendChild(setsCard);
+
+  setsCard.querySelector('#set_add').onclick=async()=>{
+    const name=setsCard.querySelector('#set_name').value.trim();
+    if(!name){ alert("Name the set first."); return; }
+    const bstats={};
+    STATS.forEach(s=>{ const v=Number(setsCard.querySelector(`#set_stat_${s}`).value)||0; if(v!==0) bstats[s]=v; });
+    const bonus={ stats:bstats,
+      exp:Number(setsCard.querySelector('#set_exp').value)||0 };
+    if(!state.tackSets) state.tackSets=[];
+    state.tackSets.push({ id:'set_'+Math.random().toString(36).slice(2,9), name, bonus });
+    addLog(`Created tack set "${name}".`);
+    await saveGlobalBreeds(); await save(); render();
+  };
+  setsCard.querySelectorAll('[data-act="del-set"]').forEach(b=>b.onclick=async()=>{
+    if(!confirm('Delete this set? Items keep their individual bonuses; they just lose the set link.')) return;
+    const id=b.dataset.id;
+    state.tackSets=(state.tackSets||[]).filter(x=>x.id!==id);
+    (state.tackInventory||[]).forEach(it=>{ if(it.setId===id) delete it.setId; });
+    await saveGlobalBreeds(); await save(); render();
+  });
+
   const invCard=el('div','card');
   invCard.innerHTML=`<h3>Owned Tack (${inv.length})</h3>`;
   if(!inv.length){
@@ -4560,6 +4800,9 @@ function renderTackInventory(){
     grid.style.cssText='display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-top:8px;';
     inv.forEach(item=>{
       const statsStr=Object.entries(item.stats||{}).map(([s,v])=>`+${v} ${STAT_LABELS[s]}`).join(", ");
+      const extra=[];
+      if(item.exp) extra.push(`+${item.exp} EXP`);
+      const setName = item.setId ? (state.tackSets||[]).find(x=>x.id===item.setId) : null;
       const div=el('div');
       div.style.cssText='background:#15100c;border:1px solid #4a392a;border-radius:8px;padding:8px;text-align:center;';
       div.innerHTML=`
@@ -4567,6 +4810,8 @@ function renderTackInventory(){
         <div style="margin-top:6px;font-weight:bold;font-size:1.04em;">${item.name}</div>
         <div class="small">${item.category}</div>
         ${statsStr?`<div class="small" style="color:var(--good);margin-top:2px;">${statsStr}</div>`:""}
+        ${extra.length?`<div class="small" style="color:var(--accent,#d29a3e);margin-top:2px;">${extra.join(" · ")}</div>`:""}
+        ${setName?`<div class="small" style="color:#c9a8e8;margin-top:2px;">◈ ${escAttr(setName.name)} set</div>`:""}
         <button class="danger" data-act="del-tack" data-id="${item.id}" style="font-size:.96em;padding:3px 8px;margin-top:6px;">Remove</button>
       `;
       grid.appendChild(div);
