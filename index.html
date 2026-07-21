@@ -1864,6 +1864,7 @@ function newHorse(data){
     profileImage:null, referenceImage:null, referenceLink:null, refBonusGiven:false,
     artLog:[], completedMilestones:[], badges:[],
     gender:data.gender||"", phenotype:data.phenotype||"", genotype:data.genotype||"",
+    genoObj: data.genoObj || null,   // structured per-locus {locusKey:code} — set by genetics picker; enables breeding math without string-parsing
     pedigree: data.pedigree || {},
     sireId:null, sireName:"", sireOwner:"", damId:null, damName:"", damOwner:"",
     tackOwned:[], tackEquipped:[],
@@ -2111,9 +2112,9 @@ function render(){
       </div>
     </details>
     <div class="tabs" style="align-items:center;">
-      ${["roster","riders","prestige","train","compete","tack","admin"].map(t=>`
+      ${["roster","riders","prestige","train","compete","tack","breeding","admin"].map(t=>`
         <div class="tab${activeTab===t?' active':''}" data-tab="${t}">
-          ${t==="roster"?"Stable Roster":t==="riders"?"Riders":t==="prestige"?"Rider Prestige":t==="train"?"Training":t==="compete"?"Competitions":t==="tack"?"Inventory":"Admin"}
+          ${t==="roster"?"Stable Roster":t==="riders"?"Riders":t==="prestige"?"Rider Prestige":t==="train"?"Training":t==="compete"?"Competitions":t==="tack"?"Inventory":t==="breeding"?"Breeding":"Admin"}
         </div>`).join("")}
       <div style="flex:1;"></div>
       <span class="small" style="color:var(--dim);margin-right:6px;">${bankAccount.userId}</span>
@@ -2149,6 +2150,7 @@ function render(){
   else if(activeTab==="train")   content.appendChild(renderTraining());
   else if(activeTab==="compete") content.appendChild(renderCompete());
   else if(activeTab==="tack")    content.appendChild(renderTackInventory());
+  else if(activeTab==="breeding") content.appendChild(renderBreeding());
   else if(activeTab==="admin")   content.appendChild(renderAdmin());
 }
 
@@ -3438,7 +3440,8 @@ function renderRoster(){
     const height=form.querySelector('#nh_height')?.value.trim()||"";
     const importLink=form.querySelector('#nh_import')?.value.trim()||"";
     const h=newHorse({name,age,breed,gender,phenotype:geno.phenotype,genotype,height,importLink,
-      genoBasePrice:geno.genoBasePrice, genoModifiers:allModifiers});
+      genoBasePrice:geno.genoBasePrice, genoModifiers:allModifiers,
+      genoObj:Object.assign({}, genoSelections)});
     state.horses.push(h);
     addLog(`${h.name} (${breed}) joined the stable.`);
     // The panel has done its job — fold it away so the roster below is visible
@@ -5294,6 +5297,8 @@ function renderAdmin(){
   renderGeneticsRequests(reqBox);
   wrap.appendChild(form);
 
+  appendBreedingTraitsEditor(wrap);
+
   form.querySelector('#ad_save_breed').onclick=async()=>{
     const name=form.querySelector('#ad_breed_name').value.trim();
     if(!name){ alert("Give the breed a name first."); return; }
@@ -6429,6 +6434,576 @@ function computeGenoResult(selections, breed){
     genoModifiers: modifiers,
     totalPrice: base.price + modifiers.reduce((s,m)=>s+m.value,0),
   };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  BREEDING ENGINE  (ported from breeding-engine-test.mjs — 35 tests + 309
+//  real-loci crosses all passing). Pure functions: Punnett math, foal stats,
+//  rare-trait resolution (flat / health / conditional), inbreeding COI, risks.
+// ═══════════════════════════════════════════════════════════════════════════
+
+function allelesOfLocus(locus){
+  if(Array.isArray(locus.alleles) && locus.alleles.length) return locus.alleles.slice();
+  return deriveAlleles(locus);
+}
+
+// Derive the allele inventory for a locus WITHOUT a hardcoded guess-list.
+// Key insight: a homozygous option code is one allele written twice, so if a
+// code is an even-length string whose two halves are equal, each half is a real
+// allele. We collect all such alleles, then split remaining (heterozygous)
+// codes by longest-known-allele-first. This works for novel/custom alleles too
+// (e.g. "PATN1", "Sty", "A+") because at least one homozygote reveals each.
+function deriveAlleles(locus){
+  const codes=(locus.options||[]).map(o=>o.code);
+  const alleles=new Set();
+  // pass 1: even-length codes with equal halves => homozygous => allele = half
+  codes.forEach(code=>{
+    if(code.length%2===0){
+      const half=code.length/2, a=code.slice(0,half), b=code.slice(half);
+      if(a===b) alleles.add(a);
+    }
+  });
+  // pass 2: for any code we can't yet fully split, peel known alleles (longest
+  // first) and treat leftover as a new allele. Handles hetero-only alleles.
+  const peel=(code)=>{
+    const known=[...alleles].sort((a,b)=>b.length-a.length);
+    let rest=code, out=[], guard=0;
+    while(rest.length && guard++<8){
+      const tok=known.find(t=>rest.startsWith(t));
+      if(!tok) return null; // can't fully split with what we know
+      out.push(tok); rest=rest.slice(tok.length);
+    }
+    return out.length===2?out:null;
+  };
+  let changed=true;
+  while(changed){
+    changed=false;
+    for(const code of codes){
+      if(peel(code)) continue;              // already splittable
+      // try to isolate ONE new allele: strip a known allele off either end
+      const known=[...alleles].sort((a,b)=>b.length-a.length);
+      let found=false;
+      for(const k of known){
+        if(code.startsWith(k)){ const rem=code.slice(k.length); if(rem){ alleles.add(rem); found=true; break; } }
+        if(code.endsWith(k)){ const rem=code.slice(0,code.length-k.length); if(rem){ alleles.add(rem); found=true; break; } }
+      }
+      if(found) changed=true;
+    }
+  }
+  return [...alleles];
+}
+
+// Split a code into exactly two alleles using the locus's allele inventory,
+// longest-match-first so "A+At" -> ["A+","At"], not ["A","+","A","t"].
+function splitCode(code, locus){
+  const alleles=allelesOfLocus(locus).sort((a,b)=>b.length-a.length);
+  let rest=code, out=[], guard=0;
+  while(rest.length && guard++<6){
+    const tok=alleles.find(t=>rest.startsWith(t));
+    if(!tok){ out.push(rest[0]); rest=rest.slice(1); continue; }
+    out.push(tok); rest=rest.slice(tok.length);
+  }
+  // A diploid locus must yield exactly 2 alleles; if not, best-effort halves.
+  if(out.length!==2){
+    if(out.length===1) return [out[0],out[0]];
+    if(out.length>2)  return [out[0], out.slice(1).join("")];
+  }
+  return out;
+}
+
+// Canonicalise a pair. Priority:
+//  1. If the locus lists this pair as an option (either order), use that exact
+//     spelling — the game's canonical form (e.g. "nCr" not "Crn").
+//  2. Otherwise it's a genetically-valid genotype the picker just doesn't list
+//     (e.g. agouti "A+at"). Spell it with a STABLE allele order so the same
+//     genotype always renders identically: dominant/complex alleles first,
+//     null "n" and lowercase last, matching HARPG writing convention.
+function alleleRank(x, order){
+  // "n" (no-allele) conventionally leads pairs like nCr, nLp, nSpl…
+  if(x==="n") return -1;
+  const i=order.indexOf(x);
+  return i<0 ? 999 : i;
+}
+function canonPair(a,b, order, locus){
+  if(locus && locus.options){
+    const want1=a+b, want2=b+a;
+    const hit=locus.options.find(o=>o.code===want1||o.code===want2);
+    if(hit) return hit.code;
+  }
+  return alleleRank(a,order)<=alleleRank(b,order) ? a+b : b+a;
+}
+
+// Is a genotype code lethal for this locus? Breeds/loci may define lethal
+// homozygotes (e.g. Frame Overo "OO" = Lethal White). We check a lethal list.
+function isLethalGenotype(locusKey, code, lethalRules){
+  return (lethalRules||[]).some(r=>r.locus===locusKey && (r.codes||[]).includes(code));
+}
+
+// Punnett cross of two parent codes at one locus. Returns [{code, p}] summing 1.
+function crossLocus(sireCode, damCode, locus){
+  const [s1,s2]=splitCode(sireCode,locus);
+  const [d1,d2]=splitCode(damCode,locus);
+  // allele priority order for canonicalisation = order they appear in options,
+  // flattened; ensures "Aa" not "aA"
+  const order=[];
+  allelesOfLocus(locus).forEach(a=>{ if(!order.includes(a)) order.push(a); });
+  const combos=[[s1,d1],[s1,d2],[s2,d1],[s2,d2]];
+  const tally={};
+  combos.forEach(([x,y])=>{ const c=canonPair(x,y,order,locus); tally[c]=(tally[c]||0)+0.25; });
+  return Object.entries(tally).map(([code,p])=>({code,p})).sort((a,b)=>b.p-a.p);
+}
+
+// Foal base stats = floor(average) of the two parents, per stat.
+function foalStats(sireStats, damStats, statKeys){
+  const out={};
+  statKeys.forEach(k=>{
+    const s=Number(sireStats[k])||0, d=Number(damStats[k])||0;
+    out[k]=Math.floor((s+d)/2);
+  });
+  return out;
+}
+
+// ── RARE TRAITS (three types) ──────────────────────────────────────────────
+// A breed defines rareTraits: [{ type, name, chance, ... }]
+//   type "flat":   rolled if a parent carries it; carrier passes at `chance`.
+//   type "health": like flat, PLUS if passed, a second roll `healthChance` for
+//                  a linked condition `healthName` (e.g. Silken -> metabolic).
+//   type "conditional": only possible when the foal meets `requires`
+//                  (a locus + codes, e.g. Peacock needs an LP genotype).
+//
+// carrierChance: given the per-carrier % and how many parents carry, the odds a
+// foal expresses it. 0 carriers -> 0. 1 -> p. 2 -> 1-(1-p)^2.
+function carrierChance(pPercent, sireHas, damHas){
+  const p=Math.max(0,Math.min(100,Number(pPercent)||0))/100;
+  const carriers=(sireHas?1:0)+(damHas?1:0);
+  if(carriers===0) return 0;
+  if(carriers===1) return p;
+  return 1-(1-p)*(1-p);
+}
+
+// Does a set of foal locus-outcomes satisfy a requirement like
+// { locus:"leopard", anyOf:["nLp","LpLp"] }? Returns the summed probability
+// that the requirement is met (since outcomes are probabilistic).
+function requirementMetProb(requires, foalGenotypeByLocus){
+  if(!requires) return 1;
+  const outcomes=foalGenotypeByLocus[requires.locus]||[];
+  const want=new Set(requires.anyOf||[]);
+  return outcomes.filter(o=>want.has(o.code)).reduce((s,o)=>s+o.p,0);
+}
+
+// Resolve every rare trait for a foal into display rows:
+//   { name, chance, healthName?, healthChance?, conditional?, note? }
+// sireTraits/damTraits are arrays of trait NAMES each parent carries.
+function resolveRareTraits(rareTraits, sireTraits, damTraits, foalGenotypeByLocus, riskMult){
+  const mult = Number(riskMult)>0 ? Number(riskMult) : 1;
+  const has=(list,name)=>Array.isArray(list)&&list.includes(name);
+  const rows=[];
+  (rareTraits||[]).forEach(t=>{
+    const sHas=has(sireTraits,t.name), dHas=has(damTraits,t.name);
+    if(t.type==="conditional"){
+      const reqP=requirementMetProb(t.requires, foalGenotypeByLocus);
+      if(reqP<=0) return;
+      rows.push({ name:t.name, chance:reqP*(Number(t.chance)||0)/100,
+        conditional:true, requiresLabel:t.requiresLabel||t.requires?.locus });
+    } else {
+      const c=carrierChance(t.chance, sHas, dHas);
+      if(c<=0) return;
+      const row={ name:t.name, chance:c };
+      if(t.type==="health" && t.healthName){
+        // inbreeding raises the health-roll odds, capped at 100%.
+        const baseHealth=(Number(t.healthChance)||0)/100;
+        const adjHealth=Math.min(1, baseHealth*mult);
+        row.healthName=t.healthName;
+        row.healthChance=adjHealth;
+        row.healthOverall=c*adjHealth;
+        row.healthInflated = mult>1 && adjHealth>baseHealth;
+      }
+      rows.push(row);
+    }
+  });
+  return rows;
+}
+
+// Inbreeding: do the parents share any ancestor? Pedigree is {sire:{...}, dam:{...}}
+// nested; we flatten each parent's ancestor ids (incl themselves) and intersect.
+function ancestorIds(horse, pedigreeOf, depth){
+  const ids=new Set();
+  (function walk(h,d){
+    if(!h||d<0) return;
+    if(h.id) ids.add(h.id);
+    const ped=pedigreeOf(h)||{};
+    if(ped.sire) walk(ped.sire,d-1);
+    if(ped.dam)  walk(ped.dam,d-1);
+  })(horse,depth);
+  return ids;
+}
+function sharedAncestors(sire, dam, pedigreeOf, depth=4){
+  const a=ancestorIds(sire,pedigreeOf,depth);
+  const b=ancestorIds(dam,pedigreeOf,depth);
+  const shared=[...a].filter(x=>b.has(x));
+  return shared;
+}
+
+// Inbreeding coefficient (simplified Wright's COI). For each common ancestor we
+// add (1/2)^(n1+n2+1), where n1/n2 are the generations from sire and dam to that
+// ancestor. Closer/repeated shared ancestors -> higher COI. Parent-child or
+// full-sib crosses land near 0.25; first cousins ~0.0625; distant ties tiny.
+function ancestorDepthMap(horse, pedigreeOf, maxDepth){
+  // returns Map ancestorId -> shortest generation distance from `horse`
+  const dist=new Map();
+  (function walk(h,d){
+    if(!h||d>maxDepth) return;
+    if(h.id!=null){
+      if(!dist.has(h.id) || d<dist.get(h.id)) dist.set(h.id,d);
+    }
+    const ped=pedigreeOf(h)||{};
+    if(ped.sire) walk(ped.sire,d+1);
+    if(ped.dam)  walk(ped.dam,d+1);
+  })(horse,0);
+  return dist;
+}
+function inbreedingCoefficient(sire, dam, pedigreeOf, maxDepth=5){
+  // If one parent IS an ancestor of the other (e.g. sire x daughter), treat the
+  // shared individual as generation 0 on one side.
+  const sMap=ancestorDepthMap(sire,pedigreeOf,maxDepth);
+  const dMap=ancestorDepthMap(dam,pedigreeOf,maxDepth);
+  let coi=0; const contributors=[];
+  const shared=[...sMap.keys()].filter(id=>dMap.has(id));
+  shared.forEach(id=>{
+    const n1=sMap.get(id), n2=dMap.get(id);
+    // exclude the trivial case where the "ancestor" is a parent counted on its
+    // own side only via self (n=0 on both would be the same horse bred to itself)
+    const c=Math.pow(0.5, n1+n2+1);
+    coi+=c; contributors.push({id,n1,n2,contribution:c});
+  });
+  return { coi:Math.min(coi,0.5), contributors };
+}
+
+// Turn a COI into a health-risk multiplier. 0 COI -> x1 (no change). Higher COI
+// raises risk, but we cap the multiplier so results stay believable: a severe
+// (0.25) cross roughly doubles a trait's health-risk odds; a cousin cross nudges
+// it ~+25%. Never more than +150% (x2.5).
+function inbreedingRiskMultiplier(coi){
+  const m = 1 + Math.min(coi,0.25) * 6;   // 0.25*6 = +1.5 at the cap
+  return Math.min(m, 2.5);
+}
+
+// Gene risk: a breed defines risky genotypes, e.g.
+//   { locus:"silken", codes:["SkSk"], risk:"metabolic issues", severity:"high" }
+// We flag any foal-possible genotype that matches, with its probability.
+function foalRisks(foalGenotypeByLocus, riskRules){
+  const flags=[];
+  (riskRules||[]).forEach(rule=>{
+    const outcomes=foalGenotypeByLocus[rule.locus]||[];
+    outcomes.forEach(o=>{
+      if((rule.codes||[]).includes(o.code)){
+        flags.push({ locus:rule.locus, code:o.code, p:o.p, risk:rule.risk, severity:rule.severity||"medium" });
+      }
+    });
+  });
+  return flags;
+}
+
+
+// ── Admin: per-breed breeding-trait config (rare traits, gene risks, lethals) ──
+const ILB_TRAIT_DEFAULTS = [
+  {type:"health", name:"Circe Ears", chance:45, healthName:"deaf", healthChance:30},
+  {type:"flat",   name:"Glossy Coat", chance:70},
+  {type:"health", name:"Silken", chance:30, healthName:"metabolic disease", healthChance:30},
+  {type:"health", name:"Indigo Eyes", chance:30, healthName:"blind", healthChance:30},
+  {type:"health", name:"Unrelated Blue", chance:20, healthName:"Moon Blindness (ERU)", healthChance:30},
+  {type:"conditional", name:"Peacock", chance:15, requires:{locus:"leopard", anyOf:["nLp","LpLp"]}, requiresLabel:"LP gene"},
+  {type:"conditional", name:"Bloodmark", chance:15, requires:{locus:"grey", anyOf:["nG","GG"]}, requiresLabel:"grey"},
+  {type:"conditional", name:"Mismarked Appy", chance:10, requires:{locus:"leopard", anyOf:["nLp","LpLp"]}, requiresLabel:"LP gene"},
+  {type:"flat", name:"Brindle", chance:10},
+  {type:"flat", name:"Lacing", chance:10},
+  {type:"flat", name:"Chimera", chance:10},
+  {type:"flat", name:"Tiger Eyes", chance:10},
+  {type:"flat", name:"Vitiligo", chance:10},
+  {type:"flat", name:"Reverse Brindle", chance:10},
+  {type:"flat", name:"Somatic", chance:10},
+  {type:"flat", name:"Extended Dun", chance:10},
+  {type:"flat", name:"Bend Or Spots", chance:10},
+];
+
+function appendBreedingTraitsEditor(wrap){
+  const breeds=(state.customBreeds||[]);
+  const card=el('div','card');
+  card.innerHTML=`
+    <h3 style="margin-top:0;">Breeding traits & risks</h3>
+    <p class="small" style="color:#c8b8a8;">Configure the rare traits, health risks, and lethal genotypes each created breed can pass to foals. These feed the Foal Calculator.</p>
+    ${breeds.length? `
+      <label class="small">Breed</label>
+      <select id="bt_breed">${breeds.map(b=>`<option value="${escAttr(b.id)}">${escAttr(b.name)}</option>`).join("")}</select>
+      <button id="bt_load_ilb" class="secondary" style="margin-left:8px;">Load Irish Lightblood defaults</button>
+      <div id="bt_list" style="margin-top:12px;"></div>
+      <div style="margin-top:12px;border-top:1px solid #3a2e22;padding-top:12px;">
+        <b class="small" style="color:#e8c86a;">Add a trait</b>
+        <div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:8px;margin-top:6px;">
+          <input id="bt_name" placeholder="Trait name" />
+          <select id="bt_type"><option value="flat">Flat %</option><option value="health">Trait + health risk</option><option value="conditional">Conditional (needs gene)</option></select>
+          <input id="bt_chance" type="number" min="0" max="100" placeholder="% pass" />
+        </div>
+        <div id="bt_extra" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:6px;"></div>
+        <button id="bt_add" style="margin-top:8px;">Add trait</button>
+      </div>
+      <div style="margin-top:8px;"><span id="bt_status" class="small"></span></div>
+    ` : `<p class="small" style="color:#c98a3a;">Create a breed first (above), then configure its breeding traits here.</p>`}
+  `;
+  wrap.appendChild(card);
+  if(!breeds.length) return;
+
+  const breedSel=card.querySelector('#bt_breed');
+  const getBreed=()=>breeds.find(b=>b.id===breedSel.value);
+
+  function drawList(){
+    const b=getBreed(); if(!b) return;
+    const list=card.querySelector('#bt_list');
+    const traits=b.rareTraits||[];
+    if(!traits.length){ list.innerHTML=`<p class="small" style="color:#8a7a6a;">No traits configured for ${escAttr(b.name)} yet. Add some below, or load the Irish Lightblood defaults.</p>`; return; }
+    list.innerHTML = traits.map((t,i)=>{
+      const detail = t.type==="health" ? ` → ${escAttr(t.healthName||'')} ${t.healthChance||0}%`
+        : t.type==="conditional" ? ` (needs ${escAttr(t.requiresLabel||t.requires?.locus||'gene')})` : '';
+      return `<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 8px;border-bottom:1px solid #2e241a;">
+        <span class="small"><b>${escAttr(t.name)}</b> · ${t.chance}% · <span style="color:#8a9ac8;">${t.type}</span>${detail}</span>
+        <button data-del="${i}" class="secondary" style="padding:2px 10px;color:#e08080;">Remove</button>
+      </div>`;
+    }).join("");
+    list.querySelectorAll('[data-del]').forEach(btn=>btn.onclick=async()=>{
+      b.rareTraits.splice(+btn.dataset.del,1); await saveGlobalBreeds(); drawList();
+    });
+  }
+
+  // show/hide extra fields based on type
+  const typeSel=card.querySelector('#bt_type'), extra=card.querySelector('#bt_extra');
+  function drawExtra(){
+    const t=typeSel.value;
+    if(t==="health") extra.innerHTML=`<input id="bt_hname" placeholder="Health condition (e.g. deaf)" /><input id="bt_hchance" type="number" min="0" max="100" placeholder="% health risk" />`;
+    else if(t==="conditional") extra.innerHTML=`<input id="bt_reqlocus" placeholder="Required gene locus (e.g. leopard)" /><input id="bt_reqcodes" placeholder="Codes, comma-sep (e.g. nLp,LpLp)" />`;
+    else extra.innerHTML='';
+  }
+  typeSel.onchange=drawExtra; drawExtra();
+
+  breedSel.onchange=drawList; drawList();
+
+  card.querySelector('#bt_load_ilb').onclick=async()=>{
+    const b=getBreed(); if(!b) return;
+    if(!confirm(`Load the Irish Lightblood trait defaults into "${b.name}"? This replaces its current trait list.`)) return;
+    b.rareTraits = JSON.parse(JSON.stringify(ILB_TRAIT_DEFAULTS));
+    card.querySelector('#bt_status').textContent='Saving…';
+    const ok=await saveGlobalBreeds();
+    card.querySelector('#bt_status').textContent = ok?'Loaded ILB defaults.':'⚠ Save failed.';
+    drawList();
+  };
+
+  card.querySelector('#bt_add').onclick=async()=>{
+    const b=getBreed(); if(!b) return;
+    const name=card.querySelector('#bt_name').value.trim();
+    const chance=Number(card.querySelector('#bt_chance').value)||0;
+    const type=typeSel.value;
+    if(!name){ card.querySelector('#bt_status').textContent='Give the trait a name.'; return; }
+    const t={type,name,chance};
+    if(type==="health"){
+      t.healthName=card.querySelector('#bt_hname').value.trim();
+      t.healthChance=Number(card.querySelector('#bt_hchance').value)||0;
+    } else if(type==="conditional"){
+      const locus=card.querySelector('#bt_reqlocus').value.trim();
+      const codes=card.querySelector('#bt_reqcodes').value.split(',').map(s=>s.trim()).filter(Boolean);
+      t.requires={locus, anyOf:codes}; t.requiresLabel=locus;
+    }
+    if(!b.rareTraits) b.rareTraits=[];
+    b.rareTraits.push(t);
+    card.querySelector('#bt_status').textContent='Saving…';
+    const ok=await saveGlobalBreeds();
+    card.querySelector('#bt_status').textContent = ok?'Added.':'⚠ Save failed.';
+    card.querySelector('#bt_name').value=''; card.querySelector('#bt_chance').value='';
+    drawExtra(); drawList();
+  };
+}
+
+// ============================================
+// BREEDING — foal calculator (preview only; no real foals yet)
+// ============================================
+let __breedSire=null, __breedDam=null;
+
+function breedLociForBreed(breedKey){
+  const allowed = new Set(["extension","agouti", ...getAllowedLoci(breedKey)]);
+  return allLoci().filter(l=>allowed.has(l.key));
+}
+
+// A horse's per-locus genotype: prefer structured genoObj, else fall back to
+// homozygous-recessive defaults so the calculator still works on old horses.
+function horseGenoByLocus(horse, loci){
+  const out={};
+  loci.forEach(l=>{
+    const fromObj = horse && horse.genoObj && horse.genoObj[l.key];
+    out[l.key] = fromObj || defaultCodeForLocus(l);
+  });
+  return out;
+}
+function defaultCodeForLocus(locus){
+  const opts=(locus.options||[]).map(o=>o.code);
+  const nOpt=opts.find(c=>/^n/.test(c));
+  if(nOpt) return nOpt;
+  const lower=opts.find(c=>c===c.toLowerCase());
+  return lower || opts[0] || "";
+}
+
+function findBreedByName(name){
+  if(!name) return null;
+  const list=(state.customBreeds||[]);
+  return list.find(b=>String(b.name||"").toLowerCase()===String(name).toLowerCase())||null;
+}
+function breedRareTraits(breedName){ const b=findBreedByName(breedName); return (b&&Array.isArray(b.rareTraits))?b.rareTraits:[]; }
+function breedRiskRules(breedName){ const b=findBreedByName(breedName); return (b&&Array.isArray(b.geneRisks))?b.geneRisks:[]; }
+function breedLethals(breedName){ const b=findBreedByName(breedName); return (b&&Array.isArray(b.lethals))?b.lethals:[]; }
+
+function pedigreeResolver(){
+  const byId={}; (state.horses||[]).forEach(h=>byId[h.id]=h);
+  return function(h){
+    const horse = h.id ? byId[h.id] : null;
+    if(!horse || !horse.pedigree) return {};
+    const ped={};
+    if(horse.pedigree.sire?.inRosterId) ped.sire={id:horse.pedigree.sire.inRosterId};
+    if(horse.pedigree.dam?.inRosterId)  ped.dam ={id:horse.pedigree.dam.inRosterId};
+    return ped;
+  };
+}
+
+function renderBreeding(){
+  const wrap=document.createElement('div');
+  const horses=state.horses||[];
+  const opts=(sel)=>`<option value="">— pick a horse —</option>`+horses.map(h=>
+    `<option value="${h.id}" ${sel===h.id?'selected':''}>${escAttr(h.name)} (${escAttr(h.breed||'?')})</option>`).join("");
+
+  wrap.innerHTML=`
+    <div class="card">
+      <h2 style="margin-top:0;">🧬 Foal Calculator</h2>
+      <p class="small" style="color:#c8b8a8;">Pick two horses to preview what their foal could be — coat-colour odds from real genetics, averaged stats, rare-trait chances, inbreeding and health risks. This is a preview tool; it doesn't create a foal yet.</p>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+        <div>
+          <label class="small">Sire (father)</label>
+          <select id="bc_sire">${opts(__breedSire)}</select>
+          <div id="bc_sireInfo" class="small" style="color:#a89888;margin-top:4px;"></div>
+        </div>
+        <div>
+          <label class="small">Dam (mother)</label>
+          <select id="bc_dam">${opts(__breedDam)}</select>
+          <div id="bc_damInfo" class="small" style="color:#a89888;margin-top:4px;"></div>
+        </div>
+      </div>
+      <button id="bc_calc" style="margin-top:12px;">Calculate foal</button>
+    </div>
+    <div id="bc_result"></div>`;
+
+  const sireSel=wrap.querySelector('#bc_sire'), damSel=wrap.querySelector('#bc_dam');
+  const showInfo=(sel,box)=>{
+    const h=horses.find(x=>x.id===sel.value);
+    wrap.querySelector(box).innerHTML = h
+      ? `${escAttr(h.genotype||'no genetics set')} · Lv ${h.level||1}${h.genoObj?'':' · <span style="color:#c98a3a;">no structured genetics — using defaults</span>'}`
+      : '';
+  };
+  sireSel.onchange=()=>{ __breedSire=sireSel.value; showInfo(sireSel,'#bc_sireInfo'); };
+  damSel.onchange =()=>{ __breedDam =damSel.value;  showInfo(damSel,'#bc_damInfo'); };
+  if(__breedSire) showInfo(sireSel,'#bc_sireInfo');
+  if(__breedDam)  showInfo(damSel,'#bc_damInfo');
+
+  wrap.querySelector('#bc_calc').onclick=()=>{
+    const sire=horses.find(x=>x.id===sireSel.value);
+    const dam =horses.find(x=>x.id===damSel.value);
+    const box=wrap.querySelector('#bc_result');
+    if(!sire||!dam){ box.innerHTML=`<div class="card"><p class="small" style="color:#c98a3a;">Pick both a sire and a dam.</p></div>`; return; }
+    if(sire.id===dam.id){ box.innerHTML=`<div class="card"><p class="small" style="color:#c98a3a;">A horse can't breed with itself — pick two different horses.</p></div>`; return; }
+    box.innerHTML = computeFoalPreview(sire,dam);
+  };
+  return wrap;
+}
+
+function pct(x){ return (x*100).toFixed(x>=0.0995?0:1)+'%'; }
+
+function computeFoalPreview(sire,dam){
+  const breedName = dam.breed || sire.breed || "";
+  const breedKey = (breedName||"").trim().toLowerCase();
+  const loci = breedLociForBreed(breedKey);
+
+  const sireGeno=horseGenoByLocus(sire,loci);
+  const damGeno =horseGenoByLocus(dam,loci);
+
+  const foalByLocus={};
+  loci.forEach(l=>{ foalByLocus[l.key]=crossLocus(sireGeno[l.key], damGeno[l.key], l); });
+
+  const fstats=foalStats(sire.stats||{}, dam.stats||{}, STATS);
+
+  const pedOf=pedigreeResolver();
+  const inb=inbreedingCoefficient({id:sire.id}, {id:dam.id}, pedOf, 5);
+  const riskMult=inbreedingRiskMultiplier(inb.coi);
+
+  const rareCfg=breedRareTraits(breedName);
+  const sireTraits=(sire.rareTraits||sire.markings||[]);
+  const damTraits =(dam.rareTraits||dam.markings||[]);
+  const traitRows=resolveRareTraits(rareCfg, sireTraits, damTraits, foalByLocus, riskMult);
+
+  const riskRules=breedRiskRules(breedName);
+  const geneRiskFlags=foalRisks(foalByLocus, riskRules);
+  const lethals=breedLethals(breedName);
+  const lethalFlags=[];
+  Object.entries(foalByLocus).forEach(([lk,outcomes])=>{
+    outcomes.forEach(o=>{ if(isLethalGenotype(lk,o.code,lethals)) lethalFlags.push({locus:lk,code:o.code,p:o.p}); });
+  });
+
+  const lociHtml = loci.map(l=>{
+    const outs=foalByLocus[l.key];
+    if(outs.length===1 && outs[0].p>=0.999) return "";
+    const rows=outs.map(o=>`<span class="tag" style="margin:2px;">${escAttr(o.code)} · ${pct(o.p)}</span>`).join("");
+    return `<div style="margin:6px 0;"><b class="small" style="color:#e8c86a;">${escAttr(l.label||l.key)}</b><div>${rows}</div></div>`;
+  }).filter(Boolean).join("");
+
+  const statHtml = STATS.map(s=>`
+    <div style="display:flex;justify-content:space-between;padding:2px 8px;">
+      <span class="small" style="color:var(--dim);">${STAT_LABELS[s]}</span>
+      <span class="small" style="color:var(--accent);font-weight:bold;">${fstats[s]} <span style="color:#8a7a6a;font-weight:normal;">(${sire.stats?.[s]??0}+${dam.stats?.[s]??0})/2</span></span>
+    </div>`).join("");
+
+  const traitHtml = traitRows.length ? traitRows.map(t=>{
+    const health = t.healthName
+      ? ` · <span style="color:#d98a6a;">${pct(t.healthChance)} ${escAttr(t.healthName)}${t.healthInflated?' ⚠':''} (${pct(t.healthOverall)} overall)</span>`
+      : '';
+    const cond = t.conditional ? ` <span class="small" style="color:#8a9ac8;">(needs ${escAttr(t.requiresLabel||'gene')})</span>` : '';
+    return `<div style="padding:3px 8px;"><b class="small">${escAttr(t.name)}</b> · ${pct(t.chance)}${cond}${health}</div>`;
+  }).join("") : `<p class="small" style="color:#8a7a6a;padding:0 8px;">No rare traits possible from these parents.</p>`;
+
+  const inbHtml = inb.coi>0 ? `
+    <div class="card" style="border-color:#8a5a2a;">
+      <h3 style="margin-top:0;color:#e0a860;">⚠ Inbreeding detected</h3>
+      <p class="small">Inbreeding coefficient: <b>${pct(inb.coi)}</b> — health-risk odds are raised <b>${riskMult.toFixed(2)}×</b> on this pairing. Shared ancestors: ${inb.contributors.length}.</p>
+    </div>` : '';
+
+  const riskHtml = (geneRiskFlags.length||lethalFlags.length) ? `
+    <div class="card" style="border-color:#a04a2a;">
+      <h3 style="margin-top:0;color:#e07850;">Health & genetic risks</h3>
+      ${lethalFlags.map(f=>`<div class="small" style="color:#e05050;">☠ <b>Lethal:</b> ${escAttr(f.code)} — ${pct(f.p)} chance (this genotype is fatal).</div>`).join("")}
+      ${geneRiskFlags.map(f=>`<div class="small" style="color:#e0906a;">⚕ ${escAttr(f.code)} — ${escAttr(f.risk)} · ${pct(f.p)} (${escAttr(f.severity)}).</div>`).join("")}
+    </div>` : '';
+
+  return `
+    <div class="card">
+      <h3 style="margin-top:0;">Foal preview — ${escAttr(sire.name)} × ${escAttr(dam.name)}</h3>
+      <p class="small" style="color:#a89888;">Breed: ${escAttr(breedName||'unspecified')}. Colour odds shown per gene.</p>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+        <div>
+          <h4 style="color:#e8c86a;margin:0 0 6px;">Base stats (floored average)</h4>
+          ${statHtml}
+        </div>
+        <div>
+          <h4 style="color:#e8c86a;margin:0 0 6px;">Rare traits</h4>
+          ${traitHtml}
+        </div>
+      </div>
+      <h4 style="color:#e8c86a;margin:14px 0 6px;">Coat genetics — per-gene odds</h4>
+      ${lociHtml || '<p class="small" style="color:#8a7a6a;">Both parents are identical at every gene — the foal matches them.</p>'}
+    </div>
+    ${inbHtml}
+    ${riskHtml}`;
 }
 
 function calcShowEarnings(h){
