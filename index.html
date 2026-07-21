@@ -3928,6 +3928,7 @@ function renderTraining(){
       <p class="small" style="margin:4px 0 0;opacity:.75;">Type the bonus name and how much EXP it's worth. It's added to this image's total and shown in the log.</p>
     </div>
     <div id="tr_rpp_slot"></div>
+    <div id="tr_total" style="margin-top:12px;padding:10px 12px;border:1px solid #4a392a;border-radius:8px;background:#15100c;"></div>
     <button id="tr_go" style="margin-top:12px;">✓ Log Training</button>
     <div id="tr_result"></div>
   `;
@@ -4062,6 +4063,46 @@ function renderTraining(){
   card.querySelector('#tr_image_url').onblur=()=>{
     card.querySelector('#tr_image_preview').innerHTML = urlImagePreviewHTML(uploadedImage, 'Training Art');
   };
+
+  // Live total: mirrors the submit math below so players can double-check
+  // before logging. KEEP IN SYNC with the #tr_go handler.
+  const recalcTrTotal=()=>{
+    const box=card.querySelector('#tr_total'); if(!box) return;
+    try{
+      const h=state.horses.find(x=>x.id===card.querySelector('#tr_horse').value);
+      const artType=card.querySelector('#tr_art').value;
+      if(!h || !artType){ box.innerHTML='<span class="small" style="opacity:.6;">Pick a horse and an art type to see this log\'s total.</span>'; return; }
+      const t=trainingOptionsFor(h).find(x=>x.id===card.querySelector('#tr_type').value);
+      const t2=combinedMode?trainingOptionsFor(h).find(x=>x.id===card.querySelector('#tr_type2').value):null;
+      const imgCount=Math.max(1, parseInt(card.querySelector('#tr_imgcount').value)||1);
+      const allStats={...((t&&t.stats)||{})};
+      if(t2) Object.entries(t2.stats).forEach(([st,v])=>allStats[st]=(allStats[st]||0)+v);
+      if(imgCount>1) Object.keys(allStats).forEach(st=>allStats[st]=allStats[st]*imgCount);
+      applyRiderTrainingBonus(h, allStats);
+      let exp=(ART_EXP[artType]||0)*imgCount;
+      exp+=calcLitExp(parseInt(card.querySelector('#tr_lit').value)||0);
+      selectedBonuses.forEach(k=>{ if(!BONUS_EXP[k]) return;
+        if(k==="Additional Creature (per)"){ const nEl=card.querySelector('#tr_creature_n'); exp+=BONUS_EXP[k]*Math.max(1,parseInt(nEl&&nEl.value)||1); }
+        else exp+=BONUS_EXP[k]; });
+      exp+=riderTrainingExp(h);
+      const cbL=(card.querySelector('#tr_cb_label').value||'').trim();
+      const cbE=parseInt(card.querySelector('#tr_cb_exp').value)||0;
+      if(cbL && cbE) exp+=cbE;
+      const depIds=[...(card.__depicted||[])];
+      if(depIds.length){ const b=resolveDepictedBonus(depIds); exp+=b.exp;
+        Object.entries(b.stats).forEach(([st,v])=>allStats[st]=(allStats[st]||0)+v); }
+      const statBits=Object.entries(allStats).filter(([,v])=>v).map(([st,v])=>`+${v} ${STAT_LABELS[st]||st}`);
+      const ppEl=card.querySelector('.rpp_sum'); const pp=ppEl?Number(ppEl.textContent)||0:0;
+      box.innerHTML=`<b style="color:var(--accent,#d29a3e);">This log will grant:</b> <b>+${exp} EXP</b>`
+        +(statBits.length?` &nbsp;·&nbsp; ${statBits.join(', ')}`:'')
+        +(pp>0?` &nbsp;·&nbsp; Rider <b>+${pp} PP</b>`:'')
+        +(imgCount>1?` <span class="small" style="opacity:.7;">(collage ×${imgCount})</span>`:'');
+    }catch(err){ box.textContent=''; }
+  };
+  card.addEventListener('input', recalcTrTotal);
+  card.addEventListener('change', recalcTrTotal);
+  card.addEventListener('click', ev=>{ if(ev.target.closest && ev.target.closest('.pill')) setTimeout(recalcTrTotal,0); });
+  recalcTrTotal();
 
   card.querySelector('#tr_go').onclick=async()=>{
     const hId=card.querySelector('#tr_horse').value;
@@ -4312,6 +4353,7 @@ function buildShowLogForm(){
 
     <div id="cs_rpp_slot"></div>
 
+    <div id="cs_total" style="margin:10px 0 8px;padding:10px 12px;border:1px solid #4a392a;border-radius:8px;background:#15100c;"></div>
     <button id="cs_go" style="width:100%;margin-top:4px;">✓ Save Show Record</button>
     <div id="cs_result"></div>
   `;
@@ -4401,6 +4443,40 @@ function buildShowLogForm(){
     prizeImages.push({dataUrl:"", label:""});
     refreshPrizeArea();
   };
+
+  // Live total: mirrors the submit math below. KEEP IN SYNC with #cs_go.
+  const recalcCsTotal=()=>{
+    const box=card.querySelector('#cs_total'); if(!box) return;
+    try{
+      const artEl=card.querySelector('#cs_art_type');
+      const artType=artEl?artEl.value:"";
+      const placement=Number(card.querySelector('#cs_place').value)||null;
+      let exp=0;
+      if(artType && ART_EXP[artType]){
+        exp+=ART_EXP[artType];
+        const litEl=card.querySelector('#cs_lit');
+        exp+=calcLitExp(parseInt(litEl && litEl.value)||0);
+        exp+=1; // show entry
+        selectedBonuses.forEach(k=>{ if(!BONUS_EXP[k]) return;
+          if(k==="Additional Creature (per)"){ const nEl=card.querySelector('#cs_creature_n'); exp+=BONUS_EXP[k]*Math.max(1,parseInt(nEl&&nEl.value)||1); }
+          else exp+=BONUS_EXP[k]; });
+        if(placement) exp+=({1:4,2:3,3:2}[placement]||1);
+      }
+      const ppEl=card.querySelector('.rpp_sum'); const pp=ppEl?Number(ppEl.textContent)||0:0;
+      if(exp>0 || pp>0){
+        box.innerHTML=`<b style="color:var(--accent,#d29a3e);">This record will grant:</b> `
+          +(exp>0?`<b>+${exp} EXP</b>`:`<span class="small">no show art = no EXP</span>`)
+          +(pp>0?` &nbsp;·&nbsp; Rider <b>+${pp} PP</b>`:'')
+          +` <span class="small" style="opacity:.7;">(shows add EXP only — no stats)</span>`;
+      } else {
+        box.innerHTML='<span class="small" style="opacity:.6;">Add show art (pick an art type) to earn EXP — placement adds a bonus on top.</span>';
+      }
+    }catch(err){ box.textContent=''; }
+  };
+  card.addEventListener('input', recalcCsTotal);
+  card.addEventListener('change', recalcCsTotal);
+  card.addEventListener('click', ev=>{ if(ev.target.closest && ev.target.closest('.pill')) setTimeout(recalcCsTotal,0); });
+  recalcCsTotal();
 
   card.querySelector('#cs_go').onclick=async()=>{
     const hId=card.querySelector('#cs_horse').value;
@@ -6370,12 +6446,15 @@ function renderHorseProfilePage(app, h){
     </div>`;
   }).join("")}</div>` : `<div class="small" style="opacity:.6;">No competition history.</div>`;
 
-  const artLogHtml=h.artLog.length?`<div class="artlog-panel" style="max-height:300px;">${h.artLog.map(e=>`
-    <div class="artlog-entry" style="display:flex;gap:8px;align-items:flex-start;">
-      ${e.image?`<img src="${e.image}" class="artlog-thumb" style="flex:none;cursor:zoom-in;" onclick="openLightbox('${jsStr(e.image)}','${jsStr(e.label)}')" />`:""}
-      <div><b>${e.label}</b> <span class="tag">+${e.exp} EXP</span>
-        ${e.link?`<a href="${e.link}" target="_blank" style="color:#c98a3a;font-size:1em;margin-left:4px;"></a>`:""}
-        <div class="small">${e.art||""}${e.lit?` · ${e.lit}`:""}</div>
+  // Collage-style art log: 300px thumbnails in a grid, newest first. Entries
+  // without an image still show as a tile so the log stays complete.
+  const artLogHtml=h.artLog.length?`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px;max-height:680px;overflow-y:auto;padding-right:4px;">${h.artLog.map(e=>`
+    <div style="background:#15100c;border:1px solid #4a392a;border-radius:8px;overflow:hidden;display:flex;flex-direction:column;">
+      ${e.image?`<img src="${e.image}" loading="lazy" style="width:100%;height:300px;object-fit:cover;cursor:zoom-in;display:block;" onclick="openLightbox('${jsStr(e.image)}','${jsStr(e.label)}')" />`
+              :`<div style="width:100%;height:300px;display:flex;align-items:center;justify-content:center;font-size:2.6em;color:#4a392a;background:#100b08;">🎨</div>`}
+      <div style="padding:8px 10px;">
+        <b style="font-size:.95em;">${e.label}</b> <span class="tag">+${e.exp} EXP</span>${e.placement?` <span class="tag">${["1st","2nd","3rd","4th","5th","6th"][e.placement-1]||e.placement+"th"}</span>`:""}
+        <div class="small" style="opacity:.85;">${e.art||""}${e.lit?` · ${e.lit}`:""}${e.link?` · <a href="${e.link}" target="_blank" style="color:#c98a3a;">link</a>`:""}</div>
       </div>
     </div>`).join("")}</div>`:
     `<div class="small" style="opacity:.6;">No art logged yet.</div>`;
