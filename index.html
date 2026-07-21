@@ -1196,6 +1196,51 @@ function stripBig(obj){
 // derived from the shop entry. Tokens/tickets/consumables are left alone.
 const SHOP_TACK_CATS   = ["Saddle","Bridle","Shoes","Boots","Blanket","Other","Tack"];
 const SHOP_ATTIRE_CATS = ["Jacket","Shirt","Breeches","Boots","Helmet","Gloves","Accessory","Attire","Apparel"];
+// Load consumable EFFECT items (EXP/stat treats, breed tokens) the player owns,
+// so the training log can offer an "Item used" picker. Read-only snapshot into
+// state.consumables; spending happens at use time via spendConsumable().
+async function loadConsumables(userId){
+  state.consumables = [];
+  try{
+    const DB = await waitForDB();
+    if(!DB || !window.EquiDB) return;
+    const inv = await window.EquiDB.get('inventory', userId);
+    const items = (inv && inv.items) || [];
+    for(const e of items){
+      if(!e || !e.effect) continue;                 // only items with an authored effect
+      const left = (Number(e.usesLeft)>0) ? Number(e.usesLeft)
+                  : (e.singleUse ? (Number(e.qty)||1) : (Number(e.qty)||0));
+      if(left<=0) continue;
+      state.consumables.push({
+        invId: e.id, name: e.name||'Consumable', effect: e.effect,
+        effectValue: Number(e.effectValue)||0, effectStat: e.effectStat||null,
+        effectTag: e.effectTag||null, left, shopName: e.shopName||'a shop'
+      });
+    }
+  }catch(err){ console.warn('[Stable] consumable load skipped:', err && err.message || err); }
+}
+
+// Spend ONE use of a consumable in the shared inventory doc, then return true.
+// Mirrors the ledger-safe token pattern: decrement usesLeft or qty, drop it when
+// depleted, write the whole inventory back.
+async function spendConsumable(userId, invId){
+  const DB = await waitForDB();
+  if(!DB || !window.EquiDB) return false;
+  const inv = await window.EquiDB.get('inventory', userId) || {id:userId, items:[]};
+  inv.items = inv.items || [];
+  const e = inv.items.find(x=>x && x.id===invId);
+  if(!e) return false;
+  if(Number(e.usesLeft)>0){
+    e.usesLeft = Number(e.usesLeft)-1;
+    if(e.usesLeft<=0) inv.items = inv.items.filter(x=>x!==e);
+  } else {
+    e.qty = (Number(e.qty)||1)-1;
+    if(e.qty<=0) inv.items = inv.items.filter(x=>x!==e);
+  }
+  await window.EquiDB.put('inventory', userId, userId, inv);
+  return true;
+}
+
 async function mergeShopInventory(userId){
   try{
     const DB = await waitForDB();
@@ -1619,6 +1664,7 @@ async function loadFromSheets(){
     state.tackInventory   = fb.state?.tackInventory || [];
     state.attireInventory = fb.state?.attireInventory || [];
     await mergeShopInventory(userId);   // fold in shop-bought tack/attire (with bonuses)
+    await loadConsumables(userId);      // load EXP/stat treats for the "Item used" picker
     state.horses.forEach(h=>{
       if(!h.artLog) h.artLog=[];
       // Normalisation that used to live in the Sheets loader — kept so horses
@@ -3920,6 +3966,12 @@ function renderTraining(){
       <div id="tr_depicted_none" class="small" style="opacity:.7;">You don't own any bonus tack/attire yet — buy some from a shop.</div>
     </div>
     <div style="margin-top:8px;">
+      <label>Item Used <span class="small">(optional — spend an EXP or Stat treat on this horse)</span></label>
+      <div id="tr_consumables" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px;"></div>
+      <div id="tr_consumables_none" class="small" style="opacity:.7;">No usable treats in your saddlebag. Buy EXP or Stat treats from a shop.</div>
+      <p class="small" style="margin:4px 0 0;opacity:.7;">Picking a treat spends one use when you log — its effect is added to this horse.</p>
+    </div>
+    <div style="margin-top:8px;">
       <label>Custom Bonus <span class="small">(optional — e.g. a seasonal or breed event bonus)</span></label>
       <div class="row" style="gap:8px;">
         <div style="flex:2;"><input id="tr_cb_label" placeholder="e.g. Summer Training Bonus" /></div>
@@ -4043,6 +4095,27 @@ function renderTraining(){
   }
   card.__depicted=depicted;   // expose for submit handler
 
+  // "Item used" picker: EXP/stat treats only (breed tokens are held for the
+  // breeding/import flow, not spent here). Single-select-per-treat via chips.
+  const usedItems=new Set();
+  const treatPool=(state.consumables||[]).filter(c=> (c.effect==='exp'||c.effect==='stat') && c.left>0);
+  const consBox=card.querySelector('#tr_consumables');
+  const consNone=card.querySelector('#tr_consumables_none');
+  if(treatPool.length && consBox){
+    consNone.style.display='none';
+    consBox.innerHTML=treatPool.map(c=>{
+      const eff = c.effect==='exp' ? `+${c.effectValue} EXP` : `+${c.effectValue} ${STAT_LABELS[c.effectStat]||c.effectStat}`;
+      return `<button type="button" class="pill" data-cons="${escAttr(c.invId)}" title="${escAttr(eff)} · ${c.left} left">${escAttr(c.name)} <span style="opacity:.7;">(${eff}${c.left>1?` · ${c.left} left`:''})</span></button>`;
+    }).join("");
+    consBox.querySelectorAll('[data-cons]').forEach(b=>b.onclick=()=>{
+      const id=b.dataset.cons;
+      if(usedItems.has(id)){ usedItems.delete(id); b.classList.remove('active'); }
+      else { usedItems.add(id); b.classList.add('active'); }
+      if(typeof recalcTrTotal==='function') recalcTrTotal();
+    });
+  }
+  card.__usedItems=usedItems;
+
   card.querySelector('#tr_lit').oninput=()=>{
     const wc=parseInt(card.querySelector('#tr_lit').value)||0;
     const exp=calcLitExp(wc);
@@ -4091,6 +4164,12 @@ function renderTraining(){
       const depIds=[...(card.__depicted||[])];
       if(depIds.length){ const b=resolveDepictedBonus(depIds); exp+=b.exp;
         Object.entries(b.stats).forEach(([st,v])=>allStats[st]=(allStats[st]||0)+v); }
+      // Items used (EXP/stat treats) in the live total
+      [...(card.__usedItems||[])].forEach(invId=>{
+        const c=(state.consumables||[]).find(x=>x.invId===invId); if(!c) return;
+        if(c.effect==='exp') exp+=Number(c.effectValue)||0;
+        else if(c.effect==='stat') allStats[c.effectStat]=(allStats[c.effectStat]||0)+(Number(c.effectValue)||0);
+      });
       const statBits=Object.entries(allStats).filter(([,v])=>v).map(([st,v])=>`+${v} ${STAT_LABELS[st]||st}`);
       const ppEl=card.querySelector('.rpp_sum'); const pp=ppEl?Number(ppEl.textContent)||0:0;
       box.innerHTML=`<b style="color:var(--accent,#d29a3e);">This log will grant:</b> <b>+${exp} EXP</b>`
@@ -4175,10 +4254,32 @@ function renderTraining(){
       b.notes.forEach(n=>sources.push(n));
       depictedNames=b.notes;
     }
+
+    // Items used: EXP/stat treats spent on this horse. Apply the effect to the
+    // totals and remember which to spend AFTER a successful save.
+    const usedIds=[...(card.__usedItems||[])];
+    const treatsToSpend=[];
+    usedIds.forEach(invId=>{
+      const c=(state.consumables||[]).find(x=>x.invId===invId);
+      if(!c) return;
+      if(c.effect==='exp'){ expGain+=Number(c.effectValue)||0; sources.push(`${c.name} (+${c.effectValue} EXP)`); }
+      else if(c.effect==='stat'){ const st=c.effectStat; const v=Number(c.effectValue)||0; allStats[st]=(allStats[st]||0)+v; sources.push(`${c.name} (+${v} ${STAT_LABELS[st]||st})`); }
+      treatsToSpend.push(invId);
+    });
+
     h.exp+=expGain;
     checkLevelUp(h);
 
-    const trainEntry={id:uid2(),day:state.log.length+1,type:"training",label,art:artType,imgCount:imgCount>1?imgCount:undefined,lit:litWords?`${litWords} words`:null,bonuses:[...selectedBonuses],customBonus,depicted:depictedNames.length?depictedNames:undefined,exp:expGain,link:link||null,image:uploadedImage,statsDelta:allStats,milestoneIds};
+    const trainEntry={id:uid2(),day:state.log.length+1,type:"training",label,art:artType,imgCount:imgCount>1?imgCount:undefined,lit:litWords?`${litWords} words`:null,bonuses:[...selectedBonuses],customBonus,depicted:depictedNames.length?depictedNames:undefined,itemsUsed:treatsToSpend.length?treatsToSpend.map(id=>{const c=(state.consumables||[]).find(x=>x.invId===id);return c?c.name:id;}):undefined,exp:expGain,link:link||null,image:uploadedImage,statsDelta:allStats,milestoneIds};
+
+    // Spend the treats from the shared inventory now that the effect is locked in.
+    if(treatsToSpend.length){
+      for(const invId of treatsToSpend){
+        try{ await spendConsumable(bankAccount.userId, invId); }catch(e){}
+        const c=(state.consumables||[]).find(x=>x.invId===invId);
+        if(c){ c.left-=1; if(c.left<=0) state.consumables=state.consumables.filter(x=>x!==c); }
+      }
+    }
 
     // Rider Prestige chosen in the form's Rider Prestige block.
     const rppPick = trRPP.collect();
