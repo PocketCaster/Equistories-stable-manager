@@ -3899,7 +3899,7 @@ function showBreedingSlotModal(horseId, slotIndex){
       <div style="background:#15100c;padding:10px;border-radius:6px;margin-bottom:4px;">
         <b>${existing.role==="sire"?"Sired with":"Bred to"}:</b> ${escAttr(existing.partnerName)}${existing.partnerOwner?` (${escAttr(existing.partnerOwner)})`:""}<br>
         <b>Date:</b> ${escAttr(existing.date||"—")}<br>
-        ${existing.foalId ? `<b>Foal:</b> <span onclick="goToProfile('${existing.foalId}')" style="color:#c98a3a;cursor:pointer;text-decoration:underline;">${escAttr(existing.foalName)}</span>` : (existing.foalName?`<b>Foal:</b> ${escAttr(existing.foalName)} (not linked)`:'<b>Foal:</b> not yet born/added')}
+        ${existing.foalId ? `<b>Foal:</b> <span onclick="goToProfile('${existing.foalId}')" style="color:#c98a3a;cursor:pointer;text-decoration:underline;">${escAttr(existing.foalName)}</span>${existing.foalOwner?` <span class="small" style="opacity:.75;">(owned by ${escAttr(existing.foalOwner)})</span>`:''}` : (existing.foalName?`<b>Foal:</b> ${escAttr(existing.foalName)} (not linked)`:'<b>Foal:</b> not yet born/added')}
         ${existing.note?`<br><i>${escAttr(existing.note)}</i>`:""}
       </div>
       ${!existing.foalId ? `
@@ -3908,11 +3908,21 @@ function showBreedingSlotModal(horseId, slotIndex){
           <option value="">— select foal —</option>
           ${state.horses.filter(x=>x.id!==h.id).map(x=>`<option value="${escAttr(x.id)}">${escAttr(x.name)}</option>`).join("")}
         </select>
-        ${btn('bs_link_foal','Link Foal','#c98a3a','#241a14')}` : ""}
+        ${btn('bs_link_foal','Link Foal','#c98a3a','#241a14')}
+        <div id="bs_foal_member" style="margin-top:2px;"></div>
+        <p class="small" style="color:#a89888;margin:6px 0 0;">Foals from before the site often live on someone else's roster — use the box above to link one of theirs.</p>` : ""}
       ${btn('bs_clear','Clear this slot','#b1473f','#fff')}
       ${ghost('bs_cancel','Cancel')}`;
     box.querySelector('#bs_cancel').onclick=close;
     const lb=box.querySelector('#bs_link_foal'); if(lb) lb.onclick=doLinkFoal;
+    const mp=box.querySelector('#bs_foal_member');
+    if(mp) mp.appendChild(memberHorsePicker('bs_mf', "Or link a foal owned by another member", (foal, who)=>{
+      const rec=(h.breedingRecords||[]).find(r=>r.slotIndex===slotIndex);
+      if(!rec) return;
+      rec.foalId=foal.id; rec.foalName=foal.name; rec.foalOwner=who;
+      addLog(`Linked ${h.name}'s breeding record to ${foal.name} (owned by ${who}).`);
+      saveHorse(h); save(); close(); render();
+    }));
     box.querySelector('#bs_clear').onclick=doClear;
   }
 
@@ -4066,6 +4076,58 @@ function renderPedigreeChart(h){
 // LINEAGE EDIT MODAL (3-gen pedigree)
 // ============================================
 
+// ── Finding another member's horse ─────────────────────────────────────────
+// Horses are readable by everyone, but a horse's NAME lives inside the json
+// blob, so it can't be searched directly. The owner field IS queryable though —
+// so we ask who owns it, fetch just that member's horses with one indexed
+// lookup, and let you pick from the list. No scanning the whole game.
+const __memberHorseCache={};
+async function horsesOfMember(handle){
+  const key=String(handle||"").trim();
+  if(!key) return [];
+  if(__memberHorseCache[key]) return __memberHorseCache[key];
+  const DB=getDB(); if(!DB || !DB.listByOwner) return [];
+  try{
+    const list=await DB.listByOwner('horses', key);
+    __memberHorseCache[key]=list||[];
+    return __memberHorseCache[key];
+  }catch(e){ console.warn('[Stable] member horse lookup failed:', e && e.message); return []; }
+}
+// A reusable "whose horse is it? → which one?" control. Calls onPick(horse).
+function memberHorsePicker(idPrefix, labelText, onPick){
+  const box=document.createElement('div');
+  box.style.cssText='border:1px solid #3a4a6a;border-radius:6px;padding:10px;margin-top:8px;';
+  box.innerHTML=`
+    <div class="small" style="color:#8a9ac8;text-transform:uppercase;">${escAttr(labelText)}</div>
+    <div style="display:flex;gap:6px;margin-top:5px;">
+      <input id="${idPrefix}_owner" placeholder="Their bank username" style="flex:1;padding:7px;background:#15100c;border:1px solid #4a392a;color:#f1e6d8;border-radius:5px;" />
+      <button id="${idPrefix}_find" class="secondary" style="white-space:nowrap;padding:7px 12px;margin:0;">Find</button>
+    </div>
+    <div id="${idPrefix}_result" style="margin-top:6px;"></div>`;
+  const res=()=>box.querySelector('#'+idPrefix+'_result');
+  box.querySelector('#'+idPrefix+'_find').onclick=async()=>{
+    const who=box.querySelector('#'+idPrefix+'_owner').value.trim();
+    if(!who){ res().innerHTML='<span class="small" style="color:#e0906a;">Enter their username first.</span>'; return; }
+    res().innerHTML='<span class="small" style="opacity:.7;">Looking…</span>';
+    const list=await horsesOfMember(who);
+    if(!list.length){
+      res().innerHTML=`<span class="small" style="color:#e0906a;">No horses found under “${escAttr(who)}”. That's their <b>bank username</b>, not a display name — and it's case-sensitive.</span>`;
+      return;
+    }
+    res().innerHTML=`
+      <select id="${idPrefix}_pick" style="width:100%;padding:7px;background:#15100c;border:1px solid #4a392a;color:#f1e6d8;border-radius:5px;">
+        ${list.map(x=>`<option value="${escAttr(x.id)}">${escAttr(x.name)} (${escAttr(x.breed||'?')}${x.gender?', '+escAttr(x.gender):''})</option>`).join("")}
+      </select>
+      <button id="${idPrefix}_use" style="margin-top:6px;width:100%;background:#3a4a6a;color:#fff;border:none;padding:8px;border-radius:6px;font-weight:bold;cursor:pointer;">Use this horse</button>`;
+    res().querySelector('#'+idPrefix+'_use').onclick=()=>{
+      const id=res().querySelector('#'+idPrefix+'_pick').value;
+      const horse=list.find(x=>x.id===id);
+      if(horse) onPick(horse, who);
+    };
+  };
+  return box;
+}
+
 function showLineageModal(horseId){
   const h=state.horses.find(x=>x.id===horseId);
   if(!h) return;
@@ -4091,6 +4153,8 @@ function showLineageModal(horseId){
           <option value="">— not in roster —</option>
           ${rosterOpts.replace(`value="${inRosterVal}"`, `value="${inRosterVal}" selected`)}
         </select>
+        ${e.ownerHandle?`<div class="small" style="color:#8a9ac8;margin-top:5px;">Linked to <b>${escAttr(e.name)}</b>, owned by ${escAttr(e.ownerHandle)}</div>`:''}
+        <div data-memberpick="${key}" style="margin-top:4px;"></div>
       </div>`;
   }
 
@@ -4124,6 +4188,21 @@ function showLineageModal(horseId){
   </div>`;
   document.body.appendChild(overlay);
 
+  // A parent that belongs to somebody else — the common case for foals bred
+  // before the site, where the dam is still on another member's roster.
+  overlay.querySelectorAll('[data-memberpick]').forEach(slot=>{
+    const key=slot.dataset.memberpick;
+    slot.appendChild(memberHorsePicker('mp_'+key, "Or use another member's horse", (horse, who)=>{
+      const nameInp=overlay.querySelector(`[data-ped="${key}"][data-field="name"]`);
+      if(nameInp) nameInp.value=horse.name;
+      if(!h.pedigree[key]) h.pedigree[key]={name:"",link:"",inRosterId:""};
+      h.pedigree[key].externalId=horse.id;
+      h.pedigree[key].ownerHandle=who;
+      slot.querySelector('#mp_'+key+'_result').innerHTML =
+        `<span class="small" style="color:#9bd18a;">Linked to <b>${escAttr(horse.name)}</b> (${escAttr(who)}). Save the pedigree to keep it.</span>`;
+    }));
+  });
+
   overlay.querySelector('#ln_cancel').onclick=()=>overlay.remove();
   overlay.querySelector('#ln_save').onclick=()=>{
     if(!h.pedigree) h.pedigree={};
@@ -4131,6 +4210,10 @@ function showLineageModal(horseId){
       const key=inp.dataset.ped, field=inp.dataset.field;
       if(!h.pedigree[key]) h.pedigree[key]={name:"",link:"",inRosterId:""};
       h.pedigree[key][field]=inp.value.trim();
+      // Picking a roster horse supersedes a cross-member link.
+      if(field==="inRosterId" && inp.value.trim()){
+        delete h.pedigree[key].externalId; delete h.pedigree[key].ownerHandle;
+      }
     });
     h.sireId=h.pedigree.sire?.inRosterId||null;
     h.sireName=h.pedigree.sire?.name||"";
