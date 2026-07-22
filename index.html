@@ -353,6 +353,37 @@ const LEVEL_TABLE = {
   10:{exp:1000,bonus:5, slots:2, badge:"Excellent Stock"},
 };
 
+// ── Multi-image sheets / collages ──────────────────────────────────────────
+// One sheet can hold several DIFFERENT kinds of image — a fullbody, a halfbody
+// and a headshot, say. Each has to count at its own rate, so instead of a
+// single art type times a count, the form keeps a list of {art, n} rows.
+function readArtRows(card){
+  return [...card.querySelectorAll('[data-artrow]')].map(r=>({
+    art: (r.querySelector('[data-art-type]')||{}).value || "",
+    n:   Math.max(1, parseInt((r.querySelector('[data-art-n]')||{}).value)||1),
+  })).filter(x=>x.art);
+}
+function artRowsExp(rows){   return rows.reduce((s,r)=>s+(ART_EXP[r.art]||0)*r.n, 0); }
+function artRowsImages(rows){ return rows.reduce((s,r)=>s+r.n, 0); }
+function artRowsLabel(rows){  return rows.map(r=>r.n>1?`${r.art} ×${r.n}`:r.art).join(" + "); }
+function artRowsSources(rows){
+  return rows.map(r=>{
+    const each=ART_EXP[r.art]||0;
+    return r.n>1 ? `${r.art} ×${r.n} (+${each*r.n})` : `${r.art} (+${each})`;
+  });
+}
+// One row of the breakdown. The first row can't be removed.
+function artRowHTML(selected, n, removable){
+  return `<div data-artrow style="display:flex;gap:6px;align-items:center;margin-top:4px;">
+    <select data-art-type style="flex:1;">
+      <option value="">— select art type —</option>
+      ${Object.keys(ART_EXP).map(k=>`<option value="${k}"${selected===k?' selected':''}>${k} (+${ART_EXP[k]} EXP)</option>`).join("")}
+    </select>
+    <input type="number" data-art-n min="1" value="${n||1}" title="How many of this kind on the sheet" style="max-width:74px;" />
+    ${removable?`<button type="button" data-art-remove class="secondary" style="padding:4px 9px;margin:0;">✕</button>`:'<span style="width:29px;"></span>'}
+  </div>`;
+}
+
 const ART_EXP = {
   "Uncolored Headshot":1, "Colored Headshot":2,
   "Uncolored Halfbody":2, "Colored Halfbody":3,
@@ -1951,6 +1982,19 @@ function recomputeHorse(h){
     }
     if(entry.milestoneIds) entry.milestoneIds.forEach(id=>{ if(!h.completedMilestones.includes(id)) h.completedMilestones.push(id); });
   });
+
+  // Reference sheet bonus is DERIVED here, not stored. It used to be added
+  // straight to h.exp when the sheet was submitted, with no art-log entry to
+  // replay — and since exp is rebuilt from zero above and every horse
+  // recomputes on page load, the bonus was wiped on the next refresh. Worse,
+  // refBonusGiven stayed true so it was never granted again. Deriving it makes
+  // the recompute idempotent and self-correcting: horses that already had a
+  // reference sheet (including ones migrated from Sheets, which were flagged as
+  // paid without ever being credited) pick it up automatically, and it falls
+  // away again if the reference image is ever removed.
+  h.refBonusExp = h.referenceImage ? REF_SHEET_EXP : 0;
+  h.exp += h.refBonusExp;
+
   applyLevelsFromExp(h, true);
 
   // Fully-trained bonus: once a horse is level 10, its assigned rider grants a
@@ -4250,11 +4294,10 @@ function renderTraining(){
     </div>
     <div class="row" style="margin-top:10px;">
       <div>
-        <label>Art Type <span class="required">* Required</span></label>
-        <select id="tr_art">
-          <option value="">— select art type —</option>
-          ${Object.keys(ART_EXP).map(k=>`<option value="${k}">${k} (+${ART_EXP[k]} EXP)</option>`).join("")}
-        </select>
+        <label>What's on this sheet? <span class="required">* Required</span></label>
+        <div id="tr_artrows">${artRowHTML("",1,false)}</div>
+        <button type="button" id="tr_add_art" class="secondary" style="margin-top:6px;padding:4px 10px;">+ Add another image type</button>
+        <p class="small" style="margin:4px 0 0;opacity:.75;">One row per kind of image. A sheet with a fullbody, a halfbody and two headshots gets a row each — every image counts at its own rate.</p>
       </div>
       <div>
         <label>Literature Word Count <span class="small">(optional)</span></label>
@@ -4272,11 +4315,6 @@ function renderTraining(){
         <input type="number" id="tr_creature_n" min="1" value="1" style="max-width:90px;padding:4px 6px;" />
         <span class="small" style="opacity:.7;">(+2 EXP each)</span>
       </div>
-    </div>
-    <div style="margin-top:8px;">
-      <label>Images in this piece <span class="small">(collage / multi-image sheet)</span></label>
-      <input type="number" id="tr_imgcount" min="1" value="1" style="max-width:120px;" />
-      <p class="small" style="margin:4px 0 0;opacity:.75;">If this is a collage of several training pictures, set how many. Each image counts as its own training — the art EXP and stat gains multiply by this number. Word count, custom bonus, and rider bonus still count once.</p>
     </div>
     <div style="margin-top:8px;"><label>Link to Art <span class="small">(optional)</span></label><input id="tr_link" placeholder="https://…" /></div>
     <div style="margin-top:8px;">
@@ -4467,16 +4505,16 @@ function renderTraining(){
     const box=card.querySelector('#tr_total'); if(!box) return;
     try{
       const h=state.horses.find(x=>x.id===card.querySelector('#tr_horse').value);
-      const artType=card.querySelector('#tr_art').value;
-      if(!h || !artType){ box.innerHTML='<span class="small" style="opacity:.6;">Pick a horse and an art type to see this log\'s total.</span>'; return; }
+      const artRows=readArtRows(card);
+      if(!h || !artRows.length){ box.innerHTML='<span class="small" style="opacity:.6;">Pick a horse and at least one art type to see this log\'s total.</span>'; return; }
       const t=trainingOptionsFor(h).find(x=>x.id===card.querySelector('#tr_type').value);
       const t2=combinedMode?trainingOptionsFor(h).find(x=>x.id===card.querySelector('#tr_type2').value):null;
-      const imgCount=Math.max(1, parseInt(card.querySelector('#tr_imgcount').value)||1);
+      const imgCount=artRowsImages(artRows);
       const allStats={...((t&&t.stats)||{})};
       if(t2) Object.entries(t2.stats).forEach(([st,v])=>allStats[st]=(allStats[st]||0)+v);
       if(imgCount>1) Object.keys(allStats).forEach(st=>allStats[st]=allStats[st]*imgCount);
       applyRiderTrainingBonus(h, allStats);
-      let exp=(ART_EXP[artType]||0)*imgCount;
+      let exp=artRowsExp(artRows);
       exp+=calcLitExp(parseInt(card.querySelector('#tr_lit').value)||0);
       selectedBonuses.forEach(k=>{ if(!BONUS_EXP[k]) return;
         if(k==="Additional Creature (per)"){ const nEl=card.querySelector('#tr_creature_n'); exp+=BONUS_EXP[k]*Math.max(1,parseInt(nEl&&nEl.value)||1); }
@@ -4502,6 +4540,21 @@ function renderTraining(){
         +(imgCount>1?` <span class="small" style="opacity:.7;">(collage ×${imgCount})</span>`:'');
     }catch(err){ box.textContent=''; }
   };
+  // Add / remove rows of the sheet breakdown.
+  const addArtBtn=card.querySelector('#tr_add_art');
+  if(addArtBtn) addArtBtn.onclick=()=>{
+    const rows=card.querySelector('#tr_artrows');
+    rows.insertAdjacentHTML('beforeend', artRowHTML("",1,true));
+    recalcTrTotal();
+  };
+  card.addEventListener('click', ev=>{
+    const rm=ev.target.closest && ev.target.closest('[data-art-remove]');
+    if(!rm) return;
+    const row=rm.closest('[data-artrow]');
+    if(row) row.remove();
+    recalcTrTotal();
+  });
+
   card.addEventListener('input', recalcTrTotal);
   card.addEventListener('change', recalcTrTotal);
   card.addEventListener('click', ev=>{ if(ev.target.closest && ev.target.closest('.pill')) setTimeout(recalcTrTotal,0); });
@@ -4512,13 +4565,13 @@ function renderTraining(){
     const h=state.horses.find(x=>x.id===hId);
     const tId=card.querySelector('#tr_type').value;
     const tId2=combinedMode?card.querySelector('#tr_type2').value:null;
-    const artType=card.querySelector('#tr_art').value;
+    const artRows=readArtRows(card);
     const litWords=parseInt(card.querySelector('#tr_lit').value)||0;
     const link=card.querySelector('#tr_link').value.trim();
     const res=card.querySelector('#tr_result');
 
     if(!uploadedImage){ res.innerHTML='<div class="result fail">An image is required to log training.</div>'; return; }
-    if(!artType){ res.innerHTML='<div class="result fail">Please select an art type.</div>'; return; }
+    if(!artRows.length){ res.innerHTML='<div class="result fail">Please add at least one art type for this sheet.</div>'; return; }
     if(combinedMode && tId===tId2){ res.innerHTML='<div class="result fail">Please choose two different training types.</div>'; return; }
 
     const t=trainingOptionsFor(h).find(x=>x.id===tId);
@@ -4527,7 +4580,7 @@ function renderTraining(){
     // Collage: N images = N training sessions. Each image grants its own art EXP
     // and stat gains, so we multiply both by the count. Word count / custom /
     // rider bonuses are per-submission and are NOT multiplied.
-    const imgCount=Math.max(1, parseInt(card.querySelector('#tr_imgcount').value)||1);
+    const imgCount=artRowsImages(artRows);
     const allStats={...t.stats};
     if(t2) Object.entries(t2.stats).forEach(([s,v])=>allStats[s]=(allStats[s]||0)+v);
     if(imgCount>1) Object.keys(allStats).forEach(s=>allStats[s]=allStats[s]*imgCount);
@@ -4546,8 +4599,8 @@ function renderTraining(){
       });
     }
 
-    let expGain=(ART_EXP[artType]||0)*imgCount;
-    const sources=[imgCount>1 ? `${artType} ×${imgCount} (+${(ART_EXP[artType]||0)*imgCount})` : `${artType} (+${ART_EXP[artType]})`];
+    let expGain=artRowsExp(artRows);
+    const sources=artRowsSources(artRows);
     const litExp=calcLitExp(litWords);
     if(litExp>0){expGain+=litExp; sources.push(`Lit ${litWords}w (+${litExp})`);}
     selectedBonuses.forEach(k=>{
@@ -4594,7 +4647,7 @@ function renderTraining(){
     h.exp+=expGain;
     checkLevelUp(h);
 
-    const trainEntry={id:uid2(),day:state.log.length+1,type:"training",label,art:artType,imgCount:imgCount>1?imgCount:undefined,lit:litWords?`${litWords} words`:null,bonuses:[...selectedBonuses],customBonus,depicted:depictedNames.length?depictedNames:undefined,itemsUsed:treatsToSpend.length?treatsToSpend.map(id=>{const c=(state.consumables||[]).find(x=>x.invId===id);return c?c.name:id;}):undefined,exp:expGain,link:link||null,image:uploadedImage,statsDelta:allStats,milestoneIds};
+    const trainEntry={id:uid2(),day:state.log.length+1,type:"training",label,art:artRowsLabel(artRows),artMix:artRows,imgCount:imgCount>1?imgCount:undefined,lit:litWords?`${litWords} words`:null,bonuses:[...selectedBonuses],customBonus,depicted:depictedNames.length?depictedNames:undefined,itemsUsed:treatsToSpend.length?treatsToSpend.map(id=>{const c=(state.consumables||[]).find(x=>x.invId===id);return c?c.name:id;}):undefined,exp:expGain,link:link||null,image:uploadedImage,statsDelta:allStats,milestoneIds};
 
     // Spend the treats from the shared inventory now that the effect is locked in.
     if(treatsToSpend.length){
