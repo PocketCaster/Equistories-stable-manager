@@ -3877,8 +3877,20 @@ async function loadReservedForMe(){
     const open=recs.filter(r=>r && r.status!=="used" && r.horseId);
     const out=[];
     for(const r of open){
-      const horse=await DB.get('horses', r.horseId);
-      if(horse) out.push({res:r, horse});
+      // Fetching the horse itself must never be able to stall the whole load —
+      // that left the Breeding tab reading "Checking…" forever. If it doesn't
+      // come back we still list the horse from what the reservation records,
+      // and fetch the full record when it's actually needed.
+      let horse=null;
+      try{ horse=await withTimeout(DB.get('horses', r.horseId), 6000, "timeout"); }
+      catch(e){ console.warn('[Stable] reserved horse fetch failed:', r.horseId, e && e.message); }
+      if(!horse){
+        horse={ id:r.horseId, name:r.horseName||"(unnamed horse)", breed:r.breed||"",
+                gender:r.gender||"", age:3, stage:"adult",
+                stats:{}, genoModifiers:[], artLog:[], compHistory:[],
+                breedingRecords:[], breedingSlots:0, pedigree:{}, __partial:true };
+      }
+      out.push({res:r, horse});
     }
     return out;
   }catch(e){
@@ -8286,7 +8298,10 @@ function renderBreeding(){
   } else if(!state.__resBusy){
     state.__resBusy = true;
     showNote('<span class="small" style="opacity:.6;">Checking for slots reserved for you…</span>');
-    loadReservedForMe().then(list=>{
+    // Belt and braces: whatever happens inside, this settles. A stuck promise
+    // used to leave the tab reading "Checking…" for the rest of the session,
+    // because __resBusy never cleared and nothing ever retried.
+    withTimeout(loadReservedForMe(), 20000, "timeout").then(list=>{
       state.__resBusy = false;
       state.reservedForMe = list || [];
       if(state.reservedForMe.length){
@@ -8299,6 +8314,11 @@ function renderBreeding(){
     }).catch(err=>{
       state.__resBusy = false;
       state.reservedForMe = [];
+      if(err && /timeout/i.test(String(err.message||err)) && !err.denied){
+        showNote('<span class="small" style="color:#e0906a;">The check for reserved slots timed out. '
+          +'Reopen this tab to try again — the “Why can\'t I see a reserved slot?” button below will show what the database actually holds.</span>');
+        return;
+      }
       showNote(err && err.denied
         ? '<span class="small" style="color:#e0906a;">The database refused to read reserved slots. '
           +'This means the <b>breedingReservations</b> permissions haven\'t been published yet — '
