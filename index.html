@@ -316,6 +316,19 @@ window.EquiDB = {
     snap.forEach(d=>{ try{ out.push(JSON.parse(d.data().json)); }catch(e){} });
     return out;
   },
+  // Raw rows including the hoisted fields, for diagnostics — listAll() only
+  // returns the parsed json, which hides the very fields a query matches on.
+  async listAllRaw(col){
+    if(!db) return [];
+    const snap = await getDocs(collection(db, col));
+    const out=[];
+    snap.forEach(d=>{
+      const raw=d.data()||{};
+      let body={}; try{ body=JSON.parse(raw.json||"{}"); }catch(e){}
+      out.push({docId:d.id, owner:raw.owner, reservedFor:raw.reservedFor, body});
+    });
+    return out;
+  },
   // Bulk write for the one-time migration (batched = far fewer round trips).
   async putMany(col, owner, items){
     if(!db) return 0;
@@ -3769,6 +3782,73 @@ async function removeReservation(horseId, slotIndex){
   catch(e){ console.warn('[Stable] reservation removal failed:', e && e.message); return false; }
 }
 // Reservations other members have set aside for ME, with the horse itself.
+// A plain-language report of what the database actually contains, so a missing
+// reservation stops being guesswork. Shows who you are, what was searched for,
+// and every reservation record that exists — including ones addressed to a
+// different spelling of your name.
+async function diagnoseReservations(){
+  const L=[];
+  const add=(t,c)=>L.push(`<div class="small" style="color:${c||'#b5a392'};">${t}</div>`);
+  const me=(state.profile && state.profile.memberName)||"";
+  const bank=bankAccount.userId||"";
+  add(`<b>Signed in as:</b> bank username “${escAttr(bank||'(none)')}”, profile name “${escAttr(me||'(none)')}”`);
+  if(!bank && !me){
+    add("You don't appear to be signed in — nothing can be matched to you.", "#e0906a");
+    return L.join("");
+  }
+  add(`<b>Searching for reservations addressed to:</b> ${myMemberKeys().map(k=>'“'+escAttr(k)+'”').join(', ')||'(nothing)'}`);
+
+  const DB=await waitForDB();
+  if(!DB){ add("Not connected to the database.", "#e0906a"); return L.join(""); }
+  add("Connected to the database. ✓", "#9bd18a");
+
+  let rows=null;
+  try{
+    rows=await withTimeout(DB.listAllRaw('breedingReservations'), 8000, "timeout");
+  }catch(e){
+    const msg=String((e&&e.message)||e);
+    if(/permission|insufficient/i.test(msg)){
+      add("<b>The database refused to read reservations.</b> The <b>breedingReservations</b> rules "
+        +"have not been published yet — until they are, no reservation can be created or seen by anyone.", "#e0906a");
+    } else if(/timeout/i.test(msg)){
+      add("The database didn't answer in time.", "#e0906a");
+    } else {
+      add("Couldn't read reservations: "+escAttr(msg), "#e0906a");
+    }
+    return L.join("");
+  }
+
+  if(!rows.length){
+    add("<b>There are no reservation records at all.</b> Nobody's reservation has ever been saved. "
+      +"Either the person reserving is on an older version of the Manager, or the rules weren't published "
+      +"when they tried — their slot is only a note on their own copy.", "#e0906a");
+    return L.join("");
+  }
+
+  add(`<b>${rows.length} reservation record${rows.length===1?'':'s'} exist:</b>`, "#9bd18a");
+  const mine=myMemberKeys();
+  rows.forEach(r=>{
+    const addressed=String(r.reservedFor||"(blank)");
+    const hit=mine.includes(memberKey(addressed));
+    add(`&nbsp;&nbsp;• <b>${escAttr(r.body.horseName||r.body.horseId||r.docId)}</b> `
+      +`from ${escAttr(r.owner||'?')} → addressed to “${escAttr(addressed)}” `
+      +(hit?'<b style="color:#9bd18a;">— that\'s you ✓</b>'
+           :'<span style="color:#e0906a;">— not a match for your names</span>')
+      +(r.body.status==="used"?' <span style="opacity:.7;">(already used)</span>':''));
+  });
+  const matches=rows.filter(r=>mine.includes(memberKey(r.reservedFor||"")));
+  if(!matches.length){
+    add("<b>None are addressed to you.</b> Compare the spelling above with your bank username — "
+      +"whoever reserved it should use exactly that.", "#e0906a");
+  } else {
+    const open=matches.filter(r=>r.body.status!=="used");
+    add(open.length
+      ? `<b>${open.length} should be showing in your pickers.</b> If they aren't, reopen the Breeding tab.`
+      : "They're all marked as already used.", open.length?"#9bd18a":"#e0906a");
+  }
+  return L.join("");
+}
+
 async function loadReservedForMe(){
   const DB=await waitForDB(); if(!DB || !DB.listByField) return [];
   const keys=myMemberKeys();
@@ -8134,6 +8214,8 @@ function renderBreeding(){
       </div>
       ${(noSires||noDams)?`<p class="small" style="color:#c98a3a;margin-top:10px;">${noSires&&noDams?'None of your horses have an open breeding slot yet (they need to be age 3+ with a free slot).':noSires?'You have no eligible sire (a stallion, colt or rig aged 3+ with a free slot).':'You have no eligible dam (a mare or filly aged 3+ with a free slot).'}</p>`:''}
       <div id="bc_resnote" style="margin-top:8px;"></div>
+      <button id="bc_resdiag" class="secondary" style="margin-top:4px;padding:4px 10px;font-size:.95em;">Why can't I see a reserved slot?</button>
+      <div id="bc_resdiagout" style="margin-top:6px;"></div>
       <button id="bc_calc" style="margin-top:12px;">Calculate foals</button>
       <button id="bc_live" style="margin-top:12px;margin-left:6px;">Proceed with Breeding</button>
     </div>
@@ -8188,6 +8270,15 @@ function renderBreeding(){
   // flag on the very first render — so if that ran before the database
   // connection or your login was ready, it returned nothing and never tried
   // again for the whole session, which looked exactly like "no reservations".
+  const diagBtn=wrap.querySelector('#bc_resdiag');
+  if(diagBtn) diagBtn.onclick=async()=>{
+    const out=wrap.querySelector('#bc_resdiagout');
+    out.innerHTML='<span class="small" style="opacity:.6;">Checking…</span>';
+    try{ out.innerHTML='<div style="background:#15100c;border:1px solid #4a392a;border-radius:6px;padding:10px;">'
+      + await diagnoseReservations() + '</div>'; }
+    catch(e){ out.innerHTML='<span class="small" style="color:#e0906a;">Diagnostic failed: '+escAttr(String(e&&e.message||e))+'</span>'; }
+  };
+
   const note=wrap.querySelector('#bc_resnote');
   const showNote=(html)=>{ const n=wrap.querySelector('#bc_resnote'); if(n) n.innerHTML=html; };
   if(state.reservedForMe && state.reservedForMe.length){
