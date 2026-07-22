@@ -7905,7 +7905,10 @@ async function commitBreeding(sire, dam, picks, roll, sel){
 }
 
 // Render a live breeding INLINE, the same way the calculator does — no popup.
-function renderLiveBreeding(box, sire, dam, roll, sel){
+// Once Proceed with Breeding is confirmed the player is committed — there is no
+// cancel. The only way out is a Reroll Token, and that only if they brought one.
+// An unused Reroll Token is never spent, so it stays in the saddlebag for later.
+function renderLiveBreeding(box, sire, dam, roll, sel, rerollUsed){
   const card=(f,i)=>`
     <div class="card" style="border-color:#6a5a3a;background:#1a1510;">
       <div style="display:flex;justify-content:space-between;align-items:baseline;">
@@ -7927,18 +7930,20 @@ function renderLiveBreeding(box, sire, dam, roll, sel){
   box.innerHTML=`
     <div class="card">
       <h3 style="margin-top:0;color:#c98a3a;">Breeding — ${escAttr(sire.name)} × ${escAttr(dam.name)}</h3>
-      <p class="small" style="color:#a89888;">Name the foal you want to keep. Nothing is created until you do, and the breeding slots aren't spent until then either.</p>
+      <p class="small" style="color:#a89888;">Name the foal you want to keep — this breeding is locked in.</p>
       ${roll.twins?`<div class="card" style="border-color:#7a9b6e;"><b style="color:#9bd18a;">Twins!</b> <span class="small">Both foals are yours — this still uses only one breeding slot each.</span></div>`:''}
       ${roll.coi>0?`<div class="card" style="border-color:#8a5a2a;"><span class="small">⚠ Inbreeding coefficient ${(roll.coi*100).toFixed(1)}% — health risks were raised on this pairing.</span></div>`:''}
-      ${(sel&&sel.length)?`<p class="small" style="color:#8a9ac8;">Items in use: ${sel.map(t=>escAttr(BREEDING_TOKENS[t.key].label)+(t.gender?` (${escAttr(t.gender)})`:'')).join(", ")} — spent only if you keep a foal.</p>`:''}
+      ${(sel&&sel.length)?`<p class="small" style="color:#8a9ac8;">Items in use: ${sel.map(t=>escAttr(BREEDING_TOKENS[t.key].label)+(t.gender?` (${escAttr(t.gender)})`:'')).join(", ")} — spent when you keep a foal. An unused Reroll Token is returned.</p>`:''}
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">${roll.foals.map(card).join("")}</div>
       ${roll.twins?`<button id="lb_keep_both" style="margin-top:10px;width:100%;background:#c98a3a;color:#241a14;border:none;padding:10px;border-radius:6px;font-weight:bold;cursor:pointer;">Keep both foals</button>`:''}
-      ${roll.mods.reroll?`<button id="lb_reroll" class="secondary" style="margin-top:8px;width:100%;padding:9px;">🎲 Use Reroll Token — roll this breeding again</button>`:''}
-      <button id="lb_cancel" class="secondary" style="margin-top:8px;width:100%;padding:9px;">Cancel — don't keep either</button>
+      ${roll.mods.reroll?`<button id="lb_reroll" class="secondary" style="margin-top:8px;width:100%;padding:9px;">🎲 Reroll this breeding — uses your Reroll Token</button>`:''}
     </div>`;
 
   const done=async(picks)=>{
-    const created=await commitBreeding(sire,dam,picks,roll,sel);
+    // A Reroll Token that was never clicked is not consumed — it goes back to
+    // the saddlebag for another breeding.
+    const toSpend=(sel||[]).filter(t=>t.key!=="reroll" || rerollUsed===true);
+    const created=await commitBreeding(sire,dam,picks,roll,toSpend);
     render();
     alert(created.length>1
       ? `Twins! ${created.map(f=>f.name).join(" and ")} have joined your roster.`
@@ -7960,9 +7965,8 @@ function renderLiveBreeding(box, sire, dam, roll, sel){
   if(rr) rr.onclick=()=>{
     const again=rollBreeding(sire,dam,roll.mods);
     again.mods=Object.assign({},roll.mods,{reroll:false});   // one reroll per token
-    renderLiveBreeding(box,sire,dam,again,sel);
+    renderLiveBreeding(box,sire,dam,again,sel,true);         // token is now spent
   };
-  box.querySelector('#lb_cancel').onclick=()=>{ box.innerHTML=''; };
 }
 
 function computeFoalPreview(sire,dam,allHorses){
