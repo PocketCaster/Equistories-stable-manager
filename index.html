@@ -3722,6 +3722,20 @@ function renderRoster(){
 function myMemberId(){
   return (state.profile && state.profile.memberName) || bankAccount.userId || "";
 }
+// Reservations are matched on an EXACT, case-sensitive Firestore query, so
+// "@PocketCaster", "pocketcaster" and "PocketCaster " would all miss each other.
+// Everything is squashed to one key before it's stored or looked up.
+function memberKey(s){
+  return String(s||"").trim().replace(/^@+/,"").toLowerCase();
+}
+// Every name you might have been reserved under: your display name AND your
+// bank username, which are often different.
+function myMemberKeys(){
+  const raw=[(state.profile && state.profile.memberName)||"", bankAccount.userId||""];
+  const keys=new Set();
+  raw.forEach(v=>{ const k=memberKey(v); if(k) keys.add(k); });
+  return [...keys];
+}
 function sameMember(a,b){
   return String(a||"").trim().toLowerCase() === String(b||"").trim().toLowerCase();
 }
@@ -3731,12 +3745,13 @@ async function writeReservation(h, slotIndex, reservedFor){
   const DB=getDB(); if(!DB || !DB.putWithField) return false;
   const id=reservationDocId(h.id, slotIndex);
   try{
+    const typed=String(reservedFor||"").trim();
     return await DB.putWithField('breedingReservations', id, bankAccount.userId, {
       id, horseId:h.id, horseName:h.name, breed:h.breed||"",
       gender:h.gender||"", slotIndex,
-      ownerName:myMemberId(), reservedFor:String(reservedFor||"").trim(),
+      ownerName:myMemberId(), reservedFor:typed, reservedForKey:memberKey(typed),
       status:"open", date:new Date().toISOString().slice(0,10),
-    }, 'reservedFor', String(reservedFor||"").trim());
+    }, 'reservedFor', memberKey(typed));
   }catch(e){ console.warn('[Stable] reservation write failed:', e && e.message); return false; }
 }
 async function removeReservation(horseId, slotIndex){
@@ -3747,10 +3762,19 @@ async function removeReservation(horseId, slotIndex){
 // Reservations other members have set aside for ME, with the horse itself.
 async function loadReservedForMe(){
   const DB=getDB(); if(!DB || !DB.listByField) return [];
-  const me=myMemberId();
-  if(!me) return [];
+  const keys=myMemberKeys();
+  if(!keys.length) return [];
+  // Also try the raw spellings, so reservations written before the key was
+  // normalised are still found instead of silently vanishing.
+  const raws=[(state.profile && state.profile.memberName)||"", bankAccount.userId||""]
+    .map(v=>String(v||"").trim()).filter(Boolean);
+  const lookups=[...new Set([...keys, ...raws, ...raws.map(r=>"@"+r)])];
   try{
-    const recs=await DB.listByField('breedingReservations','reservedFor',me);
+    const seen=new Set(); const recs=[];
+    for(const k of lookups){
+      const found=await DB.listByField('breedingReservations','reservedFor',k).catch(()=>[]);
+      (found||[]).forEach(r=>{ if(r && r.id && !seen.has(r.id)){ seen.add(r.id); recs.push(r); } });
+    }
     const open=recs.filter(r=>r && r.status!=="used" && r.horseId);
     const out=[];
     for(const r of open){
@@ -3847,6 +3871,8 @@ function showBreedingSlotModal(horseId, slotIndex){
       ${field('bs_reserve_for',"Member's name or @handle",'e.g. @Moonlight')}
       ${field('bs_reserve_note','Note (optional)','e.g. which mare, agreed terms')}
       ${btn('bs_reserve','Reserve slot for this member','#3a4a6a','#fff')}
+      <div id="bs_reserve_status" style="margin-top:6px;"></div>
+      <p class="small" style="color:#a89888;margin-top:6px;">Use their <b>bank username</b> — the one they sign in with. Capitals and a leading @ don't matter.</p>
       ${ghost('bs_back','← Back')}`;
     box.querySelector('#bs_back').onclick=drawChoose;
     box.querySelector('#bs_reserve').onclick=doReserve;
@@ -3948,9 +3974,19 @@ function showBreedingSlotModal(horseId, slotIndex){
     h.breedingRecords.push({ id:uid2(), slotIndex, role:"", partnerName:"", partnerOwner:"", date:"", note, foalId:null, foalName:"", reservedFor });
     h.breedingFilled=(h.breedingFilled||0)+1;
     addLog(`${h.name}'s breeding slot ${slotIndex+1} reserved for ${reservedFor}.`);
-    saveHorse(h); save(); close(); render();
+    saveHorse(h); save();
+    // Tell the owner whether it actually reached the other member. Silently
+    // failing here is exactly how a reservation ends up invisible to them.
+    const status=box.querySelector('#bs_reserve_status');
+    if(status) status.innerHTML='<span class="small" style="opacity:.75;">Sharing…</span>';
     writeReservation(h, slotIndex, reservedFor).then(ok=>{
-      if(!ok) console.warn('[Stable] reservation saved locally but not shared');
+      if(ok){ close(); render(); return; }
+      if(status) status.innerHTML=
+        '<span class="small" style="color:#e0906a;">Saved on your side, but it could NOT be shared — '
+        +escAttr(reservedFor)+' won\'t see it yet. Usually this means the site needs its database '
+        +'permissions updated. The slot is still reserved for you locally.</span>';
+    }).catch(()=>{
+      if(status) status.innerHTML='<span class="small" style="color:#e0906a;">Saved locally, but sharing failed.</span>';
     });
   }
   function doConvert(){
