@@ -338,10 +338,12 @@ const LOGO_DATA_URL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAoIAAAH7CAY
 const STATS = ["stamina","strength","scope","speed","handiness","boldness","balance","gaits","harmony"];
 const STAT_LABELS = {stamina:"Stamina",strength:"Strength",scope:"Scope",speed:"Speed",handiness:"Handiness",boldness:"Boldness",balance:"Balance",gaits:"Gaits",harmony:"Harmony"};
 
+// Breeding slots: 2 at level 1, +1 per level through level 9, then +2 at
+// level 10 — so a maxed horse has 12 lifetime slots.
 const LEVEL_TABLE = {
   1:{exp:0,   bonus:0, slots:0},
   2:{exp:50,  bonus:2, slots:1},
-  3:{exp:100, bonus:2, slots:0},
+  3:{exp:100, bonus:2, slots:1},
   4:{exp:150, bonus:3, slots:1},
   5:{exp:200, bonus:3, slots:1, badge:"Quality Stock"},
   6:{exp:250, bonus:3, slots:1},
@@ -7035,6 +7037,181 @@ function requirementMetProb(requires, foalGenotypeByLocus){
 // Resolve every rare trait for a foal into display rows:
 //   { name, chance, healthName?, healthChance?, conditional?, note? }
 // sireTraits/damTraits are arrays of trait NAMES each parent carries.
+// ═══════════════════════════════════════════════════════════════════════════
+// BREEDING TOKENS
+// ═══════════════════════════════════════════════════════════════════════════
+// Specialty items that modify a breeding. These are PURE functions with no UI
+// and no data writes — live breeding will build a modifiers object from the
+// tokens a player spends, then pass it through the roll. Keeping the effects
+// isolated here means each one is testable on its own and live breeding only
+// has to call them.
+//
+// Tokens live in the shared `inventory` doc like every other consumable, with
+// an `effect` string from BREEDING_TOKENS[key].effect, and are spent through
+// the existing ledger-safe spendConsumable().
+
+const BASE_TWIN_CHANCE = 10;   // percent, before any token
+const TRAIT_TOKEN_MULT = 1.5;  // multiplier on a carried trait's pass-on odds
+const TWIN_TOKEN_MULT  = 1.5;  // multiplier on the twin chance
+const PREPOTENCY_BONUS = 2;    // added to the floored average, capped at the best parent
+
+const BREEDING_TOKENS = {
+  ticket: {
+    key:"ticket", label:"Breeding Ticket", effect:"breeding_ticket",
+    desc:"Waives the breeding fee for one group/NPC or member-owned horse."
+  },
+  twin: {
+    key:"twin", label:"Twin Token", effect:"breeding_twin",
+    desc:`Raises the chance of twins from ${BASE_TWIN_CHANCE}% to ${BASE_TWIN_CHANCE*TWIN_TOKEN_MULT}%. Twins mean you keep BOTH foals.`
+  },
+  trait: {
+    key:"trait", label:"Trait Token", effect:"breeding_trait",
+    desc:`Multiplies the pass-on odds of every trait a parent carries by ${TRAIT_TOKEN_MULT}×. Cannot create a trait neither parent has.`
+  },
+  gender: {
+    key:"gender", label:"Gender Pick Token", effect:"breeding_gender",
+    desc:"Choose the foal's gender before the roll."
+  },
+  health: {
+    key:"health", label:"Health Token", effect:"breeding_health",
+    desc:"Guarantees a healthy foal — suppresses conditions attached to non-lethal traits. Does NOT prevent lethal genotypes."
+  },
+  reroll: {
+    key:"reroll", label:"Reroll Token", effect:"breeding_reroll",
+    desc:"Rerolls the whole breeding — genotype, traits and gender."
+  },
+  colour: {
+    key:"colour", label:"Colour Guarantee Token", effect:"breeding_colour",
+    desc:"After the roll, swap one gene to another result the parents could have produced."
+  },
+  prepotency: {
+    key:"prepotency", label:"Prepotency Token", effect:"breeding_prepotency",
+    desc:`Foal stats become the average +${PREPOTENCY_BONUS}, capped at the better parent's stat.`
+  },
+};
+
+// House rule: at most TWO tokens on a single breeding, and never two of the
+// same type — so no doubling a Trait token to 2.25x. Validation lives here so
+// live breeding, the shop and any future UI all enforce the same thing.
+const MAX_TOKENS_PER_BREEDING = 2;
+
+function validateTokenSelection(tokens){
+  const list=(tokens||[]).map(t=>typeof t==="string"?{key:t}:t).filter(t=>t&&t.key);
+  const unknown=list.find(t=>!BREEDING_TOKENS[t.key]);
+  if(unknown) return {ok:false, reason:`Unknown token: ${unknown.key}`};
+  const seen=new Set(), dupe=list.find(t=>seen.has(t.key)?true:(seen.add(t.key),false));
+  if(dupe) return {ok:false, reason:`Only one ${BREEDING_TOKENS[dupe.key].label} may be used per breeding.`};
+  if(list.length>MAX_TOKENS_PER_BREEDING)
+    return {ok:false, reason:`A breeding can use at most ${MAX_TOKENS_PER_BREEDING} tokens.`};
+  const g=list.find(t=>t.key==="gender");
+  if(g && g.gender!=="Colt" && g.gender!=="Filly")
+    return {ok:false, reason:"Pick Colt or Filly for the Gender Pick Token."};
+  return {ok:true, tokens:list};
+}
+
+// The modifier bundle live breeding will thread through a roll.
+function defaultBreedingModifiers(){
+  return { ticket:false, twin:false, trait:false, health:false,
+           reroll:false, prepotency:false,
+           gender:null,          // "Colt" | "Filly" when a gender token is spent
+           colourSwaps:{},       // { locusKey: newCode } from a colour token
+           tokensUsed:[] };
+}
+// Accepts ["twin","trait"] or [{key:"gender",gender:"Filly"}, {key:"trait"}].
+// Returns {ok:false, reason} if the selection breaks the house rule.
+function modifiersFromTokens(tokens){
+  const v=validateTokenSelection(tokens);
+  if(!v.ok) return v;
+  const m=defaultBreedingModifiers();
+  v.tokens.forEach(t=>{
+    if(typeof m[t.key]==="boolean") m[t.key]=true;
+    if(t.key==="gender") m.gender=t.gender;
+    if(t.key==="colour" && t.locusKey) m.colourSwaps[t.locusKey]=t.code||null;
+    m.tokensUsed.push(t.key);
+  });
+  return Object.assign({ok:true}, m);
+}
+
+// ── Trait token ────────────────────────────────────────────────────────────
+// Multiplies each row's chance. resolveRareTraits already returns rows only for
+// traits a parent carries (or gene-driven conditionals), so this can never
+// invent a trait from nothing. Health odds stay put; only the overall figure
+// moves, because that's the trait chance times the condition chance.
+function applyTraitToken(rows, on, mult){
+  const k=Number(mult)||TRAIT_TOKEN_MULT;
+  if(!on) return rows;
+  return (rows||[]).map(r=>{
+    const chance=Math.min(1, r.chance*k);
+    const out=Object.assign({}, r, {chance, traitBoosted:true});
+    if(r.healthName) out.healthOverall = chance * r.healthChance;
+    return out;
+  });
+}
+
+// ── Health token ───────────────────────────────────────────────────────────
+// Strips the condition riding on a non-lethal trait: the foal can still be
+// Silken or Unrelated Bleu, it just won't come with metabolic disease or Moon
+// Blindness. Lethal genotypes (frame overo OO) are handled by isLethalGenotype
+// and are deliberately untouched.
+function applyHealthToken(rows, on){
+  if(!on) return rows;
+  return (rows||[]).map(r=>{
+    if(!r.healthName) return r;
+    const out=Object.assign({}, r);
+    delete out.healthName; delete out.healthChance;
+    delete out.healthOverall; delete out.healthInflated;
+    out.healthSuppressed=true;
+    return out;
+  });
+}
+
+// ── Twin token ─────────────────────────────────────────────────────────────
+function twinChance(mods){
+  const base=BASE_TWIN_CHANCE/100;
+  return Math.min(1, mods && mods.twin ? base*TWIN_TOKEN_MULT : base);
+}
+function rollTwins(mods){ return Math.random() < twinChance(mods); }
+
+// ── Gender token ───────────────────────────────────────────────────────────
+function rollGender(mods){
+  if(mods && (mods.gender==="Colt"||mods.gender==="Filly")) return mods.gender;
+  return Math.random()<0.5 ? "Colt" : "Filly";
+}
+
+// ── Prepotency token ───────────────────────────────────────────────────────
+// Average +2, but never above the better parent — so it rewards breeding up to
+// a stronger horse and does nothing for two evenly matched parents.
+function foalStatsWithPrepotency(sireStats, damStats, statKeys, on){
+  const base=foalStats(sireStats, damStats, statKeys);
+  if(!on) return base;
+  const out={};
+  statKeys.forEach(k=>{
+    const s=Number(sireStats[k])||0, d=Number(damStats[k])||0;
+    out[k]=Math.min(base[k]+PREPOTENCY_BONUS, Math.max(s,d));
+  });
+  return out;
+}
+
+// ── Colour guarantee token ─────────────────────────────────────────────────
+// Every genotype this pairing could actually have produced at one gene.
+function locusAlternatives(sireCode, damCode, locus){
+  return crossLocus(sireCode, damCode, locus).filter(o=>o.p>0).map(o=>o.code);
+}
+// Swap a rolled foal's gene to another result the parents could have given —
+// e.g. ee x Ee can yield Ee or ee, so a bay foal may be changed to chestnut.
+// Anything the cross could not produce is refused.
+function applyColourSwap(foal, locusKey, newCode, loci, sireGeno, damGeno, breedKey){
+  const locus=(loci||[]).find(l=>l.key===locusKey);
+  if(!locus) return {ok:false, reason:"That gene isn't used by this breed."};
+  const allowed=locusAlternatives(sireGeno[locusKey], damGeno[locusKey], locus);
+  if(!allowed.includes(newCode))
+    return {ok:false, reason:"These parents could not produce that genotype.", allowed};
+  const selections=Object.assign({}, foal.selections, {[locusKey]:newCode});
+  const geno=computeGenoResult(selections, breedKey);
+  return {ok:true, allowed,
+          foal:Object.assign({}, foal, {selections, genotype:geno.genotype, phenotype:geno.phenotype})};
+}
+
 function resolveRareTraits(rareTraits, sireTraits, damTraits, foalGenotypeByLocus, riskMult){
   const mult = Number(riskMult)>0 ? Number(riskMult) : 1;
   const has=(list,name)=>Array.isArray(list)&&list.includes(name);
