@@ -262,6 +262,30 @@ window.EquiDB = {
     });
     return true;
   },
+  // Like put(), but keeps one EXTRA field outside the json blob so rules and
+  // queries can actually see it. Firestore can't read inside the blob, which is
+  // why a breeding reservation needs `reservedFor` hoisted out here.
+  async putWithField(col, id, owner, obj, field, value){
+    if(!db) return false;
+    const rec = {
+      owner: String(owner), id: String(id),
+      json: JSON.stringify(obj),
+      updatedAt: new Date().toISOString(),
+    };
+    rec[field] = String(value);
+    await setDoc(doc(db, col, String(id)), rec);
+    return true;
+  },
+  // Indexed lookup on any hoisted field, e.g. every reservation set aside for me.
+  async listByField(col, field, value){
+    if(!db) return [];
+    const snap = await getDocs(query(collection(db, col), where(field,'==',String(value))));
+    const out=[];
+    snap.forEach(d=>{
+      try{ const o=JSON.parse(d.data().json); o.__owner=d.data().owner; out.push(o); }catch(e){}
+    });
+    return out;
+  },
   async get(col, id){
     if(!db) return null;
     const s = await getDoc(doc(db, col, String(id)));
@@ -1716,6 +1740,9 @@ async function loadFromSheets(){
       recomputeHorse(h);
     });
     state.loaded=true;
+    // Catch up any reserved slot another member has bred with. Only the owner
+    // may write their own horse, so this is where that slot is finally spent.
+    reconcileReservations().then(n=>{ if(n) render(); }).catch(()=>{});
     console.log(`[EquiDB] loaded ${state.horses.length} horses + ${state.riders.length} riders in ${Math.round(performance.now()-t0)}ms`);
     render();
   }catch(err){
@@ -3679,6 +3706,89 @@ function renderRoster(){
 // BREEDING SLOT MODAL
 // ============================================
 
+// ═══════════════════════════════════════════════════════════════════════════
+// BREEDING SLOT RESERVATIONS — the cross-member half
+// ═══════════════════════════════════════════════════════════════════════════
+// Marking a slot for another member writes a small shared record as well as the
+// note on the owner's own horse. It has to exist separately because a horse is
+// stored as one JSON blob, and Firestore can neither query nor write rules
+// against anything inside it — so without this, a reservation is invisible to
+// the very person it was made for.
+//
+// Slot consumption stays with the owner: rules only let a member write their
+// OWN horses. The reserved member flips the record to "used" when they breed,
+// and the owner's app takes the slot on their next load (reconcileReservations).
+
+function myMemberId(){
+  return (state.profile && state.profile.memberName) || bankAccount.userId || "";
+}
+function sameMember(a,b){
+  return String(a||"").trim().toLowerCase() === String(b||"").trim().toLowerCase();
+}
+function reservationDocId(horseId, slotIndex){ return `res_${horseId}_${slotIndex}`; }
+
+async function writeReservation(h, slotIndex, reservedFor){
+  const DB=getDB(); if(!DB || !DB.putWithField) return false;
+  const id=reservationDocId(h.id, slotIndex);
+  try{
+    return await DB.putWithField('breedingReservations', id, bankAccount.userId, {
+      id, horseId:h.id, horseName:h.name, breed:h.breed||"",
+      gender:h.gender||"", slotIndex,
+      ownerName:myMemberId(), reservedFor:String(reservedFor||"").trim(),
+      status:"open", date:new Date().toISOString().slice(0,10),
+    }, 'reservedFor', String(reservedFor||"").trim());
+  }catch(e){ console.warn('[Stable] reservation write failed:', e && e.message); return false; }
+}
+async function removeReservation(horseId, slotIndex){
+  const DB=getDB(); if(!DB || !DB.remove) return false;
+  try{ return await DB.remove('breedingReservations', reservationDocId(horseId, slotIndex)); }
+  catch(e){ console.warn('[Stable] reservation removal failed:', e && e.message); return false; }
+}
+// Reservations other members have set aside for ME, with the horse itself.
+async function loadReservedForMe(){
+  const DB=getDB(); if(!DB || !DB.listByField) return [];
+  const me=myMemberId();
+  if(!me) return [];
+  try{
+    const recs=await DB.listByField('breedingReservations','reservedFor',me);
+    const open=recs.filter(r=>r && r.status!=="used" && r.horseId);
+    const out=[];
+    for(const r of open){
+      const horse=await DB.get('horses', r.horseId);
+      if(horse) out.push({res:r, horse});
+    }
+    return out;
+  }catch(e){ console.warn('[Stable] could not load reservations:', e && e.message); return []; }
+}
+// Owner side: a reservation the other member has used means that slot is spent.
+// Only the owner can write the horse, so this catches up on their next load.
+async function reconcileReservations(){
+  const DB=getDB(); if(!DB || !DB.listByField) return 0;
+  const me=bankAccount.userId;
+  if(!me) return 0;
+  let changed=0;
+  try{
+    const mine=await DB.listByField('breedingReservations','owner',me).catch(()=>[]);
+    for(const r of (mine||[])){
+      if(!r || r.status!=="used") continue;
+      const h=state.horses.find(x=>x.id===r.horseId);
+      if(!h) continue;
+      const rec=(h.breedingRecords||[]).find(x=>x.slotIndex===r.slotIndex);
+      if(rec && !rec.partnerName){
+        rec.partnerName = r.usedWith || (r.reservedFor+"'s horse");
+        rec.partnerOwner = r.reservedFor;
+        rec.foalName = r.foalName || "";
+        rec.date = r.usedDate || rec.date;
+        rec.note = (rec.note?rec.note+" · ":"") + "bred by "+r.reservedFor;
+        addLog(`${h.name}'s reserved slot ${r.slotIndex+1} was used by ${r.reservedFor}.`);
+        saveHorse(h); changed++;
+      }
+    }
+  }catch(e){ console.warn('[Stable] reconcile failed:', e && e.message); }
+  if(changed){ save(); }
+  return changed;
+}
+
 function showBreedingSlotModal(horseId, slotIndex){
   const h=state.horses.find(x=>x.id===horseId);
   if(!h) return;
@@ -3687,150 +3797,192 @@ function showBreedingSlotModal(horseId, slotIndex){
   const isUsed = existing && existing.partnerName;
 
   const overlay=document.createElement('div');
-  overlay.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;';
+  overlay.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;overflow-y:auto;';
+  overlay.innerHTML=`<div id="bs_box" style="background:#2c1f16;border:2px solid #c98a3a;border-radius:10px;padding:22px;max-width:520px;width:100%;color:#f1e6d8;font-family:Georgia,serif;max-height:92vh;overflow-y:auto;"></div>`;
+  document.body.appendChild(overlay);
+  const box=overlay.querySelector('#bs_box');
+  const close=()=>overlay.remove();
 
-  let body;
-  if(isUsed){
-    body = `
-      <p style="color:#b5a392;">This slot is marked as used.</p>
-      <div style="background:#15100c;padding:10px;border-radius:6px;margin-bottom:10px;">
+  const field=(id,label,ph,type)=>`
+    <label class="small" style="color:#b5a392;text-transform:uppercase;display:block;margin-top:8px;">${label}</label>
+    <input id="${id}" type="${type||'text'}" placeholder="${escAttr(ph||'')}" style="width:100%;padding:7px;background:#15100c;border:1px solid #4a392a;color:#f1e6d8;border-radius:5px;margin-top:3px;" />`;
+  const btn=(id,text,bg,fg)=>`<button id="${id}" style="margin-top:10px;width:100%;background:${bg};color:${fg};border:none;padding:10px;border-radius:6px;font-weight:bold;cursor:pointer;">${text}</button>`;
+  const ghost=(id,text)=>`<button id="${id}" style="margin-top:8px;width:100%;background:#2c2118;color:#f1e6d8;border:1px solid #4a392a;padding:9px;border-radius:6px;cursor:pointer;">${text}</button>`;
+  const head=t=>`<h3 style="margin-top:0;color:#c98a3a;">${t}</h3>`;
+
+  // ── Empty slot: choose what you're doing, then see only those fields. ──────
+  // The old version stacked a "record a breeding" form and a "reserve it" form
+  // on top of each other, so you had to read both to work out which was yours.
+  function drawChoose(){
+    box.innerHTML = head(`Breeding Slot ${slotIndex+1} — ${escAttr(h.name)}`) + `
+      <p class="small" style="color:#b5a392;margin-top:0;">This slot is free. What would you like to do with it?</p>
+
+      <div style="border:1px solid #4a392a;border-radius:8px;padding:12px;margin-top:10px;">
+        <b style="color:#e8c86a;">Breed now</b>
+        <p class="small" style="color:#a89888;margin:4px 0 0;">Roll a real foal in the Breeding tab. Genetics, stats and pedigree are worked out for you, and the slot is spent automatically.</p>
+        ${btn('bs_go_breed','Go to Breeding','#c98a3a','#241a14')}
+      </div>
+
+      <div style="border:1px solid #3a4a6a;border-radius:8px;padding:12px;margin-top:10px;">
+        <b style="color:#8a9ac8;">Reserve for another member</b>
+        <p class="small" style="color:#a89888;margin:4px 0 0;">Set this slot aside for someone else. Their Breeding tab will list this horse, and the slot stops counting as free for you.</p>
+        ${btn('bs_go_reserve','Reserve this slot','#3a4a6a','#fff')}
+      </div>
+
+      <div style="border:1px solid #4a392a;border-radius:8px;padding:12px;margin-top:10px;">
+        <b style="color:#b5a392;">Log a past breeding</b>
+        <p class="small" style="color:#a89888;margin:4px 0 0;">For breedings that already happened elsewhere — older foals from before the site. Records who it was with, no rolling involved.</p>
+        ${btn('bs_go_past','Log a past breeding','#5a4a3a','#f1e6d8')}
+      </div>
+      ${ghost('bs_cancel','Cancel')}`;
+    box.querySelector('#bs_cancel').onclick=close;
+    box.querySelector('#bs_go_reserve').onclick=drawReserve;
+    box.querySelector('#bs_go_past').onclick=drawPast;
+    box.querySelector('#bs_go_breed').onclick=()=>{ close(); state.tab="breeding"; render(); };
+  }
+
+  function drawReserve(){
+    box.innerHTML = head(`Reserve slot ${slotIndex+1} — ${escAttr(h.name)}`) + `
+      <p class="small" style="color:#b5a392;margin-top:0;">${escAttr(h.name)} will appear in their Breeding tab, marked as reserved for them. You can release it any time before it's used.</p>
+      ${field('bs_reserve_for',"Member's name or @handle",'e.g. @Moonlight')}
+      ${field('bs_reserve_note','Note (optional)','e.g. which mare, agreed terms')}
+      ${btn('bs_reserve','Reserve slot for this member','#3a4a6a','#fff')}
+      ${ghost('bs_back','← Back')}`;
+    box.querySelector('#bs_back').onclick=drawChoose;
+    box.querySelector('#bs_reserve').onclick=doReserve;
+  }
+
+  function drawPast(){
+    box.innerHTML = head(`Log a past breeding — ${escAttr(h.name)}`) + `
+      <p class="small" style="color:#b5a392;margin-top:0;">Records a breeding that already happened. This marks the slot used; it doesn't create a foal.</p>
+      <label class="small" style="color:#b5a392;text-transform:uppercase;display:block;margin-top:8px;">This horse's role</label>
+      <select id="bs_role" style="width:100%;padding:7px;background:#15100c;border:1px solid #4a392a;color:#f1e6d8;border-radius:5px;margin-top:3px;">
+        <option value="sire">Sire (this horse is the father)</option>
+        <option value="dam">Dam (this horse is the mother)</option>
+      </select>
+      ${field('bs_partner_name',"Partner's name",'e.g. Moonshadow')}
+      ${field('bs_partner_owner',"Partner's owner (optional)",'e.g. @username')}
+      ${field('bs_date','Date','e.g. Day 45 or a real date')}
+      ${field('bs_note','Note (optional)','Any notes about this breeding')}
+      ${btn('bs_save','✓ Record this breeding','#c98a3a','#241a14')}
+      ${ghost('bs_back','← Back')}`;
+    box.querySelector('#bs_back').onclick=drawChoose;
+    box.querySelector('#bs_save').onclick=doRecordPast;
+  }
+
+  function drawReserved(){
+    box.innerHTML = head(`Breeding Slot ${slotIndex+1} — ${escAttr(h.name)}`) + `
+      <p class="small" style="color:#8a9ac8;margin-top:0;">Reserved — this slot doesn't count as free for you until it's released or used.</p>
+      <div style="background:#15100c;padding:10px;border-radius:6px;margin-bottom:4px;">
+        <b>Reserved for:</b> ${escAttr(existing.reservedFor)}<br>
+        ${existing.date?`<b>Date:</b> ${escAttr(existing.date)}<br>`:''}
+        ${existing.note?`<i>${escAttr(existing.note)}</i>`:''}
+      </div>
+      <p class="small" style="color:#a89888;">If they breed with ${escAttr(h.name)}, this fills in on its own. Only record it by hand if the breeding happened somewhere else.</p>
+      <label class="small" style="color:#b5a392;text-transform:uppercase;display:block;margin-top:8px;">This horse's role</label>
+      <select id="bs_role" style="width:100%;padding:7px;background:#15100c;border:1px solid #4a392a;color:#f1e6d8;border-radius:5px;margin-top:3px;">
+        <option value="sire">Sire (this horse is the father)</option>
+        <option value="dam">Dam (this horse is the mother)</option>
+      </select>
+      ${field('bs_partner_name',"Partner's name",'e.g. Moonshadow')}
+      ${btn('bs_convert','✓ Record breeding for this slot','#c98a3a','#241a14')}
+      ${btn('bs_release','Release reservation — make it mine again','#3a4a6a','#fff')}
+      ${ghost('bs_cancel','Cancel')}`;
+    box.querySelector('#bs_cancel').onclick=close;
+    box.querySelector('#bs_convert').onclick=doConvert;
+    box.querySelector('#bs_release').onclick=doRelease;
+  }
+
+  function drawUsed(){
+    box.innerHTML = head(`Breeding Slot ${slotIndex+1} — ${escAttr(h.name)}`) + `
+      <p class="small" style="color:#b5a392;margin-top:0;">This slot has been used.</p>
+      <div style="background:#15100c;padding:10px;border-radius:6px;margin-bottom:4px;">
         <b>${existing.role==="sire"?"Sired with":"Bred to"}:</b> ${escAttr(existing.partnerName)}${existing.partnerOwner?` (${escAttr(existing.partnerOwner)})`:""}<br>
         <b>Date:</b> ${escAttr(existing.date||"—")}<br>
         ${existing.foalId ? `<b>Foal:</b> <span onclick="goToProfile('${existing.foalId}')" style="color:#c98a3a;cursor:pointer;text-decoration:underline;">${escAttr(existing.foalName)}</span>` : (existing.foalName?`<b>Foal:</b> ${escAttr(existing.foalName)} (not linked)`:'<b>Foal:</b> not yet born/added')}
         ${existing.note?`<br><i>${escAttr(existing.note)}</i>`:""}
       </div>
       ${!existing.foalId ? `
-      <label style="font-size:1em;color:#b5a392;text-transform:uppercase;">Link to Foal (if added to your roster)</label>
-      <select id="bs_foal_select" style="width:100%;padding:7px;background:#15100c;border:1px solid #4a392a;color:#f1e6d8;border-radius:5px;margin-top:4px;">
-        <option value="">— select foal from roster —</option>
-        ${state.horses.filter(x=>x.id!==h.id).map(x=>`<option value="${x.id}">${escAttr(x.name)}</option>`).join("")}
-      </select>
-      <button id="bs_link_foal" style="margin-top:8px;width:100%;background:#c98a3a;color:#241a14;border:none;padding:9px;border-radius:6px;font-weight:bold;cursor:pointer;">Link Foal</button>
-      ` : ""}
-      <button id="bs_clear" style="margin-top:10px;width:100%;background:#b1473f;color:#fff;border:none;padding:9px;border-radius:6px;font-weight:bold;cursor:pointer;">Clear This Slot</button>`;
-  } else if(isReserved){
-    body = `
-      <p style="color:#8a9ac8;">This slot is reserved for another member — it won't show as available to you until it's released or used.</p>
-      <div style="background:#15100c;padding:10px;border-radius:6px;margin-bottom:10px;">
-        <b>Reserved for:</b> ${escAttr(existing.reservedFor)}<br>
-        ${existing.date?`<b>Date:</b> ${escAttr(existing.date)}<br>`:''}
-        ${existing.note?`<i>${escAttr(existing.note)}</i>`:''}
-      </div>
-      <p class="small" style="color:#b5a392;">When the breeding actually happens, record it below to turn this reservation into a used slot.</p>
-      <label style="font-size:1em;color:#b5a392;text-transform:uppercase;">This horse's role</label>
-      <select id="bs_role" style="width:100%;padding:7px;background:#15100c;border:1px solid #4a392a;color:#f1e6d8;border-radius:5px;margin-top:4px;">
-        <option value="sire">Sire (this horse is the father)</option>
-        <option value="dam">Dam (this horse is the mother)</option>
-      </select>
-      <label style="font-size:1em;color:#b5a392;text-transform:uppercase;margin-top:8px;display:block;">Partner's Name</label>
-      <input id="bs_partner_name" placeholder="e.g. Moonshadow" style="width:100%;padding:7px;background:#15100c;border:1px solid #4a392a;color:#f1e6d8;border-radius:5px;margin-top:4px;" />
-      <button id="bs_convert" style="margin-top:12px;width:100%;background:#c98a3a;color:#241a14;border:none;padding:9px;border-radius:6px;font-weight:bold;cursor:pointer;">✓ Record breeding for this slot</button>
-      <button id="bs_release" style="margin-top:8px;width:100%;background:#3a4a6a;color:#fff;border:none;padding:9px;border-radius:6px;font-weight:bold;cursor:pointer;">Release reservation (make it mine again)</button>`;
-  } else {
-    body = `
-      <p style="color:#b5a392;">This slot is yours to use. You can record a breeding, or reserve the slot for another member.</p>
-      <label style="font-size:1em;color:#b5a392;text-transform:uppercase;">This horse's role</label>
-      <select id="bs_role" style="width:100%;padding:7px;background:#15100c;border:1px solid #4a392a;color:#f1e6d8;border-radius:5px;margin-top:4px;">
-        <option value="sire">Sire (this horse is the father)</option>
-        <option value="dam">Dam (this horse is the mother)</option>
-      </select>
-      <label style="font-size:1em;color:#b5a392;text-transform:uppercase;margin-top:8px;display:block;">Partner's Name</label>
-      <input id="bs_partner_name" placeholder="e.g. Moonshadow" style="width:100%;padding:7px;background:#15100c;border:1px solid #4a392a;color:#f1e6d8;border-radius:5px;margin-top:4px;" />
-      <label style="font-size:1em;color:#b5a392;text-transform:uppercase;margin-top:8px;display:block;">Partner's Owner <span style="opacity:.7;">(optional)</span></label>
-      <input id="bs_partner_owner" placeholder="e.g. @username" style="width:100%;padding:7px;background:#15100c;border:1px solid #4a392a;color:#f1e6d8;border-radius:5px;margin-top:4px;" />
-      <label style="font-size:1em;color:#b5a392;text-transform:uppercase;margin-top:8px;display:block;">Date</label>
-      <input id="bs_date" placeholder="e.g. Day 45 or a real date" style="width:100%;padding:7px;background:#15100c;border:1px solid #4a392a;color:#f1e6d8;border-radius:5px;margin-top:4px;" />
-      <label style="font-size:1em;color:#b5a392;text-transform:uppercase;margin-top:8px;display:block;">Note <span style="opacity:.7;">(optional)</span></label>
-      <input id="bs_note" placeholder="Any notes about this breeding" style="width:100%;padding:7px;background:#15100c;border:1px solid #4a392a;color:#f1e6d8;border-radius:5px;margin-top:4px;" />
-      <button id="bs_save" style="margin-top:12px;width:100%;background:#c98a3a;color:#241a14;border:none;padding:9px;border-radius:6px;font-weight:bold;cursor:pointer;">✓ Mark Slot as Used</button>
-      <div style="border-top:1px solid #4a392a;margin:14px 0 10px;"></div>
-      <label style="font-size:1em;color:#8a9ac8;text-transform:uppercase;display:block;">Or reserve this slot for another member</label>
-      <input id="bs_reserve_for" placeholder="Their name or @handle" style="width:100%;padding:7px;background:#15100c;border:1px solid #3a4a6a;color:#f1e6d8;border-radius:5px;margin-top:4px;" />
-      <input id="bs_reserve_note" placeholder="Note (optional) — e.g. which mare, agreed terms" style="width:100%;padding:7px;background:#15100c;border:1px solid #3a4a6a;color:#f1e6d8;border-radius:5px;margin-top:6px;" />
-      <button id="bs_reserve" style="margin-top:10px;width:100%;background:#3a4a6a;color:#fff;border:none;padding:9px;border-radius:6px;font-weight:bold;cursor:pointer;">Reserve slot for this member</button>`;
+        <label class="small" style="color:#b5a392;text-transform:uppercase;display:block;margin-top:8px;">Link to a foal on your roster</label>
+        <select id="bs_foal_select" style="width:100%;padding:7px;background:#15100c;border:1px solid #4a392a;color:#f1e6d8;border-radius:5px;margin-top:3px;">
+          <option value="">— select foal —</option>
+          ${state.horses.filter(x=>x.id!==h.id).map(x=>`<option value="${escAttr(x.id)}">${escAttr(x.name)}</option>`).join("")}
+        </select>
+        ${btn('bs_link_foal','Link Foal','#c98a3a','#241a14')}` : ""}
+      ${btn('bs_clear','Clear this slot','#b1473f','#fff')}
+      ${ghost('bs_cancel','Cancel')}`;
+    box.querySelector('#bs_cancel').onclick=close;
+    const lb=box.querySelector('#bs_link_foal'); if(lb) lb.onclick=doLinkFoal;
+    box.querySelector('#bs_clear').onclick=doClear;
   }
 
-  overlay.innerHTML=`<div style="background:#2c1f16;border:2px solid #c98a3a;border-radius:10px;padding:24px;max-width:480px;width:100%;color:#f1e6d8;font-family:Georgia,serif;max-height:90vh;overflow-y:auto;">
-    <h3 style="margin-top:0;color:#c98a3a;">Breeding Slot ${slotIndex+1} — ${escAttr(h.name)}</h3>
-    ${body}
-    <button id="bs_cancel" style="margin-top:8px;width:100%;background:#2c2118;color:#f1e6d8;border:1px solid #4a392a;padding:9px;border-radius:6px;cursor:pointer;">Cancel</button>
-  </div>`;
-  document.body.appendChild(overlay);
-
-  overlay.querySelector('#bs_cancel').onclick=()=>overlay.remove();
-
-  // Record a completed breeding (from the empty state).
-  const saveBtn=overlay.querySelector('#bs_save');
-  if(saveBtn) saveBtn.onclick=()=>{
-    const role=overlay.querySelector('#bs_role').value;
-    const partnerName=overlay.querySelector('#bs_partner_name').value.trim();
-    const partnerOwner=overlay.querySelector('#bs_partner_owner').value.trim();
-    const date=overlay.querySelector('#bs_date').value.trim();
-    const note=overlay.querySelector('#bs_note').value.trim();
+  // ── actions ───────────────────────────────────────────────────────────────
+  function doRecordPast(){
+    const role=box.querySelector('#bs_role').value;
+    const partnerName=box.querySelector('#bs_partner_name').value.trim();
+    const partnerOwner=box.querySelector('#bs_partner_owner').value.trim();
+    const date=box.querySelector('#bs_date').value.trim();
+    const note=box.querySelector('#bs_note').value.trim();
     if(!partnerName){ alert("Please enter the partner's name."); return; }
     if(!h.breedingRecords) h.breedingRecords=[];
     h.breedingRecords.push({ id:uid2(), slotIndex, role, partnerName, partnerOwner, date, note, foalId:null, foalName:"", reservedFor:"" });
     h.breedingFilled=(h.breedingFilled||0)+1;
     addLog(`${h.name}'s breeding slot ${slotIndex+1} marked as used (${role==="sire"?"sired":"bred"} with ${partnerName}).`);
-    saveHorse(h); save(); overlay.remove(); render();
-  };
-
-  // Reserve an empty slot for another member.
-  const reserveBtn=overlay.querySelector('#bs_reserve');
-  if(reserveBtn) reserveBtn.onclick=()=>{
-    const reservedFor=overlay.querySelector('#bs_reserve_for').value.trim();
-    const note=overlay.querySelector('#bs_reserve_note').value.trim();
+    saveHorse(h); save(); close(); render();
+  }
+  function doReserve(){
+    const reservedFor=box.querySelector('#bs_reserve_for').value.trim();
+    const note=box.querySelector('#bs_reserve_note').value.trim();
     if(!reservedFor){ alert("Enter the member's name or handle to reserve this slot for them."); return; }
     if(!h.breedingRecords) h.breedingRecords=[];
     h.breedingRecords.push({ id:uid2(), slotIndex, role:"", partnerName:"", partnerOwner:"", date:"", note, foalId:null, foalName:"", reservedFor });
     h.breedingFilled=(h.breedingFilled||0)+1;
     addLog(`${h.name}'s breeding slot ${slotIndex+1} reserved for ${reservedFor}.`);
-    saveHorse(h); save(); overlay.remove(); render();
-  };
-
-  // Convert a reservation into a recorded breeding.
-  const convertBtn=overlay.querySelector('#bs_convert');
-  if(convertBtn) convertBtn.onclick=()=>{
-    const role=overlay.querySelector('#bs_role').value;
-    const partnerName=overlay.querySelector('#bs_partner_name').value.trim();
+    saveHorse(h); save(); close(); render();
+    writeReservation(h, slotIndex, reservedFor).then(ok=>{
+      if(!ok) console.warn('[Stable] reservation saved locally but not shared');
+    });
+  }
+  function doConvert(){
+    const role=box.querySelector('#bs_role').value;
+    const partnerName=box.querySelector('#bs_partner_name').value.trim();
     if(!partnerName){ alert("Enter the partner's name to record this breeding."); return; }
     const rec=(h.breedingRecords||[]).find(r=>r.slotIndex===slotIndex);
     if(rec){
       rec.role=role; rec.partnerName=partnerName; rec.partnerOwner=rec.reservedFor||"";
       addLog(`${h.name}'s reserved slot ${slotIndex+1} recorded as bred with ${partnerName} (was reserved for ${rec.reservedFor}).`);
-      saveHorse(h); save(); overlay.remove(); render();
+      saveHorse(h); save(); close(); render();
+      removeReservation(h.id, slotIndex);
     }
-  };
-
-  // Release a reservation — slot becomes the owner's again.
-  const releaseBtn=overlay.querySelector('#bs_release');
-  if(releaseBtn) releaseBtn.onclick=()=>{
+  }
+  function doRelease(){
     h.breedingRecords=(h.breedingRecords||[]).filter(r=>r.slotIndex!==slotIndex);
     h.breedingFilled=Math.max(0,(h.breedingFilled||0)-1);
     addLog(`Released the reservation on ${h.name}'s breeding slot ${slotIndex+1}.`);
-    saveHorse(h); save(); overlay.remove(); render();
-  };
-
-  const clearBtn=overlay.querySelector('#bs_clear');
-  if(clearBtn) clearBtn.onclick=()=>{
+    saveHorse(h); save(); close(); render();
+    removeReservation(h.id, slotIndex);
+  }
+  function doClear(){
     if(!confirm('Clear this breeding record? This cannot be undone.')) return;
     h.breedingRecords=(h.breedingRecords||[]).filter(r=>r.slotIndex!==slotIndex);
     h.breedingFilled=Math.max(0,(h.breedingFilled||0)-1);
-    saveHorse(h); save(); overlay.remove(); render();
-  };
-
-  const linkBtn=overlay.querySelector('#bs_link_foal');
-  if(linkBtn) linkBtn.onclick=()=>{
-    const foalId=overlay.querySelector('#bs_foal_select').value;
+    saveHorse(h); save(); close(); render();
+  }
+  function doLinkFoal(){
+    const foalId=box.querySelector('#bs_foal_select').value;
     if(!foalId){ alert("Please select a foal first."); return; }
     const foal=state.horses.find(x=>x.id===foalId);
     const rec=(h.breedingRecords||[]).find(r=>r.slotIndex===slotIndex);
     if(rec && foal){
       rec.foalId=foal.id; rec.foalName=foal.name;
       addLog(`Linked ${h.name}'s breeding record to foal ${foal.name}.`);
-      saveHorse(h); save(); overlay.remove(); render();
+      saveHorse(h); save(); close(); render();
     }
-  };
+  }
+
+  if(isUsed) drawUsed();
+  else if(isReserved) drawReserved();
+  else drawChoose();
 }
 
 // ============================================
@@ -4794,17 +4946,25 @@ function buildShowLogForm(){
 
     ${Object.keys(ART_EXP).length ? `
     <div class="row" style="margin-top:8px;">
-      <div><label>Art Type <span class="small">(for EXP — optional)</span></label>
-        <select id="cs_art_type">
-          <option value="">— no art / no EXP —</option>
-          ${Object.keys(ART_EXP).map(k=>`<option value="${k}">${k} (+${ART_EXP[k]} EXP)</option>`).join("")}
-        </select>
+      <div><label>What's on this sheet? <span class="small">(for EXP — optional)</span></label>
+        <div id="cs_artrows">${artRowHTML("",1,false)}</div>
+        <button type="button" id="cs_add_art" class="secondary" style="margin-top:6px;padding:4px 10px;">+ Add another image type</button>
+        <p class="small" style="margin:4px 0 0;opacity:.75;">Leave the first row blank for "no art". One row per kind of image on the sheet — each counts at its own rate.</p>
       </div>
       <div><label>Literature Word Count <span class="small">(optional)</span></label>
         <input type="number" id="cs_lit" min="0" placeholder="min 200 for EXP" />
         <div class="small" id="cs_lit_preview" style="margin-top:2px;"></div>
       </div>
     </div>
+    <div class="row" style="margin-top:8px;">
+      <div><label>Event / Placement EXP Bonus <span class="small">(optional)</span></label>
+        <input type="text" id="cs_cb_label" placeholder="e.g. Winter Classic — 1st place bonus" />
+      </div>
+      <div><label>Bonus EXP <span class="small">(optional)</span></label>
+        <input type="number" id="cs_cb_exp" min="0" placeholder="e.g. 15" />
+      </div>
+    </div>
+    <p class="small" style="margin:4px 0 0;opacity:.75;">For EXP awarded by a host on top of the normal show maths — community events, placement bonuses, catch-up rewards for shows you never logged. Needs both a reason and an amount.</p>
     <div style="margin-top:8px;">
       <label>Bonus Elements <span class="small">(optional)</span></label>
       <div class="pill-select" id="cs_bonuses">
@@ -4926,12 +5086,11 @@ function buildShowLogForm(){
   const recalcCsTotal=()=>{
     const box=card.querySelector('#cs_total'); if(!box) return;
     try{
-      const artEl=card.querySelector('#cs_art_type');
-      const artType=artEl?artEl.value:"";
+      const artRows=readArtRows(card);
       const placement=Number(card.querySelector('#cs_place').value)||null;
       let exp=0;
-      if(artType && ART_EXP[artType]){
-        exp+=ART_EXP[artType];
+      if(artRows.length){
+        exp+=artRowsExp(artRows);
         const litEl=card.querySelector('#cs_lit');
         exp+=calcLitExp(parseInt(litEl && litEl.value)||0);
         exp+=1; // show entry
@@ -4940,6 +5099,11 @@ function buildShowLogForm(){
           else exp+=BONUS_EXP[k]; });
         if(placement) exp+=({1:4,2:3,3:2}[placement]||1);
       }
+      // A host-awarded bonus stands on its own — it applies even when no art is
+      // attached, so EXP for a past show can be logged after the fact.
+      const cbL=(card.querySelector('#cs_cb_label').value||'').trim();
+      const cbE=parseInt(card.querySelector('#cs_cb_exp').value)||0;
+      if(cbL && cbE>0) exp+=cbE;
       const ppEl=card.querySelector('.rpp_sum'); const pp=ppEl?Number(ppEl.textContent)||0:0;
       if(exp>0 || pp>0){
         box.innerHTML=`<b style="color:var(--accent,#d29a3e);">This record will grant:</b> `
@@ -4947,10 +5111,21 @@ function buildShowLogForm(){
           +(pp>0?` &nbsp;·&nbsp; Rider <b>+${pp} PP</b>`:'')
           +` <span class="small" style="opacity:.7;">(shows add EXP only — no stats)</span>`;
       } else {
-        box.innerHTML='<span class="small" style="opacity:.6;">Add show art (pick an art type) to earn EXP — placement adds a bonus on top.</span>';
+        box.innerHTML='<span class="small" style="opacity:.6;">Add show art (pick at least one image type) to earn EXP — placement adds a bonus on top. Or enter an event/placement EXP bonus on its own.</span>';
       }
     }catch(err){ box.textContent=''; }
   };
+  const csAddArt=card.querySelector('#cs_add_art');
+  if(csAddArt) csAddArt.onclick=()=>{
+    card.querySelector('#cs_artrows').insertAdjacentHTML('beforeend', artRowHTML("",1,true));
+    recalcCsTotal();
+  };
+  card.addEventListener('click', ev=>{
+    const rm=ev.target.closest && ev.target.closest('[data-art-remove]');
+    if(!rm || !card.querySelector('#cs_artrows').contains(rm)) return;
+    const row=rm.closest('[data-artrow]'); if(row) row.remove();
+    recalcCsTotal();
+  });
   card.addEventListener('input', recalcCsTotal);
   card.addEventListener('change', recalcCsTotal);
   card.addEventListener('click', ev=>{ if(ev.target.closest && ev.target.closest('.pill')) setTimeout(recalcCsTotal,0); });
@@ -4965,7 +5140,7 @@ function buildShowLogForm(){
     const placement=Number(card.querySelector('#cs_place').value)||null;
     const className=card.querySelector('#cs_class').value.trim();
     const note=card.querySelector('#cs_note').value.trim();
-    const artType=card.querySelector('#cs_art_type')?.value||"";
+    const artRows=readArtRows(card);
     const litWords=parseInt(card.querySelector('#cs_lit')?.value)||0;
     const link=card.querySelector('#cs_link')?.value.trim()||"";
     const res=card.querySelector('#cs_result');
@@ -4975,8 +5150,8 @@ function buildShowLogForm(){
     let nonPlacementExp=0;
     const sources=[];
     const discStats={};
-    if(artType && ART_EXP[artType]){
-      expGain+=ART_EXP[artType]; sources.push(`${artType} (+${ART_EXP[artType]})`);
+    if(artRows.length){
+      expGain+=artRowsExp(artRows); artRowsSources(artRows).forEach(x=>sources.push(x));
       const litExp=calcLitExp(litWords);
       if(litExp>0){expGain+=litExp; sources.push(`Lit ${litWords}w (+${litExp})`);}
       expGain+=1; sources.push(`Show Entry (+1)`);
@@ -4992,6 +5167,20 @@ function buildShowLogForm(){
       nonPlacementExp=expGain;
       const placeExp={1:4,2:3,3:2}[placement]||1;
       if(placement){expGain+=placeExp; sources.push(`Placement (+${placeExp})`);}
+    }
+    // Host-awarded bonus. Deliberately OUTSIDE the art block so EXP for an old
+    // show can be recorded with no artwork attached.
+    {
+      const cbL=(card.querySelector('#cs_cb_label').value||'').trim();
+      const cbE=parseInt(card.querySelector('#cs_cb_exp').value)||0;
+      if(cbL && cbE>0){
+        expGain+=cbE; nonPlacementExp+=cbE;
+        sources.push(`${cbL} (+${cbE})`);
+      } else if(cbL && !cbE){
+        res.innerHTML=`<div class="result fail">Give the EXP bonus an amount, or clear the label.</div>`; return;
+      } else if(!cbL && cbE>0){
+        res.innerHTML=`<div class="result fail">Say what the EXP bonus is for.</div>`; return;
+      }
       h.exp+=expGain;
       checkLevelUp(h);
       // Shows award EXP only — they do NOT add stats and do NOT count as training.
@@ -5000,10 +5189,10 @@ function buildShowLogForm(){
 
     let artLogId=null;
     let artSavePromise=Promise.resolve(true);
-    if(artImage && artType){
+    if(artImage && artRows.length){
       artLogId=uid2();
       const artEntry={id:artLogId,day:state.log.length+1,type:"competition",label:`${disc}${venue?" — "+venue:""}`,
-        placement,art:artType,lit:litWords?`${litWords} words`:null,
+        placement,art:artRowsLabel(artRows),artMix:artRows,lit:litWords?`${litWords} words`:null,
         bonuses:[...selectedBonuses],exp:expGain,link:link||null,image:artImage,
         statsDelta:discStats,nonPlacementExp,discipline:disc};
       h.artLog.unshift(artEntry);
@@ -5049,7 +5238,9 @@ function buildShowLogForm(){
     card.querySelector('#cs_art_url').value='';
     ['#cs_venue','#cs_date','#cs_note','#cs_class','#cs_link'].forEach(s=>{ const el=card.querySelector(s); if(el)el.value=''; });
     card.querySelector('#cs_place').value='';
-    if(card.querySelector('#cs_art_type')) card.querySelector('#cs_art_type').value='';
+    if(card.querySelector('#cs_artrows')) card.querySelector('#cs_artrows').innerHTML=artRowHTML("",1,false);
+    if(card.querySelector('#cs_cb_label')) card.querySelector('#cs_cb_label').value='';
+    if(card.querySelector('#cs_cb_exp')) card.querySelector('#cs_cb_exp').value='';
     if(card.querySelector('#cs_lit')){ card.querySelector('#cs_lit').value=''; card.querySelector('#cs_lit_preview').textContent=''; }
     selectedBonuses.clear();
     card.querySelectorAll('[data-bonus]').forEach(p=>p.classList.remove('active'));
@@ -7654,13 +7845,31 @@ function renderBreeding(){
   const horses=state.horses||[];
   const byName=(a,b)=>String(a.name||'').localeCompare(String(b.name||''));
 
-  // Only your horses that can still breed: old enough (3+) with a free slot,
-  // split by gender. Fully local — no network, so this can never hang or blank.
-  const sires=horses.filter(h=>canSire(h)&&isBreedable(h)).sort(byName);
-  const dams =horses.filter(h=>canDam(h) &&isBreedable(h)).sort(byName);
+  // Your own horses that can still breed: old enough (3+) with a free slot.
+  // Fully local, so the tab can never hang or blank waiting on the network.
+  const mineSires=horses.filter(h=>canSire(h)&&isBreedable(h)).sort(byName);
+  const mineDams =horses.filter(h=>canDam(h) &&isBreedable(h)).sort(byName);
 
+  // Slots other members have set aside FOR ME. Fetched in the background and
+  // folded in when they arrive (see the loader at the end of this function),
+  // never awaited up front — that's what used to hang the whole card.
+  const lent=(state.reservedForMe||[]).map(x=>x.horse);
+  const lentSires=lent.filter(h=>canSire(h)).sort(byName);
+  const lentDams =lent.filter(h=>canDam(h)).sort(byName);
+  const sires=[...mineSires, ...lentSires];
+  const dams =[...mineDams,  ...lentDams];
+
+  const isLent=id=>(state.reservedForMe||[]).some(x=>x.horse.id===id);
+  const lentFrom=id=>{
+    const hit=(state.reservedForMe||[]).find(x=>x.horse.id===id);
+    return hit ? (hit.res.ownerName||hit.res.__owner||"another member") : "";
+  };
   const slotsLeft=h=>ownerOpenSlots(h);
-  const optFor=(h,sel)=>`<option value="${escAttr(h.id)}" ${sel===h.id?'selected':''}>${escAttr(h.name)} (${escAttr(h.breed||'?')}) · ${slotsLeft(h)} slot${slotsLeft(h)===1?'':'s'} free</option>`;
+  const optFor=(h,sel)=>{
+    if(isLent(h.id))
+      return `<option value="${escAttr(h.id)}" ${sel===h.id?'selected':''}>${escAttr(h.name)} (${escAttr(h.breed||'?')}) · reserved for you by ${escAttr(lentFrom(h.id))}</option>`;
+    return `<option value="${escAttr(h.id)}" ${sel===h.id?'selected':''}>${escAttr(h.name)} (${escAttr(h.breed||'?')}) · ${slotsLeft(h)} slot${slotsLeft(h)===1?'':'s'} free</option>`;
+  };
 
   const noSires = sires.length===0;
   const noDams  = dams.length===0;
@@ -7688,7 +7897,9 @@ function renderBreeding(){
     <div id="bc_result"></div>`;
 
   const sireSel=wrap.querySelector('#bc_sire'), damSel=wrap.querySelector('#bc_dam');
-  const findH=id=>horses.find(x=>x.id===id);
+  // Reserved horses aren't in your roster, so look there too.
+  const findH=id=>horses.find(x=>x.id===id)
+    || (state.reservedForMe||[]).map(x=>x.horse).find(x=>x.id===id);
   const showInfo=(sel,box)=>{
     const h=findH(sel.value);
     wrap.querySelector(box).innerHTML = h
@@ -7725,6 +7936,18 @@ function renderBreeding(){
     if(sire.id===dam.id){ box.innerHTML=`<div class="card"><p class="small" style="color:#c98a3a;">A horse can't breed with itself — pick two different horses.</p></div>`; return; }
     renderPreview(sire,dam);
   };
+
+  // Background top-up: fetch the slots other members have reserved for me and
+  // re-render once, so their horses appear in the pickers. Deliberately fired
+  // AFTER wrap is returned-ready and never awaited — if the network is slow or
+  // down, the card is already on screen and simply shows your own horses.
+  if(!state.__resLoaded){
+    state.__resLoaded = true;
+    loadReservedForMe().then(list=>{
+      state.reservedForMe = list || [];
+      if(state.reservedForMe.length && state.tab==="breeding") render();
+    }).catch(()=>{ state.reservedForMe = []; });
+  }
 
   return wrap;
 }
