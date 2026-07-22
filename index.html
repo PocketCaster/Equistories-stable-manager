@@ -1990,7 +1990,16 @@ function applyLevelsFromExp(h, silent){
 function checkLevelUp(h){ applyLevelsFromExp(h, false); }
 
 function recomputeHorse(h){
-  const baseStats={}; STATS.forEach(s=>baseStats[s]=BASE_STAT_VALUE);
+  // A horse's starting point. Normally every stat begins at BASE_STAT_VALUE,
+  // but a FOAL starts from the average of its parents — so that average is
+  // stored on the horse and used here. Without this, stats are rebuilt from
+  // scratch on every page load and a bred foal silently drops back to base.
+  const baseStats={};
+  STATS.forEach(s=>{
+    const b = h.baseStats && Number.isFinite(Number(h.baseStats[s]))
+      ? Number(h.baseStats[s]) : BASE_STAT_VALUE;
+    baseStats[s] = b;
+  });
   h.stats = baseStats;
   h.level = 1;
   h.breedingSlots = BASE_BREEDING_SLOTS + (h.breedingFilled||0)*0;
@@ -3771,10 +3780,20 @@ async function loadReservedForMe(){
   const lookups=[...new Set([...keys, ...raws, ...raws.map(r=>"@"+r)])];
   try{
     const seen=new Set(); const recs=[];
+    let denied=false;
     for(const k of lookups){
-      const found=await DB.listByField('breedingReservations','reservedFor',k).catch(()=>[]);
+      let found=[];
+      try{ found=await withTimeout(DB.listByField('breedingReservations','reservedFor',k), 8000, "timeout"); }
+      catch(e){
+        const msg=String((e&&e.message)||e);
+        if(/permission|insufficient/i.test(msg)) denied=true;
+        found=[];
+      }
       (found||[]).forEach(r=>{ if(r && r.id && !seen.has(r.id)){ seen.add(r.id); recs.push(r); } });
     }
+    // A permission error means one specific thing: the rules for this
+    // collection haven't been published. Say so instead of "no response".
+    if(denied && !recs.length){ const err=new Error("denied"); err.denied=true; throw err; }
     const open=recs.filter(r=>r && r.status!=="used" && r.horseId);
     const out=[];
     for(const r of open){
@@ -3782,7 +3801,13 @@ async function loadReservedForMe(){
       if(horse) out.push({res:r, horse});
     }
     return out;
-  }catch(e){ console.warn('[Stable] could not load reservations:', e && e.message); return []; }
+  }catch(e){
+    console.warn('[Stable] could not load reservations:', e && e.message);
+    // Let a permissions failure reach the caller so the Breeding tab can say
+    // what's actually wrong instead of reporting a generic no-response.
+    if(e && e.denied) throw e;
+    return [];
+  }
 }
 // Owner side: a reservation the other member has used means that slot is spent.
 // Only the owner can write the horse, so this catches up on their next load.
@@ -4118,16 +4143,30 @@ function renderPedigreeChart(h){
 // so we ask who owns it, fetch just that member's horses with one indexed
 // lookup, and let you pick from the list. No scanning the whole game.
 const __memberHorseCache={};
+// Never leave the caller hanging: if the database doesn't answer within a few
+// seconds we give up and say so, rather than sitting on "Looking…" forever.
+function withTimeout(promise, ms, label){
+  return Promise.race([
+    promise,
+    new Promise((_,rej)=>setTimeout(()=>rej(new Error(label||"timeout")), ms)),
+  ]);
+}
 async function horsesOfMember(handle){
   const key=String(handle||"").trim();
-  if(!key) return [];
-  if(__memberHorseCache[key]) return __memberHorseCache[key];
-  const DB=getDB(); if(!DB || !DB.listByOwner) return [];
+  if(!key) return {ok:true, list:[]};
+  if(__memberHorseCache[key]) return {ok:true, list:__memberHorseCache[key]};
+  const DB=getDB();
+  if(!DB || !DB.listByOwner) return {ok:false, reason:"offline"};
   try{
-    const list=await DB.listByOwner('horses', key);
+    const list=await withTimeout(DB.listByOwner('horses', key), 8000, "timeout");
     __memberHorseCache[key]=list||[];
-    return __memberHorseCache[key];
-  }catch(e){ console.warn('[Stable] member horse lookup failed:', e && e.message); return []; }
+    return {ok:true, list:__memberHorseCache[key]};
+  }catch(e){
+    const msg=String((e&&e.message)||e);
+    console.warn('[Stable] member horse lookup failed:', msg);
+    return {ok:false, reason: /permission|insufficient/i.test(msg) ? "denied"
+                            : /timeout/i.test(msg) ? "timeout" : "error", detail:msg};
+  }
 }
 // A reusable "whose horse is it? → which one?" control. Calls onPick(horse).
 function memberHorsePicker(idPrefix, labelText, onPick){
@@ -4145,7 +4184,16 @@ function memberHorsePicker(idPrefix, labelText, onPick){
     const who=box.querySelector('#'+idPrefix+'_owner').value.trim();
     if(!who){ res().innerHTML='<span class="small" style="color:#e0906a;">Enter their username first.</span>'; return; }
     res().innerHTML='<span class="small" style="opacity:.7;">Looking…</span>';
-    const list=await horsesOfMember(who);
+    const r=await horsesOfMember(who);
+    if(!r.ok){
+      const why = r.reason==="offline" ? "You're not connected to the database right now."
+        : r.reason==="denied" ? "The database refused the request — the site's permissions need publishing."
+        : r.reason==="timeout" ? "The database didn't answer in time. Check your connection and try again."
+        : "Something went wrong reading from the database.";
+      res().innerHTML=`<span class="small" style="color:#e0906a;">${why}</span>`;
+      return;
+    }
+    const list=r.list;
     if(!list.length){
       res().innerHTML=`<span class="small" style="color:#e0906a;">No horses found under “${escAttr(who)}”. That's their <b>bank username</b>, not a display name — and it's case-sensitive.</span>`;
       return;
@@ -4219,6 +4267,12 @@ function showLineageModal(horseId){
       ${slotFields('dds','DDS')}${slotFields('ddd','DDD')}
     </details>
 
+    <div id="ln_basestats" style="border-top:1px solid #4a392a;margin-top:14px;padding-top:12px;">
+      <label class="small" style="color:#e8c86a;text-transform:uppercase;">Base stats from parents</label>
+      <p class="small" style="color:#a89888;margin:4px 0 0;">For foals bred before the site: link both parents above, then take this horse's starting stats from the average of theirs. Training it has already logged stays on top.</p>
+      <button id="ln_bs_go" class="secondary" style="margin-top:6px;padding:6px 12px;">Set base stats from parents</button>
+      <div id="ln_bs_status" style="margin-top:5px;"></div>
+    </div>
     <button id="ln_save" style="margin-top:10px;width:100%;background:#c98a3a;color:#241a14;border:none;padding:10px;border-radius:6px;font-weight:bold;cursor:pointer;font-size:1.1em;">Save Pedigree</button>
     <button id="ln_cancel" style="margin-top:8px;width:100%;background:#2c2118;color:#f1e6d8;border:1px solid #4a392a;padding:10px;border-radius:6px;cursor:pointer;font-size:1.1em;">Cancel</button>
   </div>`;
@@ -4238,6 +4292,40 @@ function showLineageModal(horseId){
         `<span class="small" style="color:#9bd18a;">Linked to <b>${escAttr(horse.name)}</b> (${escAttr(who)}). Save the pedigree to keep it.</span>`;
     }));
   });
+
+  // ── Base stats from the parents ────────────────────────────────────────
+  // For foals brought over from before the site: enter the horse normally,
+  // link both parents here, and take the starting stats from them. Stored as
+  // baseStats so training stacks on top and a reload can't undo it.
+  const bsBox=overlay.querySelector('#ln_basestats');
+  if(bsBox){
+    const resolveParent=async(key)=>{
+      const p=(h.pedigree||{})[key]||{};
+      if(p.inRosterId){ const r=state.horses.find(x=>x.id===p.inRosterId); if(r) return r; }
+      if(p.externalId){
+        const DB=getDB();
+        if(DB && DB.get){ try{ return await DB.get('horses', p.externalId); }catch(e){} }
+      }
+      return null;
+    };
+    const status=(msg,col)=>{ bsBox.querySelector('#ln_bs_status').innerHTML=
+      `<span class="small" style="color:${col||'#a89888'};">${msg}</span>`; };
+    bsBox.querySelector('#ln_bs_go').onclick=async()=>{
+      status('Reading the parents…');
+      const [sire,dam]=await Promise.all([resolveParent('sire'), resolveParent('dam')]);
+      if(!sire || !dam){
+        status('Both parents need to be linked first — either from your roster or another member\'s.', '#e0906a');
+        return;
+      }
+      const derived=foalStats(sire.stats||{}, dam.stats||{}, STATS);
+      h.baseStats=Object.assign({}, derived);
+      recomputeHorse(h);   // re-apply the horse's own training on top
+      saveHorse(h); save();
+      status(`Set from ${escAttr(sire.name)} × ${escAttr(dam.name)} — `
+        + STATS.map(k=>`${STAT_LABELS[k]||k} ${derived[k]}`).join(', ')
+        + '. Any training this horse has logged is still counted on top.', '#9bd18a');
+    };
+  }
 
   overlay.querySelector('#ln_cancel').onclick=()=>overlay.remove();
   overlay.querySelector('#ln_save').onclick=()=>{
@@ -8082,10 +8170,15 @@ function renderBreeding(){
           +'If a member says they reserved one: they need to be on the current version of the Manager, '
           +'and the site\'s database permissions must be published. Reopening this tab checks again.</span>');
       }
-    }).catch(()=>{
+    }).catch(err=>{
       state.__resBusy = false;
       state.reservedForMe = [];
-      showNote('<span class="small" style="color:#e0906a;">Couldn\'t check for reserved slots — the database didn\'t respond. Your own horses are unaffected.</span>');
+      showNote(err && err.denied
+        ? '<span class="small" style="color:#e0906a;">The database refused to read reserved slots. '
+          +'This means the <b>breedingReservations</b> permissions haven\'t been published yet — '
+          +'until they are, reservations can\'t reach anyone. Your own horses are unaffected.</span>'
+        : '<span class="small" style="color:#e0906a;">Couldn\'t check for reserved slots — the database didn\'t answer. '
+          +'Your own horses are unaffected.</span>');
     });
   }
 
@@ -8217,6 +8310,7 @@ function createFoalFromRoll(sire, dam, foal, name, roll){
     },
   });
   h.stats=stats;
+  h.baseStats=Object.assign({}, stats);   // survives recomputeHorse on reload
   h.stage="foal";
   h.sireId=sire.id; h.sireName=sire.name;
   h.damId =dam.id;  h.damName =dam.name;
