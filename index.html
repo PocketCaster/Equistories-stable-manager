@@ -8010,6 +8010,7 @@ function renderBreeding(){
         </div>
       </div>
       ${(noSires||noDams)?`<p class="small" style="color:#c98a3a;margin-top:10px;">${noSires&&noDams?'None of your horses have an open breeding slot yet (they need to be age 3+ with a free slot).':noSires?'You have no eligible sire (a stallion, colt or rig aged 3+ with a free slot).':'You have no eligible dam (a mare or filly aged 3+ with a free slot).'}</p>`:''}
+      <div id="bc_resnote" style="margin-top:8px;"></div>
       <button id="bc_calc" style="margin-top:12px;">Calculate foals</button>
       <button id="bc_live" style="margin-top:12px;margin-left:6px;">Proceed with Breeding</button>
     </div>
@@ -8060,12 +8061,32 @@ function renderBreeding(){
   // re-render once, so their horses appear in the pickers. Deliberately fired
   // AFTER wrap is returned-ready and never awaited — if the network is slow or
   // down, the card is already on screen and simply shows your own horses.
-  if(!state.__resLoaded){
-    state.__resLoaded = true;
+  // Retry until it actually finds something. The old version latched a "loaded"
+  // flag on the very first render — so if that ran before the database
+  // connection or your login was ready, it returned nothing and never tried
+  // again for the whole session, which looked exactly like "no reservations".
+  const note=wrap.querySelector('#bc_resnote');
+  const showNote=(html)=>{ const n=wrap.querySelector('#bc_resnote'); if(n) n.innerHTML=html; };
+  if(state.reservedForMe && state.reservedForMe.length){
+    showNote(`<span class="small" style="color:#8a9ac8;">${state.reservedForMe.length} slot${state.reservedForMe.length===1?'':'s'} reserved for you by other members — listed above.</span>`);
+  } else if(!state.__resBusy){
+    state.__resBusy = true;
+    showNote('<span class="small" style="opacity:.6;">Checking for slots reserved for you…</span>');
     loadReservedForMe().then(list=>{
+      state.__resBusy = false;
       state.reservedForMe = list || [];
-      if(state.reservedForMe.length && state.tab==="breeding") render();
-    }).catch(()=>{ state.reservedForMe = []; });
+      if(state.reservedForMe.length){
+        if(state.tab==="breeding") render();
+      } else {
+        showNote('<span class="small" style="color:#8a7a6a;">No slots are reserved for you right now. '
+          +'If a member says they reserved one: they need to be on the current version of the Manager, '
+          +'and the site\'s database permissions must be published. Reopening this tab checks again.</span>');
+      }
+    }).catch(()=>{
+      state.__resBusy = false;
+      state.reservedForMe = [];
+      showNote('<span class="small" style="color:#e0906a;">Couldn\'t check for reserved slots — the database didn\'t respond. Your own horses are unaffected.</span>');
+    });
   }
 
   return wrap;
