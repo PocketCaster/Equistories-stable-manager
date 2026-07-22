@@ -3358,7 +3358,7 @@ function renderRoster(){
     const [price, ...labelParts]=val.split('|');
     const label=labelParts.join('|');
     const def=[...Object.values(GENO_MODIFIERS).flat(), ...(state.customMarkings||[])].find(m=>m.label===label);
-    extraModifiers.push({label, value:Number(price), genoTag:def&&def.genoTag||null});
+    extraModifiers.push({label, value:Number(price), genoTag:def&&def.genoTag||null, rare:true});
     refreshModList();
     refreshGenoPreview();
     form.querySelector('#nh_mod_pick').value='';
@@ -6717,6 +6717,34 @@ function zygosityLabel(code, locus){
   return isHomozygous(code, locus) ? "homozygous" : "two alleles";
 }
 
+// ── Rare markings in the phenotype ─────────────────────────────────────────
+// Markings picked in "Rare Markings & Custom Traits" are stored in
+// h.genoModifiers alongside the colour/pattern modifiers that computeGenoResult
+// produces. Only the colour ones are baked into h.phenotype, so the markings
+// were invisible everywhere. These helpers pull the marking labels back out
+// and append them for display, so the list stays correct even when markings
+// are added or removed after the horse was created.
+function knownMarkingLabels(){
+  return new Set([
+    ...GENO_MODIFIERS["Rare Markings"].map(m=>String(m.label).trim().toLowerCase()),
+    ...(state.customMarkings||[]).map(m=>String(m.label||'').trim().toLowerCase()),
+  ]);
+}
+function rareMarkingLabels(h){
+  const known = knownMarkingLabels();
+  return (h.genoModifiers||[])
+    .filter(m => m && (m.rare===true || known.has(String(m.label||'').trim().toLowerCase())))
+    .map(m => String(m.label||'').trim())
+    .filter(Boolean);
+}
+// Colour/pattern phenotype plus any rare markings the horse carries.
+function fullPhenotype(h){
+  const base = String(h.phenotype||'').trim();
+  const seen = base.toLowerCase();
+  const marks = rareMarkingLabels(h).filter(l => !seen.includes(l.toLowerCase()));
+  return [base, ...marks].filter(Boolean).join(", ");
+}
+
 function alleleRank(x, order){
   // "n" (no-allele) conventionally leads pairs like nCr, nLp, nSpl…
   if(x==="n") return -1;
@@ -6912,14 +6940,40 @@ function foalRisks(foalGenotypeByLocus, riskRules){
 
 
 // ── Admin: per-breed breeding-trait config (rare traits, gene risks, lethals) ──
+// Different wordings for the same trait, so the marking picker and a breed's
+// trait-percentage list can be written independently and still line up.
+// Keys and values are lowercase; both sides are mapped through this table.
+const TRAIT_NAME_ALIASES = {
+  "somatic mutation":"somatic",
+  "peacock appaloosa mutation":"peacock",
+  "bend or spots":"bend or spots",
+  "indigo eyes":"indigo eyes",
+  // "Unrelated Bleu" is the French spelling and is the correct name; the
+  // marking was entered with two letters transposed, so map it back.
+  "unrealted bleu":"unrelated bleu",
+  "unrelated blue":"unrelated bleu",
+};
+
+// Traits that apply to EVERY breed at a baseline rate. A breed's own trait
+// list (Admin > Breed Traits) overrides any entry here with the same name, so
+// e.g. Birdcatcher Spots sits at 10% generally but 90% on Irish Lightblood.
+const GLOBAL_TRAIT_DEFAULTS = [
+  {type:"flat", name:"Birdcatcher Spots", chance:10},
+  {type:"flat", name:"Dom White", chance:10},
+  // Gulastra Plume only occurs on a sabino carrier.
+  {type:"conditional", name:"Gulastra Plume", chance:30,
+   requires:{locus:"sabino1", anyOf:["Sbsb"]}, requiresLabel:"Sabino (Sbsb)"},
+];
+
 const ILB_TRAIT_DEFAULTS = [
   {type:"health", name:"Circe Ears", chance:45, healthName:"deaf", healthChance:30},
   {type:"flat",   name:"Glossy Coat", chance:70},
+  {type:"flat",   name:"Birdcatcher Spots", chance:90},
   {type:"health", name:"Silken", chance:30, healthName:"metabolic disease", healthChance:30},
   {type:"health", name:"Indigo Eyes", chance:30, healthName:"blind", healthChance:30},
-  {type:"health", name:"Unrelated Blue", chance:20, healthName:"Moon Blindness (ERU)", healthChance:30},
+  {type:"health", name:"Unrelated Bleu", chance:20, healthName:"Moon Blindness (ERU)", healthChance:30},
   {type:"conditional", name:"Peacock", chance:15, requires:{locus:"leopard", anyOf:["Lplp","LpLp"]}, requiresLabel:"LP gene"},
-  {type:"conditional", name:"Bloodmark", chance:15, requires:{locus:"grey", anyOf:["nG","GG"]}, requiresLabel:"grey"},
+  {type:"conditional", name:"Bloodmark", chance:15, requires:{locus:"grey", anyOf:["Gg","GG"]}, requiresLabel:"grey"},
   {type:"conditional", name:"Mismarked Appy", chance:10, requires:{locus:"leopard", anyOf:["Lplp","LpLp"]}, requiresLabel:"LP gene"},
   {type:"flat", name:"Brindle", chance:10},
   {type:"flat", name:"Lacing", chance:10},
@@ -7032,9 +7086,21 @@ function appendBreedingTraitsEditor(wrap){
 // ============================================
 let __breedSire=null, __breedDam=null;
 
+// A locus as it actually exists FOR THIS BREED: its normal options plus any
+// extra allele rows added by mutations/overrides attached to that breed, and
+// minus anything the breed's allele restrictions forbid. The breeding engine
+// (splitCode, crossLocus, defaults, genotype parsing) reads locus.options
+// directly, so a mutation allele would be invisible to it unless it is merged
+// in here first. Custom genes come through allLoci() and are resolved the
+// same way, so they get the same treatment.
+function locusForBreed(locus, breedKey){
+  const opts = getLocusOptions(locus, breedKey);
+  if(opts === locus.options) return locus;
+  return Object.assign({}, locus, {options: opts});
+}
 function breedLociForBreed(breedKey){
   const allowed = new Set(["extension","agouti", ...getAllowedLoci(breedKey)]);
-  return allLoci().filter(l=>allowed.has(l.key));
+  return allLoci().filter(l=>allowed.has(l.key)).map(l=>locusForBreed(l, breedKey));
 }
 
 // Read a horse's genotype STRING (e.g. "Ee AtAt stysty pngpng nn dd ...") back
@@ -7085,7 +7151,21 @@ function findBreedByName(name){
   const list=(state.customBreeds||[]);
   return list.find(b=>String(b.name||"").toLowerCase()===String(name).toLowerCase())||null;
 }
-function breedRareTraits(breedName){ const b=findBreedByName(breedName); return (b&&Array.isArray(b.rareTraits))?b.rareTraits:[]; }
+// A breed's trait list, layered on top of the global baseline. Anything the
+// breed defines itself wins outright (matched through the alias table, so
+// "Somatic Mutation" and "Somatic" are treated as one trait); anything it
+// doesn't mention falls back to the GLOBAL_TRAIT_DEFAULTS rate.
+function traitKey(name){
+  const k=String(name||'').trim().toLowerCase();
+  return TRAIT_NAME_ALIASES[k] || k;
+}
+function breedRareTraits(breedName){
+  const b=findBreedByName(breedName);
+  const own=(b&&Array.isArray(b.rareTraits))?b.rareTraits:[];
+  const ownKeys=new Set(own.map(t=>traitKey(t.name)));
+  const baseline=GLOBAL_TRAIT_DEFAULTS.filter(t=>!ownKeys.has(traitKey(t.name)));
+  return [...own, ...baseline];
+}
 function breedRiskRules(breedName){ const b=findBreedByName(breedName); return (b&&Array.isArray(b.geneRisks))?b.geneRisks:[]; }
 function breedLethals(breedName){ const b=findBreedByName(breedName); return (b&&Array.isArray(b.lethals))?b.lethals:[]; }
 
@@ -7234,8 +7314,23 @@ function computeFoalPreview(sire,dam,allHorses){
     return [...new Set([...fromMods,...fromList])];
   };
   const cfgNames=rareCfg.map(t=>t.name.toLowerCase());
-  const matchTraits=(names)=>names.filter(n=>cfgNames.includes(n.toLowerCase()))
-    .map(n=>rareCfg.find(t=>t.name.toLowerCase()===n.toLowerCase()).name);
+  // The marking picker and the breed's trait-percentage list grew up apart, so
+  // a few names describe the same trait with different wording. Match through
+  // an alias table so a horse ticked "Somatic Mutation" is recognised by the
+  // "Somatic" percentage rule.
+  const aliasFor=(n)=>{
+    const k=n.toLowerCase();
+    return TRAIT_NAME_ALIASES[k] || k;
+  };
+  const matchTraits=(names)=>{
+    const out=[];
+    names.forEach(n=>{
+      const want=aliasFor(n);
+      const hit=rareCfg.find(t=>t.name.toLowerCase()===want || aliasFor(t.name)===want);
+      if(hit && !out.includes(hit.name)) out.push(hit.name);
+    });
+    return out;
+  };
   const sireTraits=matchTraits(traitNamesOf(sire));
   const damTraits =matchTraits(traitNamesOf(dam));
   const traitRows=resolveRareTraits(rareCfg, sireTraits, damTraits, foalByLocus, riskMult);
@@ -7530,7 +7625,7 @@ function renderHorseProfilePage(app, h){
           <h1 style="margin:0 0 4px;color:#c98a3a;font-size:1.9em;">${h.name}</h1>
           ${(h.badges||[]).length?`<div style="margin-bottom:6px;">${h.badges.map(b=>`<span class="tag" style="background:#3a2a10;color:#e8c86a;border-color:#c98a3a;">${b}</span>`).join(" ")}</div>`:""}
           <div class="small" style="font-size:1.1em;">${h.breed}${h.gender?` · ${h.gender}`:""} · Age ${h.age} (${h.stage})</div>
-          ${h.phenotype?`<div class="small">Phenotype: ${h.phenotype}</div>`:""}
+          ${fullPhenotype(h)?`<div class="small">Phenotype: ${fullPhenotype(h)}</div>`:""}
           ${h.genotype?`<div class="small">Genotype: ${h.genotype}</div>`:""}
           <div style="margin-top:8px;"><span class="tag" style="font-size:1.02em;">Level ${h.level}</span> <span class="tag" style="font-size:1.02em;">${h.exp} EXP</span></div>
           <div class="expbar-bg" style="margin-top:6px;max-width:260px;"><div class="expbar-fill" style="width:${pct}%"></div></div>
@@ -7873,7 +7968,7 @@ function showNetWorthModal(horseId){
     if(!val) return;
     const [price, ...labelParts]=val.split('|');
     const label=labelParts.join('|');
-    h.genoModifiers.push({label, value:Number(price)});
+    h.genoModifiers.push({label, value:Number(price), rare:true});
     refreshModList();
     refreshPreview();
     overlay.querySelector('#nw_mod_pick').value='';
