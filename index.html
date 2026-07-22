@@ -3979,7 +3979,7 @@ function showBreedingSlotModal(horseId, slotIndex){
     box.querySelector('#bs_cancel').onclick=close;
     box.querySelector('#bs_go_reserve').onclick=drawReserve;
     box.querySelector('#bs_go_past').onclick=drawPast;
-    box.querySelector('#bs_go_breed').onclick=()=>{ close(); state.tab="breeding"; render(); };
+    box.querySelector('#bs_go_breed').onclick=()=>{ close(); activeTab="breeding"; render(); };
   }
 
   function drawReserve(){
@@ -8305,7 +8305,10 @@ function renderBreeding(){
       state.__resBusy = false;
       state.reservedForMe = list || [];
       if(state.reservedForMe.length){
-        if(state.tab==="breeding") render();
+        // The active tab lives in `activeTab`, not on state — checking the wrong
+        // one meant this never fired, so the data loaded but the screen never
+        // redrew and the note sat on "Checking…" forever.
+        if(activeTab==="breeding") render();
       } else {
         showNote('<span class="small" style="color:#8a7a6a;">No slots are reserved for you right now. '
           +'If a member says they reserved one: they need to be on the current version of the Manager, '
