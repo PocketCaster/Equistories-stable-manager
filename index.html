@@ -3751,7 +3751,7 @@ function sameMember(a,b){
 function reservationDocId(horseId, slotIndex){ return `res_${horseId}_${slotIndex}`; }
 
 async function writeReservation(h, slotIndex, reservedFor){
-  const DB=getDB(); if(!DB || !DB.putWithField) return false;
+  const DB=await waitForDB(); if(!DB || !DB.putWithField) return false;
   const id=reservationDocId(h.id, slotIndex);
   try{
     const typed=String(reservedFor||"").trim();
@@ -3764,13 +3764,13 @@ async function writeReservation(h, slotIndex, reservedFor){
   }catch(e){ console.warn('[Stable] reservation write failed:', e && e.message); return false; }
 }
 async function removeReservation(horseId, slotIndex){
-  const DB=getDB(); if(!DB || !DB.remove) return false;
+  const DB=await waitForDB(); if(!DB || !DB.remove) return false;
   try{ return await DB.remove('breedingReservations', reservationDocId(horseId, slotIndex)); }
   catch(e){ console.warn('[Stable] reservation removal failed:', e && e.message); return false; }
 }
 // Reservations other members have set aside for ME, with the horse itself.
 async function loadReservedForMe(){
-  const DB=getDB(); if(!DB || !DB.listByField) return [];
+  const DB=await waitForDB(); if(!DB || !DB.listByField) return [];
   const keys=myMemberKeys();
   if(!keys.length) return [];
   // Also try the raw spellings, so reservations written before the key was
@@ -3812,7 +3812,7 @@ async function loadReservedForMe(){
 // Owner side: a reservation the other member has used means that slot is spent.
 // Only the owner can write the horse, so this catches up on their next load.
 async function reconcileReservations(){
-  const DB=getDB(); if(!DB || !DB.listByField) return 0;
+  const DB=await waitForDB(); if(!DB || !DB.listByField) return 0;
   const me=bankAccount.userId;
   if(!me) return 0;
   let changed=0;
@@ -4155,7 +4155,7 @@ async function horsesOfMember(handle){
   const key=String(handle||"").trim();
   if(!key) return {ok:true, list:[]};
   if(__memberHorseCache[key]) return {ok:true, list:__memberHorseCache[key]};
-  const DB=getDB();
+  const DB=await waitForDB();
   if(!DB || !DB.listByOwner) return {ok:false, reason:"offline"};
   try{
     const list=await withTimeout(DB.listByOwner('horses', key), 8000, "timeout");
@@ -4303,7 +4303,7 @@ function showLineageModal(horseId){
       const p=(h.pedigree||{})[key]||{};
       if(p.inRosterId){ const r=state.horses.find(x=>x.id===p.inRosterId); if(r) return r; }
       if(p.externalId){
-        const DB=getDB();
+        const DB=await waitForDB();
         if(DB && DB.get){ try{ return await DB.get('horses', p.externalId); }catch(e){} }
       }
       return null;
