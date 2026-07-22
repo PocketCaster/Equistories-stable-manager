@@ -3544,7 +3544,7 @@ function renderRoster(){
       <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">
         <button class="secondary" data-act="toggle-log" data-id="${h.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">${open?"Hide":"Show"} Art Log (${h.artLog.length})</button>
 
-        <button class="secondary" data-act="edit-traits" data-id="${h.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">Traits</button>
+        <button class="secondary" data-act="edit-geno" data-id="${h.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">Set Genetics</button>
         <button class="danger" data-act="del" data-id="${h.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">Remove</button>
         <button class="secondary" data-act="transfer-horse" data-id="${h.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">Sell / Transfer</button>
       </div>
@@ -3590,7 +3590,7 @@ function renderRoster(){
     showBreedingSlotModal(slot.dataset.id, Number(slot.dataset.slot));
   });
   wrap.querySelectorAll('[data-act="edit-lineage"]').forEach(b=>b.onclick=()=>showLineageModal(b.dataset.id));
-  wrap.querySelectorAll('[data-act="edit-traits"]').forEach(b=>b.onclick=()=>showTraitsModal(b.dataset.id));
+  wrap.querySelectorAll('[data-act="edit-geno"]').forEach(b=>b.onclick=()=>showGeneticsModal(b.dataset.id));
   wrap.querySelectorAll('[data-act="edit-worth"]').forEach(b=>b.onclick=()=>showNetWorthModal(b.dataset.id));
   wrap.querySelectorAll('[data-act="edit-details"]').forEach(b=>b.onclick=async()=>{
     const h=state.horses.find(x=>x.id===b.dataset.id); if(!h) return;
@@ -3938,6 +3938,102 @@ function showLineageModal(horseId){
 
 // Traits editor — mark which of the breed's configured rare traits this horse
 // carries. Carried traits feed the Foal Calculator (a carrier can pass them on).
+// ── Set Genetics ───────────────────────────────────────────────────────────
+// Edit the coat-colour alleles of a horse that already exists. Mirrors the
+// gene grid in Add-a-Horse, but seeded from the horse's current genetics:
+// horseGenoByLocus() prefers its structured genoObj and otherwise reads the
+// genotype string, so horses added before genoObj existed still open with the
+// right alleles selected instead of resetting to defaults.
+// Saving recomputes genotype/phenotype/base price and REPLACES only the
+// colour-gene modifiers — rare markings the horse carries are preserved.
+function showGeneticsModal(horseId){
+  const h=state.horses.find(x=>x.id===horseId);
+  if(!h) return;
+  const breed=(h.breed||"").trim();
+  const breedKey=breed.toLowerCase();
+  const fixedBase=getFixedBase(breedKey);
+  const loci=[allLoci().find(l=>l.key==="extension"), allLoci().find(l=>l.key==="agouti"),
+    ...getAllowedLoci(breedKey).map(k=>allLoci().find(l=>l.key===k))]
+    .filter(Boolean).map(l=>locusForBreed(l, breedKey));
+
+  // Seed from what the horse actually has.
+  const sel=Object.assign({}, horseGenoByLocus(h, loci));
+  loci.forEach(l=>{ if(!sel[l.key]) sel[l.key]=defaultCodeForLocus(l); });
+
+  const overlay=document.createElement('div');
+  overlay.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.9);z-index:9999;display:flex;align-items:flex-start;justify-content:center;padding:16px;overflow-y:auto;';
+  overlay.innerHTML=`<div style="background:#2c1f16;border:2px solid #c98a3a;border-radius:10px;padding:22px;max-width:820px;width:100%;color:#f1e6d8;font-family:Georgia,serif;">
+    <h3 style="margin-top:0;color:#c98a3a;">Set Genetics — ${escAttr(h.name)}</h3>
+    <p class="small" style="color:#b5a392;margin-top:0;">Breed: <b>${escAttr(breed||"—")}</b>. Changing these updates the horse's genotype, phenotype and genetics value. Rare markings are kept as they are.</p>
+    <div id="sg_wrap"></div>
+    <div id="sg_preview" class="small" style="background:#15100c;padding:10px;border-radius:6px;margin-top:12px;line-height:1.5;"></div>
+    <button id="sg_save" style="margin-top:12px;width:100%;background:#c98a3a;color:#241a14;border:none;padding:10px;border-radius:6px;font-weight:bold;cursor:pointer;">✓ Save Genetics</button>
+    <button id="sg_cancel" style="margin-top:8px;width:100%;background:#2c2118;color:#f1e6d8;border:1px solid #4a392a;padding:9px;border-radius:6px;cursor:pointer;">Cancel</button>
+  </div>`;
+  document.body.appendChild(overlay);
+
+  function draw(){
+    const wrapEl=overlay.querySelector('#sg_wrap');
+    wrapEl.innerHTML=`<div class="gene-grid">
+      ${loci.map(locus=>{
+        if(locus.requiresAny){
+          const ok=Object.entries(locus.requiresAny).every(([k,codes])=>codes.includes(sel[k]));
+          if(!ok) return "";
+        }
+        const fixedCode = fixedBase && (locus.key==="extension"||locus.key==="agouti") ? fixedBase[locus.key] : null;
+        const options=getLocusOptions(locus, breedKey);
+        if(!options.length) return "";
+        let current = fixedCode || sel[locus.key] || options[0].code;
+        if(!options.some(o=>o.code===current)) current=options[0].code;
+        sel[locus.key]=current;
+        const labelAttr=String(locus.label).replace(/"/g,"&quot;");
+        if(fixedCode){
+          const opt=options.find(o=>o.code===fixedCode);
+          return `<div class="gene-cell">
+            <label class="small" title="${labelAttr} — fixed for this breed">${locus.label}</label>
+            <div class="small" style="padding:7px 0;opacity:.75;">${fixedCode} — ${opt?opt.desc:""} <span style="opacity:.65;">(fixed for breed)</span></div>
+          </div>`;
+        }
+        return `<div class="gene-cell">
+          <label class="small" title="${labelAttr}">${locus.label}</label>
+          <select data-locus="${locus.key}">
+            ${options.map(o=>`<option value="${o.code}" ${o.code===current?"selected":""}>${o.code} — ${o.desc}</option>`).join("")}
+          </select>
+        </div>`;
+      }).join("")}
+    </div>`;
+    wrapEl.querySelectorAll('[data-locus]').forEach(s=>s.onchange=()=>{ sel[s.dataset.locus]=s.value; draw(); });
+    preview();
+  }
+  function preview(){
+    const r=computeGenoResult(sel, breedKey);
+    const marks=rareMarkingLabels(h);
+    overlay.querySelector('#sg_preview').innerHTML=
+      `<b>Phenotype:</b> ${r.phenotype}${marks.length?`, ${marks.join(", ")}`:""}<br>`+
+      `<b>Genotype:</b> ${r.genotype}<br>`+
+      `<span style="opacity:.8;">Genetics value: ฿${r.totalPrice.toLocaleString()}</span>`;
+  }
+  draw();
+
+  overlay.querySelector('#sg_cancel').onclick=()=>overlay.remove();
+  overlay.querySelector('#sg_save').onclick=()=>{
+    const r=computeGenoResult(sel, breedKey);
+    // Keep the horse's rare markings; swap out only the colour-gene modifiers.
+    const keptMarks=(h.genoModifiers||[]).filter(m=>{
+      const known=knownMarkingLabels();
+      return m && (m.rare===true || known.has(String(m.label||'').trim().toLowerCase()));
+    });
+    const tags=keptMarks.filter(m=>m.genoTag).map(m=>m.genoTag);
+    h.genoObj=Object.assign({}, sel);
+    h.genotype=tags.length?`${r.genotype} ${tags.join(" ")}`:r.genotype;
+    h.phenotype=r.phenotype;
+    h.genoBasePrice=r.genoBasePrice;
+    h.genoModifiers=[...r.genoModifiers, ...keptMarks];
+    addLog(`Updated ${h.name}'s genetics — ${r.phenotype}.`);
+    saveHorse(h); save(); overlay.remove(); render();
+  };
+}
+
 function showTraitsModal(horseId){
   const h=state.horses.find(x=>x.id===horseId);
   if(!h) return;
@@ -6807,12 +6903,23 @@ function foalStats(sireStats, damStats, statKeys){
 //
 // carrierChance: given the per-carrier % and how many parents carry, the odds a
 // foal expresses it. 0 carriers -> 0. 1 -> p. 2 -> 1-(1-p)^2.
+// Odds a foal shows a rare trait.
+//
+// The breed's percentage is the BASE rate for any foal of that breed, so a
+// trait can appear for the first time in a line — previously this returned 0
+// unless a parent already carried it, which meant nothing new could ever
+// crop up. A carrying parent then adds another independent roll on top:
+//
+//   neither parent   p
+//   one parent       1-(1-p)^2
+//   both parents     1-(1-p)^3
+//
+// e.g. a 10% trait: 10% -> 19% -> 27.1%.
 function carrierChance(pPercent, sireHas, damHas){
   const p=Math.max(0,Math.min(100,Number(pPercent)||0))/100;
+  if(p<=0) return 0;
   const carriers=(sireHas?1:0)+(damHas?1:0);
-  if(carriers===0) return 0;
-  if(carriers===1) return p;
-  return 1-(1-p)*(1-p);
+  return 1-Math.pow(1-p, carriers+1);
 }
 
 // Does a set of foal locus-outcomes satisfy a requirement like
