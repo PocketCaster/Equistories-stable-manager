@@ -4080,9 +4080,23 @@ const PED_SLOTS = [
 function pedEntry(h, key){
   return (h.pedigree || {})[key] || {name:"", link:"", inRosterId:""};
 }
+// The name to SHOW for a pedigree slot. A typed name wins, but if you only
+// picked a horse from your roster (or another member's) we use that horse's
+// name rather than calling the parent "Unknown" — which is what it did before,
+// silently throwing away a perfectly good link.
+function pedName(entry){
+  const typed=String((entry&&entry.name)||"").trim();
+  if(typed) return typed;
+  if(entry && entry.inRosterId){
+    const r=state.horses.find(x=>x.id===entry.inRosterId);
+    if(r && r.name) return r.name;
+  }
+  if(entry && entry.externalName) return entry.externalName;
+  return "";
+}
 
 function pedLink(entry, label){
-  const name = entry.name || "Unknown";
+  const name = pedName(entry) || "Unknown";
   const inRoster = entry.inRosterId ? state.horses.find(x=>x.id===entry.inRosterId) : null;
   if(inRoster && name !== "Unknown"){
     return `<span onclick="goToProfile('${inRoster.id}')" style="color:#c98a3a;text-decoration:underline;font-weight:bold;cursor:pointer;">${name}</span>`;
@@ -4107,7 +4121,7 @@ function renderPedigreeChart(h){
   const L2='-----------------';
   function nm(key){
     const e=pedEntry(h,key);
-    return (e && (e.name||'').trim()) ? pedLink(e,key.toUpperCase()) : '<span style="color:#6a5a4a;">Unknown</span>';
+    return pedName(e) ? pedLink(e,key.toUpperCase()) : '<span style="color:#6a5a4a;">Unknown</span>';
   }
   const line=(lead,label,key,strong)=>`<div style="padding:1px 0;white-space:pre;overflow-x:auto;">`
     +`<span style="color:#3a2e22;">${lead}</span>`
@@ -4327,6 +4341,18 @@ function showLineageModal(horseId){
     };
   }
 
+  // Picking a roster horse fills the Name box straight away, so it's obvious
+  // the choice registered — and so the chart has a name to draw.
+  overlay.querySelectorAll('[data-field="inRosterId"]').forEach(sel=>{
+    sel.onchange=()=>{
+      const key=sel.dataset.ped;
+      const nameInp=overlay.querySelector(`[data-ped="${key}"][data-field="name"]`);
+      if(!nameInp) return;
+      const picked=state.horses.find(x=>x.id===sel.value);
+      if(picked) nameInp.value=picked.name;
+    };
+  });
+
   overlay.querySelector('#ln_cancel').onclick=()=>overlay.remove();
   overlay.querySelector('#ln_save').onclick=()=>{
     if(!h.pedigree) h.pedigree={};
@@ -4337,6 +4363,15 @@ function showLineageModal(horseId){
       // Picking a roster horse supersedes a cross-member link.
       if(field==="inRosterId" && inp.value.trim()){
         delete h.pedigree[key].externalId; delete h.pedigree[key].ownerHandle;
+      }
+    });
+    // Backfill any blank name from the horse that was linked, so nothing is
+    // stored as an unnamed parent.
+    Object.keys(h.pedigree).forEach(k=>{
+      const e=h.pedigree[k];
+      if(e && !String(e.name||"").trim() && e.inRosterId){
+        const r=state.horses.find(x=>x.id===e.inRosterId);
+        if(r) e.name=r.name;
       }
     });
     h.sireId=h.pedigree.sire?.inRosterId||null;
