@@ -6997,23 +6997,29 @@ function foalStats(sireStats, damStats, statKeys){
 //
 // carrierChance: given the per-carrier % and how many parents carry, the odds a
 // foal expresses it. 0 carriers -> 0. 1 -> p. 2 -> 1-(1-p)^2.
-// Odds a foal shows a rare trait.
+// Odds a foal inherits a rare trait.
 //
-// The breed's percentage is the BASE rate for any foal of that breed, so a
-// trait can appear for the first time in a line — previously this returned 0
-// unless a parent already carried it, which meant nothing new could ever
-// crop up. A carrying parent then adds another independent roll on top:
+// Rare markings are INHERITED, not spontaneous — a trait can only appear if at
+// least one parent carries it. A pairing where neither parent has the trait
+// yields 0, which is why an untraited pair correctly reports that no rare
+// traits are possible.
 //
-//   neither parent   p
-//   one parent       1-(1-p)^2
-//   both parents     1-(1-p)^3
+//   neither parent   0        cannot occur
+//   one parent       p        the breed's stated chance
+//   both parents     1-(1-p)^2
 //
-// e.g. a 10% trait: 10% -> 19% -> 27.1%.
+// e.g. a 20% trait: 0% -> 20% -> 36%.
+//
+// (Gene-driven traits such as Gulastra Plume are "conditional" instead and
+// don't come through here — they're gated on the foal's own genotype, so they
+// can arise without either parent showing the trait.)
 function carrierChance(pPercent, sireHas, damHas){
   const p=Math.max(0,Math.min(100,Number(pPercent)||0))/100;
   if(p<=0) return 0;
   const carriers=(sireHas?1:0)+(damHas?1:0);
-  return 1-Math.pow(1-p, carriers+1);
+  if(carriers===0) return 0;
+  if(carriers===1) return p;
+  return 1-Math.pow(1-p, 2);
 }
 
 // Does a set of foal locus-outcomes satisfy a requirement like
