@@ -717,6 +717,11 @@ const TRAININGS = [
   {id:"equibreak",   name:"Equibreak",                        stats:{harmony:3},                                    prompt:"Depict a breaking milestone for a young or not-yet-broke horse — first halter, first tack, first rider, or first solo work under saddle.", youngOnly:true},
 ];
 
+// Age a horse reaches on entering each stage. A bred foal is born at 6 months
+// and climbs this ladder by completing the age-up milestones.
+const FOAL_START_AGE = 0.5;
+const STAGE_MIN_AGE = { foal:0.5, yearling:1, "two-year-old":2, adult:3 };
+
 const MILESTONES = {
   foal: {
     next: "yearling",
@@ -4337,7 +4342,12 @@ function renderTraining(){
     const btn=box.querySelector('#tr_ageup');
     if(btn) btn.onclick=()=>{
       h.stage=m.next;
-      addLog(`${h.name} aged up to ${m.next}!`);
+      // Advance the AGE too. Horses added by hand start at 3 so this never
+      // mattered, but a bred foal starts at 6 months — without this it would
+      // climb foal -> adult and still read age 0.5, so isBreedingAge (age >= 3)
+      // would never let it breed.
+      h.age=Math.max(Number(h.age)||0, STAGE_MIN_AGE[m.next] ?? (Number(h.age)||0));
+      addLog(`${h.name} aged up to ${m.next}! Now ${h.age} year${h.age===1?'':'s'} old.`);
       saveHorse(h); save(); render();
     };
   }
@@ -7620,6 +7630,7 @@ function renderBreeding(){
       </div>
       ${(noSires||noDams)?`<p class="small" style="color:#c98a3a;margin-top:10px;">${noSires&&noDams?'None of your horses have an open breeding slot yet (they need to be age 3+ with a free slot).':noSires?'You have no eligible sire (a stallion, colt or rig aged 3+ with a free slot).':'You have no eligible dam (a mare or filly aged 3+ with a free slot).'}</p>`:''}
       <button id="bc_calc" style="margin-top:12px;">Calculate foals</button>
+      <button id="bc_live" class="secondary" style="margin-top:12px;margin-left:6px;">🐎 Breed for real…</button>
     </div>
     <div id="bc_result"></div>`;
 
@@ -7642,6 +7653,8 @@ function renderBreeding(){
     const reroll=box.querySelector('#bc_reroll');
     if(reroll) reroll.onclick=()=>renderPreview(sire,dam);
   };
+  const lbBtn=wrap.querySelector('#bc_live');
+  if(lbBtn) lbBtn.onclick=()=>showLiveBreedingModal();
   wrap.querySelector('#bc_calc').onclick=()=>{
     const sire=findH(sireSel.value), dam=findH(damSel.value);
     const box=wrap.querySelector('#bc_result');
@@ -7671,6 +7684,283 @@ function rollFoal(sire, dam, loci, sireGeno, damGeno, breedName){
   loci.forEach(l=>{ selections[l.key]=rollOutcome(crossLocus(sireGeno[l.key], damGeno[l.key], l)); });
   const geno=computeGenoResult(selections, breedName);
   return { selections, genotype:geno.genotype, phenotype:geno.phenotype };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// LIVE BREEDING — creates real horses
+// ═══════════════════════════════════════════════════════════════════════════
+
+// First breeding slot with nothing in it (no recorded breeding, no reservation).
+function firstOpenSlotIndex(h){
+  const recs=h.breedingRecords||[];
+  for(let i=0;i<(h.breedingSlots||0);i++){ if(!recs.find(r=>r.slotIndex===i)) return i; }
+  return -1;
+}
+
+// Breeding tokens the player currently owns, read from the consumables the
+// shop put in their inventory. Matches on the effect string, so a token only
+// works if the shop item's effect matches BREEDING_TOKENS[key].effect exactly.
+function availableBreedingTokens(){
+  const byEffect={};
+  Object.values(BREEDING_TOKENS).forEach(t=>byEffect[t.effect]=t);
+  const out=[];
+  (state.consumables||[]).forEach(c=>{
+    const def=byEffect[c.effect];
+    if(def) out.push({key:def.key, label:def.label, desc:def.desc, invId:c.invId, left:c.left});
+  });
+  return out;
+}
+
+// Look up what a rolled marking is worth, so a foal's Net Worth reflects it.
+function markingValue(label){
+  const m=[...GENO_MODIFIERS["Rare Markings"], ...(state.customMarkings||[])]
+    .find(x=>String(x.label).toLowerCase()===String(label).toLowerCase());
+  return m ? (Number(m.value)||0) : 0;
+}
+
+// Roll a complete breeding: two candidate foals plus whether they're twins.
+// Pure — creates nothing. mods comes from modifiersFromTokens().
+function rollBreeding(sire, dam, mods){
+  const m = mods && mods.ok!==false ? mods : defaultBreedingModifiers();
+  const breedName = dam.breed || sire.breed || "";
+  const breedKey = (breedName||"").trim().toLowerCase();
+  const loci = breedLociForBreed(breedKey);
+  const sireGeno=horseGenoByLocus(sire,loci), damGeno=horseGenoByLocus(dam,loci);
+
+  const rareCfg=breedRareTraits(breedName);
+  const traitNamesOf=(h)=>{
+    const fromMods=(h.genoModifiers||[]).map(x=>String(x.label||'').trim());
+    const fromList=(h.rareTraits||h.markings||[]).map(x=>String(x||'').trim());
+    return [...new Set([...fromMods,...fromList])];
+  };
+  const aliasFor=(n)=>TRAIT_NAME_ALIASES[n.toLowerCase()]||n.toLowerCase();
+  const matchTraits=(names)=>{
+    const out=[];
+    names.forEach(n=>{
+      const want=aliasFor(n);
+      const hit=rareCfg.find(t=>t.name.toLowerCase()===want||aliasFor(t.name)===want);
+      if(hit && !out.includes(hit.name)) out.push(hit.name);
+    });
+    return out;
+  };
+  const sireTraits=matchTraits(traitNamesOf(sire));
+  const damTraits =matchTraits(traitNamesOf(dam));
+
+  const pedOf=pedigreeResolver(state.horses||[]);
+  const inb=inbreedingCoefficient({id:sire.id},{id:dam.id},pedOf,5);
+  const riskMult=inbreedingRiskMultiplier(inb.coi);
+  const lethals=breedLethals(breedName);
+
+  const one=()=>{
+    const foal=rollFoal(sire,dam,loci,sireGeno,damGeno,breedKey);
+    const settled={};
+    loci.forEach(l=>{ settled[l.key]=[{code:foal.selections[l.key],p:1}]; });
+    let rows=resolveRareTraits(rareCfg,sireTraits,damTraits,settled,riskMult);
+    rows=applyTraitToken(rows, m.trait);
+    rows=applyHealthToken(rows, m.health);
+    const traits=[];
+    rows.forEach(t=>{
+      if(Math.random()<t.chance){
+        const e={name:t.name, health:null};
+        if(t.healthName && Math.random()<t.healthChance) e.health=t.healthName;
+        traits.push(e);
+      }
+    });
+    foal.traits=traits;
+    foal.gender=rollGender(m);
+    foal.lethal=loci.map(l=>foal.selections[l.key])
+      .filter((c,i)=>isLethalGenotype(loci[i].key,c,lethals));
+    return foal;
+  };
+
+  return { foals:[one(), one()], twins:rollTwins(m), loci, sireGeno, damGeno,
+           breedName, breedKey, coi:inb.coi, mods:m };
+}
+
+// Turn one rolled foal into a real horse on the player's roster.
+function createFoalFromRoll(sire, dam, foal, name, roll){
+  const stats=foalStatsWithPrepotency(sire.stats||{}, dam.stats||{}, STATS, roll.mods.prepotency);
+  const h=newHorse({
+    name, breed:roll.breedName, age:FOAL_START_AGE, gender:foal.gender,
+    genotype:foal.genotype, phenotype:foal.phenotype,
+    genoObj:Object.assign({}, foal.selections),
+    ownerName:(state.profile && state.profile.memberName) || bankAccount.userId || "",
+    pedigree:{
+      sire:{name:sire.name, link:"", inRosterId:sire.id},
+      dam: {name:dam.name,  link:"", inRosterId:dam.id},
+    },
+  });
+  h.stats=stats;
+  h.stage="foal";
+  h.sireId=sire.id; h.sireName=sire.name;
+  h.damId =dam.id;  h.damName =dam.name;
+  h.genoModifiers=(foal.traits||[]).map(t=>({label:t.name, value:markingValue(t.name), rare:true}));
+  h.healthConditions=(foal.traits||[]).filter(t=>t.health).map(t=>({trait:t.name, condition:t.health}));
+  h.bornFrom={sireId:sire.id, damId:dam.id, date:new Date().toISOString().slice(0,10)};
+  return h;
+}
+
+// Consume one slot on each parent and link the record to the new foal.
+// Twins take a single slot — one breeding, two foals.
+function recordBreedingOnParents(sire, dam, foals){
+  const date=new Date().toISOString().slice(0,10);
+  const names=foals.map(f=>f.name).join(" & ");
+  const firstId=foals[0] ? foals[0].id : null;
+  [[sire,"sire",dam],[dam,"dam",sire]].forEach(([h,role,partner])=>{
+    if(!Array.isArray(h.breedingRecords)) h.breedingRecords=[];
+    const idx=firstOpenSlotIndex(h);
+    if(idx<0) return;
+    h.breedingRecords.push({
+      id:uid2(), slotIndex:idx, role, partnerName:partner.name,
+      partnerOwner:partner.ownerName||"", date, note:foals.length>1?"Twins":"",
+      foalId:firstId, foalName:names, reservedFor:"",
+    });
+    h.breedingFilled=(h.breedingFilled||0)+1;
+  });
+}
+
+function showLiveBreedingModal(){
+  const mine=(state.horses||[]);
+  const sires=mine.filter(h=>canSire(h)&&isBreedable(h));
+  const dams =mine.filter(h=>canDam(h)&&isBreedable(h));
+  const tokens=availableBreedingTokens();
+
+  const overlay=document.createElement('div');
+  overlay.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:flex;align-items:flex-start;justify-content:center;padding:16px;overflow-y:auto;';
+  overlay.innerHTML=`<div style="background:#2c1f16;border:2px solid #c98a3a;border-radius:10px;padding:22px;max-width:900px;width:100%;color:#f1e6d8;font-family:Georgia,serif;">
+    <h3 style="margin-top:0;color:#c98a3a;">Breed — this creates a real foal</h3>
+    <p class="small" style="color:#b5a392;margin-top:0;">One breeding slot is used on each parent. Pick a foal, name it, and it joins your roster at 6 months old.</p>
+    <div id="lb_setup"></div>
+    <div id="lb_result" style="margin-top:12px;"></div>
+    <button id="lb_close" style="margin-top:12px;width:100%;background:#2c2118;color:#f1e6d8;border:1px solid #4a392a;padding:9px;border-radius:6px;cursor:pointer;">Close</button>
+  </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#lb_close').onclick=()=>overlay.remove();
+
+  const setup=overlay.querySelector('#lb_setup');
+  const result=overlay.querySelector('#lb_result');
+
+  if(!sires.length || !dams.length){
+    setup.innerHTML=`<p class="small" style="color:#e0906a;">You need at least one stallion/colt and one mare/filly aged 3+ with a free breeding slot. ${!sires.length?'No eligible sire.':''} ${!dams.length?'No eligible dam.':''}</p>`;
+    return;
+  }
+
+  const opt=h=>`<option value="${escAttr(h.id)}">${escAttr(h.name)} (${escAttr(h.breed||'?')}) · ${ownerOpenSlots(h)} slot${ownerOpenSlots(h)===1?'':'s'} free</option>`;
+  setup.innerHTML=`
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+      <div><label class="small" style="color:var(--dim);">SIRE</label>
+        <select id="lb_sire" style="width:100%;padding:7px;background:#15100c;border:1px solid #4a392a;color:#f1e6d8;border-radius:5px;">${sires.map(opt).join("")}</select></div>
+      <div><label class="small" style="color:var(--dim);">DAM</label>
+        <select id="lb_dam" style="width:100%;padding:7px;background:#15100c;border:1px solid #4a392a;color:#f1e6d8;border-radius:5px;">${dams.map(opt).join("")}</select></div>
+    </div>
+    <div style="margin-top:12px;">
+      <label class="small" style="color:var(--dim);">TOKENS — up to ${MAX_TOKENS_PER_BREEDING}, one of each type</label>
+      ${tokens.length ? `<div id="lb_tokens">${tokens.map(t=>`
+        <label style="display:block;margin:3px 0;cursor:pointer;">
+          <input type="checkbox" data-token="${escAttr(t.key)}" data-inv="${escAttr(t.invId)}" />
+          <b>${escAttr(t.label)}</b> <span class="small" style="opacity:.75;">×${t.left} — ${escAttr(t.desc)}</span>
+        </label>`).join("")}
+        <div id="lb_gender_pick" style="display:none;margin-top:4px;">
+          <select id="lb_gender" style="padding:6px;background:#15100c;border:1px solid #4a392a;color:#f1e6d8;border-radius:5px;">
+            <option value="Colt">Colt</option><option value="Filly">Filly</option>
+          </select>
+        </div>
+        <div id="lb_token_warn" class="small" style="color:#e0906a;"></div>`
+        : `<p class="small" style="color:#8a7a6a;">You don't own any breeding tokens.</p>`}
+    </div>
+    <button id="lb_roll" style="margin-top:12px;width:100%;background:#c98a3a;color:#241a14;border:none;padding:10px;border-radius:6px;font-weight:bold;cursor:pointer;">Breed</button>`;
+
+  const chosenTokens=()=>[...setup.querySelectorAll('[data-token]:checked')].map(cb=>{
+    const k=cb.dataset.token;
+    const t={key:k, invId:cb.dataset.inv};
+    if(k==="gender") t.gender=setup.querySelector('#lb_gender').value;
+    return t;
+  });
+  setup.querySelectorAll('[data-token]').forEach(cb=>cb.onchange=()=>{
+    const sel=chosenTokens();
+    const gp=setup.querySelector('#lb_gender_pick');
+    if(gp) gp.style.display=sel.some(t=>t.key==="gender")?'block':'none';
+    const v=validateTokenSelection(sel);
+    setup.querySelector('#lb_token_warn').textContent=v.ok?'':v.reason;
+    setup.querySelector('#lb_roll').disabled=!v.ok;
+  });
+
+  setup.querySelector('#lb_roll').onclick=()=>{
+    const sire=mine.find(h=>h.id===setup.querySelector('#lb_sire').value);
+    const dam =mine.find(h=>h.id===setup.querySelector('#lb_dam').value);
+    if(!sire||!dam) return;
+    if(sire.id===dam.id){ alert("A horse can't breed with itself."); return; }
+    const sel=chosenTokens();
+    const mods=modifiersFromTokens(sel);
+    if(!mods.ok){ alert(mods.reason); return; }
+    let roll=rollBreeding(sire,dam,mods);
+    drawResult(sire,dam,roll,sel);
+  };
+
+  function drawResult(sire,dam,roll,sel){
+    const card=(f,i)=>`
+      <div class="card" style="border-color:#6a5a3a;background:#1a1510;">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;">
+          <h3 style="margin:0;color:#e8c86a;">Foal ${i===0?'A':'B'}</h3>
+          <span class="tag" style="background:#2a2016;color:#e8c86a;">${escAttr(f.gender)}</span>
+        </div>
+        <div style="margin-top:8px;"><span class="small" style="color:var(--dim);">Colour</span><br><b>${escAttr(f.phenotype||'—')}</b></div>
+        <div style="margin-top:8px;"><span class="small" style="color:var(--dim);">Genotype</span><br><code style="font-size:.9em;color:#c8b8a8;word-break:break-word;">${escAttr(f.genotype)}</code></div>
+        <div style="margin-top:8px;"><span class="small" style="color:var(--dim);">Rare markings &amp; traits</span><br>${
+          f.traits.length?f.traits.map(t=>`<span class="tag" style="margin:2px 2px 0 0;background:#2a2016;color:#e8c86a;">${escAttr(t.name)}${t.health?` <span style="color:#d98a6a;">· ${escAttr(t.health)}</span>`:''}</span>`).join(""):'<span class="small" style="color:#8a7a6a;">none</span>'
+        }</div>
+        ${f.lethal.length?`<div class="small" style="color:#e05050;margin-top:6px;">☠ Lethal genotype — this foal would not survive.</div>`:''}
+        <div style="margin-top:10px;">
+          <input id="lb_name_${i}" placeholder="Name this foal" style="width:100%;padding:7px;background:#15100c;border:1px solid #4a392a;color:#f1e6d8;border-radius:5px;" />
+          ${roll.twins?'':`<button data-keep="${i}" style="margin-top:6px;width:100%;background:#c98a3a;color:#241a14;border:none;padding:9px;border-radius:6px;font-weight:bold;cursor:pointer;">Keep this foal</button>`}
+        </div>
+      </div>`;
+    result.innerHTML=`
+      ${roll.twins?`<div class="card" style="border-color:#7a9b6e;"><b style="color:#9bd18a;">Twins!</b> <span class="small">Both foals are yours — this still uses only one breeding slot.</span></div>`:''}
+      ${roll.coi>0?`<div class="card" style="border-color:#8a5a2a;"><span class="small">⚠ Inbreeding coefficient ${(roll.coi*100).toFixed(1)}% — health risks were raised on this pairing.</span></div>`:''}
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">${roll.foals.map(card).join("")}</div>
+      ${roll.twins?`<button id="lb_keep_both" style="margin-top:10px;width:100%;background:#c98a3a;color:#241a14;border:none;padding:10px;border-radius:6px;font-weight:bold;cursor:pointer;">Keep both foals</button>`:''}
+      ${roll.mods.reroll?`<button id="lb_reroll" class="secondary" style="margin-top:8px;width:100%;padding:9px;">🎲 Use Reroll Token — roll this breeding again</button>`:''}`;
+
+    result.querySelectorAll('[data-keep]').forEach(b=>b.onclick=()=>{
+      const i=Number(b.dataset.keep);
+      const nm=(result.querySelector('#lb_name_'+i).value||'').trim();
+      if(!nm){ alert("Give the foal a name first."); return; }
+      commit(sire,dam,[{foal:roll.foals[i], name:nm}],roll,sel);
+    });
+    const both=result.querySelector('#lb_keep_both');
+    if(both) both.onclick=()=>{
+      const names=[0,1].map(i=>(result.querySelector('#lb_name_'+i).value||'').trim());
+      if(names.some(n=>!n)){ alert("Name both foals first."); return; }
+      commit(sire,dam,[{foal:roll.foals[0],name:names[0]},{foal:roll.foals[1],name:names[1]}],roll,sel);
+    };
+    const rr=result.querySelector('#lb_reroll');
+    if(rr) rr.onclick=()=>{
+      const again=rollBreeding(sire,dam,roll.mods);
+      again.mods=Object.assign({},roll.mods,{reroll:false});   // one reroll per token
+      drawResult(sire,dam,again,sel);
+    };
+  }
+
+  async function commit(sire,dam,picks,roll,sel){
+    const created=picks.map(p=>createFoalFromRoll(sire,dam,p.foal,p.name,roll));
+    recordBreedingOnParents(sire,dam,created);
+    created.forEach(f=>{
+      state.horses.push(f);
+      addLog(`${f.name} was born to ${dam.name} by ${sire.name}${f.genoModifiers.length?` — ${f.genoModifiers.map(m=>m.label).join(", ")}`:''}.`);
+      saveHorse(f);
+    });
+    saveHorse(sire); saveHorse(dam);
+    // Spend the tokens now that the breeding has actually happened.
+    for(const t of (sel||[])){
+      try{ await spendConsumable(bankAccount.userId, t.invId); }
+      catch(err){ console.warn('[Stable] token spend failed:', err && err.message); }
+    }
+    save(); overlay.remove(); render();
+    alert(created.length>1
+      ? `Twins! ${created.map(f=>f.name).join(" and ")} have joined your roster.`
+      : `${created[0].name} has joined your roster at 6 months old.`);
+  }
 }
 
 function computeFoalPreview(sire,dam,allHorses){
