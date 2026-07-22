@@ -3545,6 +3545,7 @@ function renderRoster(){
         <button class="secondary" data-act="toggle-log" data-id="${h.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">${open?"Hide":"Show"} Art Log (${h.artLog.length})</button>
 
         <button class="secondary" data-act="edit-geno" data-id="${h.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">Set Genetics</button>
+        <button class="secondary" data-act="edit-marks" data-id="${h.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">Markings</button>
         <button class="danger" data-act="del" data-id="${h.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">Remove</button>
         <button class="secondary" data-act="transfer-horse" data-id="${h.id}" style="font-size:1em;padding:4px 10px;margin-top:0;">Sell / Transfer</button>
       </div>
@@ -3591,6 +3592,7 @@ function renderRoster(){
   });
   wrap.querySelectorAll('[data-act="edit-lineage"]').forEach(b=>b.onclick=()=>showLineageModal(b.dataset.id));
   wrap.querySelectorAll('[data-act="edit-geno"]').forEach(b=>b.onclick=()=>showGeneticsModal(b.dataset.id));
+  wrap.querySelectorAll('[data-act="edit-marks"]').forEach(b=>b.onclick=()=>showMarkingsModal(b.dataset.id));
   wrap.querySelectorAll('[data-act="edit-worth"]').forEach(b=>b.onclick=()=>showNetWorthModal(b.dataset.id));
   wrap.querySelectorAll('[data-act="edit-details"]').forEach(b=>b.onclick=async()=>{
     const h=state.horses.find(x=>x.id===b.dataset.id); if(!h) return;
@@ -4030,6 +4032,98 @@ function showGeneticsModal(horseId){
     h.genoBasePrice=r.genoBasePrice;
     h.genoModifiers=[...r.genoModifiers, ...keptMarks];
     addLog(`Updated ${h.name}'s genetics — ${r.phenotype}.`);
+    saveHorse(h); save(); overlay.remove(); render();
+  };
+}
+
+// ── Markings ───────────────────────────────────────────────────────────────
+// Add or remove the rare markings on a horse that already exists. Deliberately
+// touches ONLY the rare markings: the colour/pattern modifiers computeGenoResult
+// produced are left alone, so removing a marking can't desync the horse from
+// its genotype. The picker respects the same gene requirements as Add-a-Horse
+// (Bloodmark needs grey, Peacock needs Lp, and so on).
+function showMarkingsModal(horseId){
+  const h=state.horses.find(x=>x.id===horseId);
+  if(!h) return;
+  if(!Array.isArray(h.genoModifiers)) h.genoModifiers=[];
+  const breed=(h.breed||"").trim();
+  const breedKey=breed.toLowerCase();
+  const loci=breedLociForBreed(breedKey);
+  const geno=horseGenoByLocus(h, loci);
+  const hasCode=(locus,code)=>geno[locus]===code;
+
+  const isMark=m=>{
+    const known=knownMarkingLabels();
+    return m && (m.rare===true || known.has(String(m.label||'').trim().toLowerCase()));
+  };
+
+  const overlay=document.createElement('div');
+  overlay.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.9);z-index:9999;display:flex;align-items:flex-start;justify-content:center;padding:16px;overflow-y:auto;';
+  overlay.innerHTML=`<div style="background:#2c1f16;border:2px solid #c98a3a;border-radius:10px;padding:22px;max-width:560px;width:100%;color:#f1e6d8;font-family:Georgia,serif;">
+    <h3 style="margin-top:0;color:#c98a3a;">Markings — ${escAttr(h.name)}</h3>
+    <p class="small" style="color:#b5a392;margin-top:0;">Rare markings and custom traits this horse carries. Coat colour genes aren't listed here — use <b>Set Genetics</b> for those.</p>
+    <div id="mk_list" style="margin-bottom:10px;"></div>
+    <div style="display:flex;gap:6px;align-items:center;">
+      <select id="mk_pick" style="flex:1;padding:7px;background:#15100c;border:1px solid #4a392a;color:#f1e6d8;border-radius:5px;"></select>
+      <button id="mk_add" class="secondary" style="white-space:nowrap;padding:7px 12px;">+ Add</button>
+    </div>
+    <button id="mk_save" style="margin-top:14px;width:100%;background:#c98a3a;color:#241a14;border:none;padding:10px;border-radius:6px;font-weight:bold;cursor:pointer;">✓ Save Markings</button>
+    <button id="mk_cancel" style="margin-top:8px;width:100%;background:#2c2118;color:#f1e6d8;border:1px solid #4a392a;padding:9px;border-radius:6px;cursor:pointer;">Cancel</button>
+  </div>`;
+  document.body.appendChild(overlay);
+
+  // work on a copy so Cancel really cancels
+  let marks=(h.genoModifiers||[]).filter(isMark).map(m=>Object.assign({}, m));
+  const others=(h.genoModifiers||[]).filter(m=>!isMark(m));
+
+  function drawPicker(){
+    const customForBreed=(state.customMarkings||[]).filter(m=>
+      !m.breeds || !m.breeds.length ||
+      m.breeds.some(b=>String(b).toLowerCase()===breedKey || String(b).toLowerCase()===breed.toLowerCase()));
+    const items=[...GENO_MODIFIERS["Rare Markings"], ...customForBreed]
+      .filter(m=>markingMeetsGeneRequirement(m.label, hasCode))
+      .filter(m=>!marks.some(x=>String(x.label).toLowerCase()===String(m.label).toLowerCase()));
+    overlay.querySelector('#mk_pick').innerHTML=
+      `<option value="">— Pick a marking/trait —</option>`+
+      items.map(m=>`<option value="${m.value}|${escAttr(m.label)}">${escAttr(m.label)} (+฿${m.value})</option>`).join("");
+  }
+  function drawList(){
+    const list=overlay.querySelector('#mk_list');
+    list.innerHTML=marks.length ? marks.map((m,i)=>`
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
+        <span style="flex:1;">${escAttr(m.label)}</span>
+        <span style="color:#c98a3a;">+฿${(m.value||0).toLocaleString()}</span>
+        <button data-remove="${i}" style="background:#b1473f;color:#fff;border:none;border-radius:4px;padding:2px 9px;cursor:pointer;">✕</button>
+      </div>`).join("")
+      : `<div class="small" style="opacity:.6;">No rare markings on this horse.</div>`;
+    list.querySelectorAll('[data-remove]').forEach(b=>b.onclick=()=>{
+      marks.splice(Number(b.dataset.remove),1); drawList(); drawPicker();
+    });
+  }
+  drawList(); drawPicker();
+
+  overlay.querySelector('#mk_add').onclick=()=>{
+    const val=overlay.querySelector('#mk_pick').value;
+    if(!val) return;
+    const [price, ...rest]=val.split('|');
+    const label=rest.join('|');
+    const def=[...GENO_MODIFIERS["Rare Markings"], ...(state.customMarkings||[])]
+      .find(m=>String(m.label)===label);
+    marks.push({label, value:Number(price)||0, genoTag:(def&&def.genoTag)||null, rare:true});
+    drawList(); drawPicker();
+  };
+  overlay.querySelector('#mk_cancel').onclick=()=>overlay.remove();
+  overlay.querySelector('#mk_save').onclick=()=>{
+    h.genoModifiers=[...others, ...marks];
+    // Keep any genotype tags a marking contributes (e.g. Gulastra Plume -> Sbsb)
+    // in step with the markings that are actually still on the horse.
+    if(h.genoObj){
+      const r=computeGenoResult(h.genoObj, breedKey);
+      const tags=marks.filter(m=>m.genoTag).map(m=>m.genoTag);
+      h.genotype=tags.length?`${r.genotype} ${tags.join(" ")}`:r.genotype;
+      h.phenotype=r.phenotype;
+    }
+    addLog(`Updated ${h.name}'s markings — ${marks.length?marks.map(m=>m.label).join(", "):"none"}.`);
     saveHorse(h); save(); overlay.remove(); render();
   };
 }
@@ -7453,6 +7547,28 @@ function computeFoalPreview(sire,dam,allHorses){
   // ── Roll Foal A and Foal B, each with a full genotype + phenotype + gender ──
   const foalA=rollFoal(sire,dam,loci,sireGeno,damGeno,breedName);
   const foalB=rollFoal(sire,dam,loci,sireGeno,damGeno,breedName);
+
+  // Roll the rare traits for ONE specific foal. The odds panel below works from
+  // the whole probability spread, but a rolled foal has settled genes — so its
+  // conditional traits are judged on what it actually got (a foal that came out
+  // sbsb can't roll Gulastra Plume even if the pairing made it possible).
+  const rollTraitsFor=(foal)=>{
+    const settled={};
+    loci.forEach(l=>{ settled[l.key]=[{code:foal.selections[l.key], p:1}]; });
+    const rows=resolveRareTraits(rareCfg, sireTraits, damTraits, settled, riskMult);
+    const got=[];
+    rows.forEach(t=>{
+      if(Math.random() < t.chance){
+        const entry={name:t.name, health:null};
+        if(t.healthName && Math.random() < t.healthChance) entry.health=t.healthName;
+        got.push(entry);
+      }
+    });
+    return got;
+  };
+  foalA.traits=rollTraitsFor(foalA);
+  foalB.traits=rollTraitsFor(foalB);
+
   const genderA = Math.random()<0.5?'Colt':'Filly';
   const genderB = Math.random()<0.5?'Colt':'Filly';
   // Flag if a rolled foal happens to carry a lethal genotype.
@@ -7472,6 +7588,11 @@ function computeFoalPreview(sire,dam,allHorses){
       </div>
       <div style="margin-top:8px;"><span class="small" style="color:var(--dim);">Colour</span><br><b>${escAttr(foal.phenotype||'—')}</b></div>
       <div style="margin-top:8px;"><span class="small" style="color:var(--dim);">Genotype</span><br><code style="font-size:.92em;color:#c8b8a8;word-break:break-word;">${escAttr(foal.genotype||'—')}</code></div>
+      <div style="margin-top:8px;"><span class="small" style="color:var(--dim);">Rare markings &amp; traits</span><br>${
+        (foal.traits && foal.traits.length)
+          ? foal.traits.map(t=>`<span class="tag" style="margin:2px 2px 0 0;background:#2a2016;color:#e8c86a;">${escAttr(t.name)}${t.health?` <span style="color:#d98a6a;">· ${escAttr(t.health)}</span>`:''}</span>`).join("")
+          : `<span class="small" style="color:#8a7a6a;">none rolled</span>`
+      }</div>
       ${lethLine}
     </div>`;
   };
@@ -7525,7 +7646,8 @@ function computeFoalPreview(sire,dam,allHorses){
           ${statHtml}
         </div>
         <div>
-          <h4 style="color:#e8c86a;margin:0 0 6px;">Rare traits</h4>
+          <h4 style="color:#e8c86a;margin:0 0 6px;">Rare trait odds</h4>
+          <p class="small" style="color:#8a7a6a;margin:0 0 6px;">Chances for this pairing. What each foal actually rolled is on its card above.</p>
           ${traitHtml}
         </div>
       </div>
