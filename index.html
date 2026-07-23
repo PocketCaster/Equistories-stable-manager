@@ -5643,69 +5643,98 @@ function buildShowHistory(){
     const h=state.horses.find(x=>x.id===data.horseId);
     if(!h){ msg.style.color='#b5533a'; msg.textContent='That ribbon is for a horse not in your stable. Are you signed into the right account?'; return; }
     if(!h.compHistory) h.compHistory=[];
-    if(h.compHistory.some(r=>r.id===data.rec.id)){ msg.style.color='#b5533a'; msg.textContent='This show is already on '+h.name+'.'; return; }
 
     const rec={...data.rec};
+    const incomingArt = rec.artImage || rec.image || null;
+    const existing = h.compHistory.find(r=>r.id===rec.id);
+
+    // Re-claiming is how a record gets UPGRADED. A show claimed with an older
+    // code logged the placement but carried no artwork, so rejecting the second
+    // claim outright left it permanently art-less. Instead: if the record is
+    // already fully logged, say so; if the new code brings art the record is
+    // missing, merge it in and log the piece.
+    if(existing){
+      if(existing.artLogId && (h.artLog||[]).some(e=>e.id===existing.artLogId)){
+        msg.style.color='#b5533a';
+        msg.textContent='This show is already on '+h.name+', with its art logged.';
+        return;
+      }
+      if(!incomingArt){
+        msg.style.color='#b5533a';
+        msg.textContent='This show is already on '+h.name+'. This code carries no artwork — re-generate the claim code from the show results page, then paste the new one here to add the art.';
+        return;
+      }
+      // Fall through: merge the art onto the record already on the horse.
+      Object.assign(existing, {
+        artImage:incomingArt, image:existing.image||incomingArt,
+        link:existing.link||rec.link||null,
+        litUrl:rec.litUrl||existing.litUrl||null, litWords:Number(rec.litWords)||existing.litWords||0,
+        artMix:rec.artMix||existing.artMix||null, artBonuses:rec.artBonuses||existing.artBonuses||null,
+        artExp:Number(rec.artExp)||existing.artExp||0, artLabel:rec.artLabel||existing.artLabel||'',
+      });
+    }
+    const target = existing || rec;
 
     // The entrant already submitted this artwork to the show, so log it here
     // rather than making them upload it a second time. Mirrors the manual
     // "Log a Show" flow: shows award EXP only and never add stats.
-    const artImage = rec.artImage || rec.image || null;
-    const artRows  = Array.isArray(rec.artMix) ? rec.artMix : [];
+    const artImage = incomingArt;
+    const artRows  = Array.isArray(target.artMix) ? target.artMix : [];
     let artEntry=null, expGain=0;
     if(artImage){
       const sources=[];
       if(artRows.length){
         const e=artRowsExp(artRows);
         if(e>0){ expGain+=e; sources.push(`${artRowsLabel(artRows)} (+${e})`); }
-      } else if(Number(rec.artExp)>0){
+      } else if(Number(target.artExp)>0){
         // Older codes carry only a declared total.
-        expGain+=Number(rec.artExp); sources.push(`Art (+${Number(rec.artExp)})`);
+        expGain+=Number(target.artExp); sources.push(`Art (+${Number(target.artExp)})`);
       }
-      (rec.artBonuses||[]).forEach(b=>{
+      (target.artBonuses||[]).forEach(b=>{
         if(BONUS_EXP[b]){ expGain+=BONUS_EXP[b]; sources.push(`${b} (+${BONUS_EXP[b]})`); }
       });
-      const litExp=calcLitExp(Number(rec.litWords)||0);
-      if(litExp>0){ expGain+=litExp; sources.push(`Lit ${rec.litWords}w (+${litExp})`); }
+      const litExp=calcLitExp(Number(target.litWords)||0);
+      if(litExp>0){ expGain+=litExp; sources.push(`Lit ${target.litWords}w (+${litExp})`); }
       const nonPlacementExp=expGain;
-      const placeExp = rec.placement ? ({1:4,2:3,3:2}[rec.placement]||1) : 0;
+      const placeExp = target.placement ? ({1:4,2:3,3:2}[target.placement]||1) : 0;
       if(placeExp>0){ expGain+=placeExp; sources.push(`Placement (+${placeExp})`); }
 
       artEntry={
         id:uid2(), day:state.log.length+1, type:"competition",
-        label:`${rec.discipline||'Show'}${rec.venue?' — '+rec.venue:''}`,
-        placement:rec.placement||null,
-        art: artRows.length?artRowsLabel(artRows):(rec.artLabel||'Show entry'),
+        label:`${target.discipline||'Show'}${target.venue?' — '+target.venue:''}`,
+        placement:target.placement||null,
+        art: artRows.length?artRowsLabel(artRows):(target.artLabel||'Show entry'),
         artMix: artRows.length?artRows:undefined,
-        lit: rec.litWords?`${rec.litWords} words`:null,
-        bonuses:[...(rec.artBonuses||[])],
-        exp:expGain, link:rec.litUrl||rec.link||null, image:artImage,
-        statsDelta:{}, nonPlacementExp, discipline:rec.discipline||'',
+        lit: target.litWords?`${target.litWords} words`:null,
+        bonuses:[...(target.artBonuses||[])],
+        exp:expGain, link:target.litUrl||target.link||null, image:artImage,
+        statsDelta:{}, nonPlacementExp, discipline:target.discipline||'',
       };
-      rec.artLogId=artEntry.id;
+      target.artLogId=artEntry.id;
       if(!h.artLog) h.artLog=[];
       h.artLog.unshift(artEntry);
       h.exp=(h.exp||0)+expGain;
       checkLevelUp(h);
     }
 
-    h.compHistory.unshift(rec);
-    msg.style.color='#7a9b6e'; msg.textContent='Adding to '+h.name+'…';
+    if(!existing) h.compHistory.unshift(rec);
+    msg.style.color='#7a9b6e'; msg.textContent=(existing?'Updating ':'Adding to ')+h.name+'…';
     const [ok, artOk] = await Promise.all([
       saveHorse(h),
       artEntry ? saveArtEntry(h, artEntry) : Promise.resolve(true),
     ]);
     await save();
     if(ok && artOk){
-      addLog(`${h.name} — ${rec.discipline||'Show'}${rec.venue?' at '+rec.venue:''} · ${rec.difficulty||'Entered'}${expGain?` · +${expGain} EXP`:''}`);
+      addLog(`${h.name} — ${target.discipline||'Show'}${target.venue?' at '+target.venue:''} · ${target.difficulty||'Entered'}${expGain?` · +${expGain} EXP`:''}`);
       msg.textContent = artEntry
-        ? `Added to ${h.name} — show, placing and artwork logged${expGain?` (+${expGain} EXP)`:''}.`
+        ? `${existing?'Artwork added to':'Added to'} ${h.name} — show, placing and artwork logged${expGain?` (+${expGain} EXP)`:''}.`
         : `Added to ${h.name}'s record.`;
       claim.querySelector('#ribbon_claim_code').value='';
       showMode('history');
     } else {
       // Roll the whole claim back so a failed save can't leave half of it behind.
-      h.compHistory=h.compHistory.filter(r=>r.id!==rec.id);
+      if(!existing) h.compHistory=h.compHistory.filter(r=>r.id!==rec.id);
+      else delete existing.artLogId;
       if(artEntry){
         h.artLog=(h.artLog||[]).filter(e=>e.id!==artEntry.id);
         h.exp=(h.exp||0)-expGain;
