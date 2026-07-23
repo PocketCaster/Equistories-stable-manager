@@ -2227,7 +2227,7 @@ function render(){
         </div>`).join("")}
       <div style="flex:1;"></div>
       <span class="small" style="color:var(--dim);margin-right:6px;">${bankAccount.userId}</span>
-      <button id="btn_myprofile" class="secondary" style="font-size:.98em;padding:4px 10px;margin-top:0;">My Profile</button>
+      <button id="btn_myprofile" class="secondary" style="font-size:.98em;padding:4px 10px;margin-top:0;">My Profile${inboxUnreadCount()?` <span style="background:#c98a3a;color:#1c1510;border-radius:9px;padding:0 6px;font-weight:bold;font-size:.85em;">${inboxUnreadCount()}</span>`:''}</button>
       <button id="btn_signout" class="secondary" style="font-size:.98em;padding:4px 10px;margin-top:0;">Sign Out</button>
     </div>
     <div id="tab-content"></div>
@@ -2241,6 +2241,11 @@ function render(){
   });
   const myProfileBtn=app.querySelector('#btn_myprofile');
   if(myProfileBtn) myProfileBtn.onclick=()=>showPlayerProfileModal();
+  // Quietly check for new results so the badge is current on every tab. Cached
+  // for a minute, so this doesn't hit the database on every re-render.
+  if(bankAccount.userId && !showInbox.loadedAt && !showInbox.loading){
+    loadShowInbox().then(items=>{ if(items && items.length) render(); });
+  }
   const signOutBtn=app.querySelector('#btn_signout');
   if(signOutBtn) signOutBtn.onclick=async()=>{
     if(!confirm('Sign out? Your stable data is saved to Google Sheets — sign back in anytime.')) return;
@@ -2652,6 +2657,83 @@ function goToPlayerProfile(userId){
   render(); window.scrollTo(0,0);
 }
 
+// ---------------- show results inbox ----------------
+// Hosts can't write into our account, so nothing is "sent" to us. Instead the
+// shows app records — under our OWN ownership — which shows we entered. We read
+// those receipts, fetch each show by id (shows are readable by id, same as an
+// invite link), and find our own row in the published results. That gives us the
+// placement and the claimable record without the host mailing anything.
+let showInbox = { items:[], loadedAt:0, loading:false };
+
+function inboxRecordId(showId, horseId, classId){
+  return "show_" + showId + "_" + horseId + (classId?("_"+classId):"");
+}
+// Rebuild the same compHistory record the shows app would hand us in a code.
+function inboxRecordFrom(showDoc, receipt, row){
+  const sh = showDoc.show || {};
+  const placed = row.placement>=1;
+  const placeLabel = p=>["1st","2nd","3rd","4th","5th","6th"][p-1]||(p+"th");
+  return {
+    id: inboxRecordId(sh.id||receipt.showId, row.id, row.classId),
+    discipline: row.className || sh.discipline || receipt.discipline || "",
+    difficulty: placed ? placeLabel(row.placement) : "Participant",
+    venue: sh.title || receipt.showTitle || "",
+    date: (showDoc.savedAt ? new Date(showDoc.savedAt) : new Date()).toISOString().slice(0,10),
+    placement: placed ? row.placement : null,
+    note: placed ? "" : "Entered — no placement",
+    image: row.artUrl || null, link: row.artUrl || null, artImage: row.artUrl || null,
+    litUrl: row.litUrl || null, litWords: Number(row.litWords)||0,
+    artMix: (row.artMix&&row.artMix.length)?row.artMix:null,
+    artBonuses: (row.artBonuses&&row.artBonuses.length)?row.artBonuses:null,
+    artExp: Number(row.artExp)||0, artLabel: row.artLabel||"",
+    prizes: [],
+  };
+}
+
+async function loadShowInbox(force){
+  if(showInbox.loading) return showInbox.items;
+  if(!force && showInbox.loadedAt && Date.now()-showInbox.loadedAt < 60000) return showInbox.items;
+  if(!bankAccount.userId || !window.EquiDB || !window.EquiDB.available) return showInbox.items;
+  showInbox.loading = true;
+  try{
+    const receipts = await window.EquiDB.listByOwner('entered', bankAccount.userId) || [];
+    const docs = await Promise.all(receipts.map(async rc=>{
+      try{ return {rc, doc: await window.EquiDB.get('shows', rc.showId)}; }
+      catch(e){ return {rc, doc:null}; }
+    }));
+    const items=[];
+    for(const {rc, doc} of docs){
+      if(!doc) continue;
+      const results = (doc.published && doc.published.results) || null;
+      const horse = state.horses.find(x=>x.id===rc.horseId);
+      if(!results){
+        items.push({ pending:true, receipt:rc, horse,
+          title: (doc.show&&doc.show.title) || rc.showTitle || "A show" });
+        continue;
+      }
+      const row = results.find(r=>r.id===rc.horseId);
+      if(!row) continue;
+      const rec = inboxRecordFrom(doc, rc, row);
+      const claimed = !!(horse && (horse.compHistory||[]).some(r=>r.id===rec.id));
+      const artLogged = !!(horse && (horse.compHistory||[]).some(r=>r.id===rec.id && r.artLogId));
+      items.push({ pending:false, receipt:rc, horse, rec,
+        title: rec.venue || rc.showTitle || "A show",
+        placement: rec.placement, hasArt: !!rec.artImage,
+        claimed, needsArt: claimed && !artLogged && !!rec.artImage });
+    }
+    items.sort((a,b)=> String(b.receipt.enteredAt||"").localeCompare(String(a.receipt.enteredAt||"")));
+    showInbox.items = items;
+    showInbox.loadedAt = Date.now();
+  }catch(e){
+    console.warn('[EquiStories] inbox load failed:', e && e.message);
+  }finally{ showInbox.loading=false; }
+  return showInbox.items;
+}
+// How many results are waiting on action (never claimed, or claimed without art).
+function inboxUnreadCount(){
+  return showInbox.items.filter(i=> !i.pending && i.horse && (!i.claimed || i.needsArt)).length;
+}
+
 function showPlayerProfileModal(){
   const p = state.profile ? {...newPlayerProfile(), ...state.profile} : newPlayerProfile();
   const links = Array.isArray(p.links) ? p.links.map(l=>({...l})) : [];
@@ -2661,6 +2743,16 @@ function showPlayerProfileModal(){
     <div class="card" style="max-width:760px;width:100%;margin-top:20px;background:#241a14;border:1px solid #4a392a;box-shadow:0 12px 40px rgba(0,0,0,.6);">
       <h3 style="margin-top:0;color:#c98a3a;">My Player Profile</h3>
       <div class="small" style="margin-top:-4px;margin-bottom:10px;">Your public community profile — it shows your horses, riders, and how to reach you. Account name: <b>${bankAccount.userId}</b>.</div>
+
+      <div id="pp_inbox" style="margin-bottom:14px;border:1px solid #4a392a;border-radius:8px;padding:10px;background:#1c1510;">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+          <b style="color:#c98a3a;">Show Results</b>
+          <span class="small" style="opacity:.75;">Placements from shows you entered.</span>
+          <div style="flex:1;"></div>
+          <button id="pp_inbox_reload" class="secondary" style="font-size:.92em;padding:2px 9px;margin-top:0;">Refresh</button>
+        </div>
+        <div id="pp_inbox_list" style="margin-top:8px;"><div class="small" style="opacity:.7;">Checking for results…</div></div>
+      </div>
       <div class="row">
         <div style="flex:1;min-width:200px;"><label>Display Name <span class="small">(optional)</span></label><input id="pp_name" value="${escAttr(p.displayName||'')}" placeholder="${escAttr(bankAccount.userId)}" /></div>
         <div><label>Pronouns <span class="small">(optional)</span></label><input id="pp_pronouns" value="${escAttr(p.pronouns||'')}" placeholder="she/her" style="max-width:130px;" /></div>
@@ -2698,6 +2790,58 @@ function showPlayerProfileModal(){
     linksWrap.querySelectorAll('[data-lk-url]').forEach(inp=>inp.oninput=()=>{ links[Number(inp.dataset.lkUrl)].url=inp.value; });
   }
   renderLinks();
+
+  // ---- show results inbox ----
+  const inboxList = overlay.querySelector('#pp_inbox_list');
+  function renderInbox(){
+    if(!inboxList) return;
+    const items = showInbox.items;
+    if(showInbox.loading && !items.length){
+      inboxList.innerHTML = '<div class="small" style="opacity:.7;">Checking for results…</div>'; return;
+    }
+    if(!items.length){
+      inboxList.innerHTML = '<div class="small" style="opacity:.7;">No show results yet. Shows you enter through EquiStories Shows will appear here once the host publishes.</div>'; return;
+    }
+    inboxList.innerHTML = items.map((it,i)=>{
+      const who = it.horse ? escAttr(it.horse.name) : escAttr(it.receipt.horseName||'a horse');
+      if(it.pending){
+        return `<div style="padding:6px 0;border-top:1px solid #3a2c20;">
+          <b>${escAttr(it.title)}</b> <span class="small" style="opacity:.75;">· ${who} · results not posted yet</span></div>`;
+      }
+      if(!it.horse){
+        return `<div style="padding:6px 0;border-top:1px solid #3a2c20;">
+          <b>${escAttr(it.title)}</b> <span class="small" style="opacity:.75;">· ${who} is no longer in this stable</span></div>`;
+      }
+      const place = it.placement ? (["1st","2nd","3rd","4th","5th","6th"][it.placement-1]||it.placement+"th") : "Participant";
+      const done = it.claimed && !it.needsArt;
+      const label = it.needsArt ? 'Add the artwork' : 'Add to horse';
+      return `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:6px 0;border-top:1px solid #3a2c20;">
+        <div style="flex:1;min-width:180px;">
+          <b>${escAttr(it.title)}</b>
+          <span class="small" style="opacity:.85;">· ${escAttr(place)} · ${who}${it.hasArt?' · art attached':''}</span>
+        </div>
+        ${done
+          ? '<span class="small" style="color:#7a9b6e;">✓ logged</span>'
+          : `<button class="btn" data-inbox-add="${i}" style="font-size:.92em;padding:3px 10px;margin-top:0;">${label}</button>`}
+      </div>`;
+    }).join("");
+    inboxList.querySelectorAll('[data-inbox-add]').forEach(b=>{
+      b.onclick=async()=>{
+        const it = showInbox.items[Number(b.dataset.inboxAdd)];
+        if(!it || !it.horse) return;
+        b.disabled=true; b.textContent='Adding…';
+        const out = await ingestShowRecord(it.horse, it.rec);
+        if(out.ok || out.already){ it.claimed=true; it.needsArt=false; }
+        b.textContent = out.ok ? 'Added' : 'Retry';
+        b.disabled = false;
+        renderInbox(); render();
+      };
+    });
+  }
+  renderInbox();
+  loadShowInbox(true).then(renderInbox);
+  const inboxReload = overlay.querySelector('#pp_inbox_reload');
+  if(inboxReload) inboxReload.onclick=()=>{ showInbox.loadedAt=0; renderInbox(); loadShowInbox(true).then(renderInbox); };
   overlay.querySelector('#pp_addlink').onclick=()=>{ links.push({label:'',url:''}); renderLinks(); };
   overlay.querySelector('#pp_avatar').oninput=e=>{ overlay.querySelector('#pp_avatar_preview').innerHTML=urlImagePreviewHTML(e.target.value.trim()||null,'Avatar'); };
   overlay.querySelector('#pp_cancel').onclick=()=>overlay.remove();
@@ -5631,7 +5775,7 @@ function buildShowHistory(){
   wrap.appendChild(claim);
   claim.querySelector('#ribbon_claim_btn').onclick=async()=>{
     const msg=claim.querySelector('#ribbon_claim_msg');
-    if(!bankAccount.linked || !bankAccount.userId){ msg.style.color='#b5533a'; msg.textContent='Sign in to your stable first — a ribbon can only be added to a horse in the account that owns it.'; return; }
+    if(!bankAccount.linked || !bankAccount.userId){ msg.style.color='#b5533a'; msg.textContent='Sign in to your stable first — a show can only be added to a horse in the account that owns it.'; return; }
     const raw=(claim.querySelector('#ribbon_claim_code').value||'').trim();
     if(!raw){ msg.textContent='Paste a claim code first.'; return; }
     let data;
@@ -5641,10 +5785,23 @@ function buildShowHistory(){
     }catch(e){ msg.style.color='#b5533a'; msg.textContent='That code could not be read.'; return; }
     if(!data || data.v!==1 || !data.horseId || !data.rec){ msg.style.color='#b5533a'; msg.textContent='That is not a ribbon claim code.'; return; }
     const h=state.horses.find(x=>x.id===data.horseId);
-    if(!h){ msg.style.color='#b5533a'; msg.textContent='That ribbon is for a horse not in your stable. Are you signed into the right account?'; return; }
+    if(!h){ msg.style.color='#b5533a'; msg.textContent='That show is for a horse not in your stable. Are you signed into the right account?'; return; }
+    msg.style.color='#7a9b6e'; msg.textContent='Adding to '+h.name+'…';
+    const out=await ingestShowRecord(h, data.rec);
+    msg.style.color = out.ok ? '#7a9b6e' : '#b5533a';
+    msg.textContent = out.msg;
+    if(out.ok){ claim.querySelector('#ribbon_claim_code').value=''; showMode('history'); }
+  };
+
+// Add (or upgrade) one show record on a horse: files it in compHistory, logs the
+// artwork the entrant already submitted, and awards its EXP. Shared by the paste
+// box and the results inbox so both behave identically.
+async function ingestShowRecord(h, incoming){
+  if(!h || !incoming) return {ok:false, msg:'Nothing to add.'};
+  {
     if(!h.compHistory) h.compHistory=[];
 
-    const rec={...data.rec};
+    const rec={...incoming};
     const incomingArt = rec.artImage || rec.image || null;
     const existing = h.compHistory.find(r=>r.id===rec.id);
 
@@ -5655,14 +5812,10 @@ function buildShowHistory(){
     // missing, merge it in and log the piece.
     if(existing){
       if(existing.artLogId && (h.artLog||[]).some(e=>e.id===existing.artLogId)){
-        msg.style.color='#b5533a';
-        msg.textContent='This show is already on '+h.name+', with its art logged.';
-        return;
+        return {ok:false, already:true, msg:'This show is already on '+h.name+', with its art logged.'};
       }
       if(!incomingArt){
-        msg.style.color='#b5533a';
-        msg.textContent='This show is already on '+h.name+'. This code carries no artwork — re-generate the claim code from the show results page, then paste the new one here to add the art.';
-        return;
+        return {ok:false, already:true, msg:'This show is already on '+h.name+'. No artwork came with it — re-generate the claim code from the show results page to add the art.'};
       }
       // Fall through: merge the art onto the record already on the horse.
       Object.assign(existing, {
@@ -5718,7 +5871,6 @@ function buildShowHistory(){
     }
 
     if(!existing) h.compHistory.unshift(rec);
-    msg.style.color='#7a9b6e'; msg.textContent=(existing?'Updating ':'Adding to ')+h.name+'…';
     const [ok, artOk] = await Promise.all([
       saveHorse(h),
       artEntry ? saveArtEntry(h, artEntry) : Promise.resolve(true),
@@ -5726,11 +5878,9 @@ function buildShowHistory(){
     await save();
     if(ok && artOk){
       addLog(`${h.name} — ${target.discipline||'Show'}${target.venue?' at '+target.venue:''} · ${target.difficulty||'Entered'}${expGain?` · +${expGain} EXP`:''}`);
-      msg.textContent = artEntry
+      return {ok:true, exp:expGain, msg: artEntry
         ? `${existing?'Artwork added to':'Added to'} ${h.name} — show, placing and artwork logged${expGain?` (+${expGain} EXP)`:''}.`
-        : `Added to ${h.name}'s record.`;
-      claim.querySelector('#ribbon_claim_code').value='';
-      showMode('history');
+        : `Added to ${h.name}'s record.`};
     } else {
       // Roll the whole claim back so a failed save can't leave half of it behind.
       if(!existing) h.compHistory=h.compHistory.filter(r=>r.id!==rec.id);
@@ -5740,9 +5890,10 @@ function buildShowHistory(){
         h.exp=(h.exp||0)-expGain;
         checkLevelUp(h);
       }
-      msg.style.color='#b5533a'; msg.textContent='Could not save. Try again.';
+      return {ok:false, msg:'Could not save. Try again.'};
     }
-  };
+  }
+}
 
   state.horses.forEach(h=>{
     const history=h.compHistory||[];
